@@ -1,3 +1,4 @@
+import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/page/settings_page/ai_provider_detail_page.dart';
@@ -27,77 +28,162 @@ class AiProviderListPage extends ConsumerWidget {
           ),
         ],
       ),
-      body: ListView.builder(
-        itemCount: providers.length,
-        itemBuilder: (context, index) {
-          final provider = providers[index];
-          final isSelected = provider.id == selectedId;
-          final hasValidKey = provider.hasValidKey;
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              itemCount: providers.length,
+              itemBuilder: (context, index) {
+                final provider = providers[index];
+                final isSelected = provider.id == selectedId;
+                final hasValidKey = provider.hasValidKey;
 
-          return ListTile(
-            leading: _buildProviderLogo(provider),
-            title: Text(provider.title),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  provider.url,
-                  style: Theme.of(context).textTheme.bodySmall,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (!hasValidKey)
-                  Text(
-                    l10n.settingsAiProviderNoValidKeys,
-                    style: TextTheme.of(context).bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.error,
+                return ListTile(
+                  leading: _buildProviderLogo(provider),
+                  title: Text(provider.title),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        provider.url,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (!hasValidKey)
+                        Text(
+                          l10n.settingsAiProviderNoValidKeys,
+                          style: TextTheme.of(context).bodySmall?.copyWith(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
                         ),
+                    ],
                   ),
-              ],
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isSelected)
-                  Chip(
-                    label: Text(l10n.settingsAiProviderDefault),
-                    labelStyle: TextTheme.of(context).labelSmall,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                  )
-                else
-                  TextButton(
-                    onPressed: () {
-                      ref
-                          .read(aiProvidersProvider.notifier)
-                          .setSelectedProvider(provider.id);
-                    },
-                    child: Text(l10n.settingsAiProviderSetDefault),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isSelected)
+                        Chip(
+                          label: Text(l10n.settingsAiProviderDefault),
+                          labelStyle: TextTheme.of(context).labelSmall,
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                        )
+                      else
+                        TextButton(
+                          onPressed: () {
+                            ref
+                                .read(aiProvidersProvider.notifier)
+                                .setSelectedProvider(provider.id);
+                          },
+                          child: Text(l10n.settingsAiProviderSetDefault),
+                        ),
+                      const SizedBox(width: 8),
+                      Switch(
+                        value: provider.enabled,
+                        onChanged: (value) {
+                          ref
+                              .read(aiProvidersProvider.notifier)
+                              .toggleProvider(provider.id, value);
+                        },
+                      ),
+                    ],
                   ),
-                const SizedBox(width: 8),
-                Switch(
-                  value: provider.enabled,
-                  onChanged: (value) {
-                    ref
-                        .read(aiProvidersProvider.notifier)
-                        .toggleProvider(provider.id, value);
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            AiProviderDetailPage(providerId: provider.id),
+                      ),
+                    );
                   },
-                ),
-              ],
+                  onLongPress: provider.isBuiltin
+                      ? null
+                      : () => _deleteProvider(context, ref, provider),
+                );
+              },
             ),
-            onTap: () async {
-              await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      AiProviderDetailPage(providerId: provider.id),
-                ),
-              );
+          ),
+          _buildFallbackCard(context, ref, providers, selectedId),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFallbackCard(
+    BuildContext context,
+    WidgetRef ref,
+    List<AiProvider> providers,
+    String? selectedId,
+  ) {
+    final l10n = L10n.of(context);
+    final fallbackId = Prefs().aiFallbackProvider;
+
+    // Find provider names for display
+    String primaryName = 'Unknown';
+    String? fallbackName;
+    for (final p in providers) {
+      if (p.id == selectedId) primaryName = p.title;
+      if (p.id == fallbackId) fallbackName = p.title;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: Border(
+          top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.backup_rounded,
+                  size: 20, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(
+                l10n.aiFallbackProvider,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String?>(
+            value: fallbackId,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            items: [
+              DropdownMenuItem<String?>(
+                value: null,
+                child: Text(l10n.aiFallbackNone),
+              ),
+              for (final p in providers)
+                if (p.id != selectedId)
+                  DropdownMenuItem<String?>(
+                    value: p.id,
+                    child: Text(p.title),
+                  ),
+            ],
+            onChanged: (value) {
+              Prefs().aiFallbackProvider = value;
             },
-            onLongPress: provider.isBuiltin
-                ? null
-                : () => _deleteProvider(context, ref, provider),
-          );
-        },
+          ),
+          const SizedBox(height: 8),
+          Text(
+            fallbackName != null
+                ? l10n.aiFallbackChain(primaryName, fallbackName)
+                : l10n.aiFallbackTip,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+        ],
       ),
     );
   }

@@ -27,8 +27,16 @@ class WirelessTransferServer {
   Timer? _inactivityTimer;
   final List<Map<String, dynamic>> _uploadHistory = [];
 
-  static const List<String> _supportedExtensions = ['epub', 'pdf', 'txt'];
+  static const List<String> _supportedExtensions = [
+    'epub',
+    'pdf',
+    'txt',
+    'mobi',
+    'azw3',
+    'fb2',
+  ];
   static const int _maxFileSize = 500 * 1024 * 1024; // 500MB
+  static const int _maxUploadHistory = 50;
 
   bool get isRunning => _server != null;
 
@@ -107,8 +115,16 @@ class WirelessTransferServer {
 
     AnxLog.info('WirelessTransfer: $method $uriPath');
 
+    if (method == 'OPTIONS') {
+      return shelf.Response.ok('', headers: _corsHeaders);
+    }
+
     if (method == 'GET' && uriPath == '/') {
       return _serveUploadPage();
+    }
+
+    if (method == 'POST' && uriPath == '/upload-file') {
+      return _handleRawUpload(request);
     }
 
     if (method == 'POST' && uriPath == '/upload') {
@@ -127,10 +143,14 @@ class WirelessTransferServer {
 
   Future<shelf.Response> _serveUploadPage() async {
     try {
-      String content = await rootBundle.loadString('assets/transfer/index.html');
+      String content =
+          await rootBundle.loadString('assets/transfer/index.html');
       return shelf.Response.ok(
         content,
-        headers: {'Content-Type': 'text/html; charset=utf-8'},
+        headers: {
+          ..._noCacheHeaders,
+          'Content-Type': 'text/html; charset=utf-8',
+        },
       );
     } catch (e) {
       return shelf.Response.internalServerError(
@@ -144,33 +164,118 @@ class WirelessTransferServer {
       'running': isRunning,
       'port': port,
       'uploads': _uploadHistory,
+      'supportedExtensions': _supportedExtensions,
+      'maxFileSize': _maxFileSize,
     };
     return shelf.Response.ok(
       jsonEncode(status),
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+      headers: _jsonHeaders,
     );
+  }
+
+  Future<shelf.Response> _handleRawUpload(shelf.Request request) async {
+    final rawFileName = request.headers['x-file-name'];
+    final fileName =
+        _sanitizeFileName(_decodeHeaderValue(rawFileName) ?? 'book');
+    final contentLength = request.contentLength;
+
+    if (contentLength == null || contentLength <= 0) {
+      return _jsonError('Missing file content', statusCode: 400);
+    }
+
+    final validationError = _validateUpload(fileName, contentLength);
+    if (validationError != null) {
+      return _jsonResponse({
+        'results': [
+          {
+            'filename': fileName,
+            'success': false,
+            'error': validationError,
+          }
+        ],
+      }, statusCode: 400);
+    }
+
+    File? tempFile;
+    IOSink? sink;
+    var bytesWritten = 0;
+
+    try {
+      final tempDir = await getAnxTempDir();
+      tempFile = File(
+        '${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}_$fileName',
+      );
+      sink = tempFile.openWrite();
+
+      await for (final chunk in request.read()) {
+        bytesWritten += chunk.length;
+        if (bytesWritten > _maxFileSize) {
+          throw const _UploadTooLargeException();
+        }
+        sink.add(chunk);
+      }
+
+      await sink.close();
+      sink = null;
+
+      final md5 = await MD5Service.calculateFileMd5(tempFile.path);
+      final bookName = _titleFromFileName(fileName);
+      await _saveBookToFile(tempFile, bookName, md5);
+
+      _recordUpload(fileName, true, size: bytesWritten);
+      return _jsonResponse({
+        'results': [
+          {
+            'filename': fileName,
+            'success': true,
+            'size': bytesWritten,
+          }
+        ],
+      });
+    } on _UploadTooLargeException {
+      await sink?.close();
+      await _deleteQuietly(tempFile);
+      _recordUpload(fileName, false,
+          size: bytesWritten,
+          error: 'File too large (max ${_maxFileSize ~/ (1024 * 1024)}MB)');
+      return _jsonResponse({
+        'results': [
+          {
+            'filename': fileName,
+            'success': false,
+            'error': 'File too large (max ${_maxFileSize ~/ (1024 * 1024)}MB)',
+          }
+        ],
+      }, statusCode: 413);
+    } catch (e, stack) {
+      await sink?.close();
+      await _deleteQuietly(tempFile);
+      AnxLog.severe(
+          'WirelessTransfer: Raw upload failed for $fileName: $e\n$stack');
+      _recordUpload(fileName, false, size: bytesWritten, error: e.toString());
+      return _jsonError(e.toString(), statusCode: 500);
+    }
   }
 
   Future<shelf.Response> _handleUpload(shelf.Request request) async {
     try {
       final contentType = request.headers['content-type'] ?? '';
+      final contentLength = request.contentLength;
+
+      if (contentLength != null && contentLength > _maxFileSize + 1024 * 1024) {
+        return _jsonError(
+          'File too large (max ${_maxFileSize ~/ (1024 * 1024)}MB)',
+          statusCode: 413,
+        );
+      }
 
       if (!contentType.contains('multipart/form-data')) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'Content-Type must be multipart/form-data'}),
-          headers: {'Content-Type': 'application/json'},
-        );
+        return _jsonError('Content-Type must be multipart/form-data');
       }
 
       final boundary = _extractBoundary(contentType);
       if (boundary == null) {
-        return shelf.Response.badRequest(
-          body: jsonEncode({'error': 'Missing boundary in Content-Type'}),
-          headers: {'Content-Type': 'application/json'},
-        );
+        return _jsonError('Missing boundary in Content-Type');
       }
 
       final bodyBytes = await request.read().fold<List<int>>(
@@ -190,37 +295,27 @@ class WirelessTransferServer {
       final results = <Map<String, dynamic>>[];
 
       for (final fileData in files) {
-        final fileName = fileData['filename'] as String;
+        final fileName = _sanitizeFileName(fileData['filename'] as String);
         final contentBytes = fileData['content'] as List<int>;
 
-        final ext = fileName.split('.').last.toLowerCase();
-        if (!_supportedExtensions.contains(ext)) {
+        final validationError = _validateUpload(fileName, contentBytes.length);
+        if (validationError != null) {
           results.add({
             'filename': fileName,
             'success': false,
-            'error': 'Unsupported file type. Supported: ${_supportedExtensions.join(', ')}',
-          });
-          continue;
-        }
-
-        if (contentBytes.length > _maxFileSize) {
-          results.add({
-            'filename': fileName,
-            'success': false,
-            'error': 'File too large (max ${_maxFileSize ~/ (1024 * 1024)}MB)',
+            'error': validationError,
           });
           continue;
         }
 
         try {
           final tempDir = await getAnxTempDir();
-          final safeName =
-              '${DateTime.now().millisecondsSinceEpoch}_$fileName';
+          final safeName = '${DateTime.now().millisecondsSinceEpoch}_$fileName';
           final tempFile = File('${tempDir.path}/$safeName');
           await tempFile.writeAsBytes(contentBytes, flush: true);
 
           final md5 = await MD5Service.calculateFileMd5(tempFile.path);
-          final bookName = fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
+          final bookName = _titleFromFileName(fileName);
           await _saveBookToFile(tempFile, bookName, md5);
 
           results.add({
@@ -228,11 +323,7 @@ class WirelessTransferServer {
             'success': true,
           });
 
-          _uploadHistory.add({
-            'filename': fileName,
-            'time': DateTime.now().toIso8601String(),
-            'success': true,
-          });
+          _recordUpload(fileName, true, size: contentBytes.length);
         } catch (e) {
           AnxLog.severe('WirelessTransfer: Import failed for $fileName: $e');
           results.add({
@@ -240,31 +331,113 @@ class WirelessTransferServer {
             'success': false,
             'error': e.toString(),
           });
-          _uploadHistory.add({
-            'filename': fileName,
-            'time': DateTime.now().toIso8601String(),
-            'success': false,
-            'error': e.toString(),
-          });
+          _recordUpload(fileName, false,
+              size: contentBytes.length, error: e.toString());
         }
       }
 
-      return shelf.Response.ok(
-        jsonEncode({'results': results}),
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      );
+      return _jsonResponse({'results': results});
     } catch (e, stack) {
       AnxLog.severe('WirelessTransfer: Upload error: $e\n$stack');
-      return shelf.Response.internalServerError(
-        body: jsonEncode({'error': e.toString()}),
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      );
+      return _jsonError(e.toString(), statusCode: 500);
+    }
+  }
+
+  Map<String, String> get _corsHeaders => const {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers':
+            'Content-Type, X-File-Name, X-File-Size',
+      };
+
+  Map<String, String> get _jsonHeaders => {
+        ..._corsHeaders,
+        'Content-Type': 'application/json; charset=utf-8',
+      };
+
+  Map<String, String> get _noCacheHeaders => const {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+      };
+
+  shelf.Response _jsonResponse(
+    Map<String, dynamic> body, {
+    int statusCode = 200,
+  }) {
+    return shelf.Response(
+      statusCode,
+      body: jsonEncode(body),
+      headers: _jsonHeaders,
+    );
+  }
+
+  shelf.Response _jsonError(String message, {int statusCode = 400}) {
+    return _jsonResponse({'error': message}, statusCode: statusCode);
+  }
+
+  String? _validateUpload(String fileName, int size) {
+    final ext = fileName.split('.').last.toLowerCase();
+    if (fileName == 'book' || !fileName.contains('.')) {
+      return 'Missing file name or extension';
+    }
+    if (!_supportedExtensions.contains(ext)) {
+      return 'Unsupported file type. Supported: ${_supportedExtensions.join(', ')}';
+    }
+    if (size > _maxFileSize) {
+      return 'File too large (max ${_maxFileSize ~/ (1024 * 1024)}MB)';
+    }
+    return null;
+  }
+
+  void _recordUpload(
+    String fileName,
+    bool success, {
+    int? size,
+    String? error,
+  }) {
+    _uploadHistory.insert(0, {
+      'filename': fileName,
+      'time': DateTime.now().toIso8601String(),
+      'success': success,
+      if (size != null) 'size': size,
+      if (error != null) 'error': error,
+    });
+
+    if (_uploadHistory.length > _maxUploadHistory) {
+      _uploadHistory.removeRange(_maxUploadHistory, _uploadHistory.length);
+    }
+  }
+
+  String? _decodeHeaderValue(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    try {
+      return Uri.decodeComponent(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  String _sanitizeFileName(String fileName) {
+    final name = fileName
+        .split(RegExp(r'[/\\]'))
+        .last
+        .replaceAll(RegExp(r'[\x00-\x1F<>:"/\\|?*]'), '_')
+        .trim();
+    return name.isEmpty ? 'book' : name;
+  }
+
+  String _titleFromFileName(String fileName) {
+    return fileName.replaceAll(RegExp(r'\.[^.]+$'), '');
+  }
+
+  Future<void> _deleteQuietly(File? file) async {
+    if (file == null) return;
+    try {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {
+      // Best-effort temp cleanup.
     }
   }
 
@@ -299,8 +472,7 @@ class WirelessTransferServer {
       final headerStr = utf8.decode(headerBytes);
 
       // Check for filename in Content-Disposition header
-      final filenameMatch =
-          RegExp(r'filename="([^"]+)"').firstMatch(headerStr);
+      final filenameMatch = RegExp(r'filename="([^"]+)"').firstMatch(headerStr);
       if (filenameMatch == null) {
         startIdx = headerEnd + 4;
         continue;
@@ -377,15 +549,17 @@ class WirelessTransferServer {
         .replaceAll('\n', '')
         .replaceAll('\r', '')
         .trim();
+    final normalizedTitle = safeTitle.isEmpty ? 'book' : safeTitle;
     final bookName =
-        '${safeTitle.length > 20 ? safeTitle.substring(0, 20) : safeTitle}-${DateTime.now().millisecondsSinceEpoch}';
+        '${normalizedTitle.length > 20 ? normalizedTitle.substring(0, 20) : normalizedTitle}-${DateTime.now().millisecondsSinceEpoch}';
     final dbFilePath = 'file/$bookName.$extension';
     final filePath = getBasePath(dbFilePath);
 
     await tempFile.copy(filePath);
     await tempFile.delete();
 
-    final existingBook = md5 != null ? await book_dao.bookDao.getBookByMd5(md5) : null;
+    final existingBook =
+        md5 != null ? await book_dao.bookDao.getBookByMd5(md5) : null;
 
     final book = Book(
       id: existingBook?.id ?? -1,
@@ -404,4 +578,8 @@ class WirelessTransferServer {
 
     await book_dao.bookDao.insertBook(book);
   }
+}
+
+class _UploadTooLargeException implements Exception {
+  const _UploadTooLargeException();
 }

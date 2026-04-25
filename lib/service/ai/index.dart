@@ -57,19 +57,51 @@ Stream<String> aiGenerateStream(
   bool regenerate = false,
   bool useAgent = false,
   WidgetRef? ref,
-}) {
+}) async* {
   if (useAgent) {
     assert(ref != null, 'ref must be provided when useAgent is true');
   }
   LangchainAiRegistry registry = LangchainAiRegistry(ref);
 
-  return _generateStream(
-      messages: messages,
-      identifier: identifier,
-      overrideConfig: config,
-      regenerate: regenerate,
-      useAgent: useAgent,
-      registry: registry);
+  // Try primary provider
+  bool primaryFailed = false;
+  String? lastOutput;
+  await for (final chunk in _generateStream(
+    messages: messages,
+    identifier: identifier,
+    overrideConfig: config,
+    regenerate: regenerate,
+    useAgent: useAgent,
+    registry: registry,
+  )) {
+    lastOutput = chunk;
+    yield chunk;
+  }
+
+  // Detect if primary failed
+  if (lastOutput != null) {
+    final lower = lastOutput.toLowerCase();
+    primaryFailed = lower.startsWith('error:') || lower.startsWith('translation error');
+  }
+
+  // Try fallback if primary failed
+  if (primaryFailed) {
+    final fallbackId = Prefs().aiFallbackProvider;
+    if (fallbackId != null && fallbackId != identifier) {
+      AnxLog.info('Trying fallback provider: $fallbackId');
+      yield '\n[Falling back to backup provider...]';
+      await for (final chunk in _generateStream(
+        messages: messages,
+        identifier: fallbackId,
+        overrideConfig: config,
+        regenerate: regenerate,
+        useAgent: useAgent,
+        registry: registry,
+      )) {
+        yield chunk;
+      }
+    }
+  }
 }
 
 void cancelActiveAiRequest() {

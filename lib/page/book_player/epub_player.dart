@@ -923,12 +923,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     controller.addJavaScriptHandler(
       handlerName: 'translateText',
       callback: (args) async {
+        final text = args[0] as String;
+        final service = Prefs().fullTextTranslateService;
+        final from = Prefs().fullTextTranslateFrom;
+        final to = Prefs().fullTextTranslateTo;
+        final normalizedText = _normalizeTranslationText(text);
+
         try {
-          String text = args[0];
-          final service = Prefs().fullTextTranslateService;
-          final from = Prefs().fullTextTranslateFrom;
-          final to = Prefs().fullTextTranslateTo;
-          final normalizedText = _normalizeTranslationText(text);
           final cached = await _getCachedTranslationText(
             service: service,
             from: from,
@@ -950,8 +951,24 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
           );
           return translatedText;
         } catch (e) {
-          AnxLog.severe('Translation error: $e');
-          return 'Translation error: $e';
+          AnxLog.warning('Primary translation failed: $e, trying fallback');
+          try {
+            final fallbackService = TranslateService.bingWeb;
+            final translatedText = await fallbackService.provider
+                .translateTextOnly(text, from, to, isFullText: true);
+            await _setCachedTranslationText(
+              service: service,
+              from: from,
+              to: to,
+              text: normalizedText,
+              translatedText: translatedText,
+            );
+            AnxLog.info('Fallback translation succeeded');
+            return translatedText;
+          } catch (fallbackError) {
+            AnxLog.severe('Fallback translation also failed: $fallbackError');
+            return 'Translation error: $e';
+          }
         }
       },
     );
@@ -1134,6 +1151,24 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     contextMenuEntry = null;
   }
 
+  Future<void> _showSelectionContextMenuFromWebView() async {
+    if (!AnxPlatform.isAndroid) return;
+
+    try {
+      await webViewController.evaluateJavascript(source: '''
+        (function() {
+          if (typeof window.showContextMenu !== 'function') return;
+          if (window.showContextMenu()) return;
+          window.setTimeout(function() {
+            window.showContextMenu();
+          }, 250);
+        })();
+      ''');
+    } catch (e) {
+      AnxLog.warning('Failed to show Android selection context menu: $e');
+    }
+  }
+
   Future<void> _handlePointerEvents(PointerEvent event) async {
     if (await isFootNoteOpen() || Prefs().pageTurnStyle == PageTurn.scroll) {
       return;
@@ -1168,7 +1203,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     contextMenu = ContextMenu(
       settings: ContextMenuSettings(hideDefaultSystemContextMenuItems: true),
       onCreateContextMenu: (hitTestResult) async {
-        // webViewController.evaluateJavascript(source: "showContextMenu()");
+        await _showSelectionContextMenuFromWebView();
       },
       onHideContextMenu: () {
         // removeOverlay();

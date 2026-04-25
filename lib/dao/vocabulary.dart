@@ -59,6 +59,59 @@ class VocabularyDao extends BaseDao {
     );
   }
 
+  Future<int> upsertFromSync(List<VocabularyItem> items) async {
+    final db = await database;
+    return db.transaction((txn) async {
+      var changed = 0;
+
+      for (final item in items) {
+        final normalizedWord = VocabularyItem.normalizeWord(item.word);
+        if (normalizedWord.isEmpty) continue;
+
+        final existingRows = await txn.query(
+          table,
+          where: 'normalized_word = ?',
+          whereArgs: [normalizedWord],
+          limit: 1,
+        );
+
+        if (existingRows.isEmpty) {
+          final inserted = await txn.insert(
+            table,
+            item.toDb(),
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+          if (inserted > 0) changed++;
+          continue;
+        }
+
+        final existing = VocabularyItem.fromDb(existingRows.first);
+        if (!item.updatedAt.isAfter(existing.updatedAt)) {
+          continue;
+        }
+
+        final createdAt = item.createdAt.isBefore(existing.createdAt)
+            ? item.createdAt
+            : existing.createdAt;
+        final values = item
+            .copyWith(
+              id: existing.id,
+              createdAt: createdAt,
+            )
+            .toDb();
+        final updated = await txn.update(
+          table,
+          values,
+          where: 'normalized_word = ?',
+          whereArgs: [normalizedWord],
+        );
+        if (updated > 0) changed++;
+      }
+
+      return changed;
+    });
+  }
+
   Future<int> countDue({DateTime? now}) async {
     final target = now ?? DateTime.now();
     final result = await rawQuerySingle(

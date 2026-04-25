@@ -16,15 +16,21 @@ const isTranslationFailure = (value) => {
   return value.startsWith('Translation failed:') || value.startsWith('Translation error:')
 }
 
+const sanitizeTranslationResult = (value) => {
+  if (typeof value !== 'string') return value
+  return value.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+}
+
 // Translation function that calls Flutter's translation service
 const translate = async (text) => {
   try {
     // Call Flutter's translation handler
     const result = await window.flutter_inappwebview.callHandler('translateText', text)
-    if (isTranslationFailure(result)) {
+    const sanitizedResult = sanitizeTranslationResult(result)
+    if (isTranslationFailure(sanitizedResult)) {
       throw new Error('Translation returned an empty or failed result')
     }
-    return result
+    return sanitizedResult
   } catch (error) {
     console.error('Translation failed:', error)
     throw error
@@ -154,14 +160,14 @@ export class Translator {
         }
       } else if (batch.length === 1) {
         const item = batch[0]
-        const translatedText = await translate(item.text)
+        const translatedText = await this.#translateWithRetry(item.text)
         this.#applyTranslated(item.element, item.text, translatedText)
       }
     } catch (error) {
       console.warn('Batch translation failed, falling back to individual:', error)
       for (const item of batch) {
         try {
-          const translatedText = await translate(item.text)
+          const translatedText = await this.#translateWithRetry(item.text)
           this.#applyTranslated(item.element, item.text, translatedText)
         } catch (e) {
           console.warn('Translation failed:', e)
@@ -177,12 +183,33 @@ export class Translator {
     if (!item) return
 
     try {
-      const translatedText = await translate(item.text)
+      const translatedText = await this.#translateWithRetry(item.text)
       this.#applyTranslated(item.element, item.text, translatedText)
     } catch (error) {
       console.warn('Translation failed:', error)
       this.#finishProgressItem(true)
     }
+  }
+
+  // Retry transient translation failures with exponential backoff.
+  async #translateWithRetry(text, maxRetries = 3) {
+    let lastError
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000)
+          await new Promise(resolve => setTimeout(resolve, delay))
+        }
+
+        const result = await translate(text)
+        if (!isTranslationFailure(result)) return result
+        lastError = new Error(result)
+      } catch (e) {
+        lastError = e
+      }
+    }
+
+    throw lastError
   }
 
   // Apply translated text and update cache
@@ -311,13 +338,13 @@ export class Translator {
     }
 
     await this.loadCache()
-    
+
     const oldMode = this.#translationMode
     this.#translationMode = mode
-    
+
     if (oldMode !== mode) {
       // console.log(`Translation mode changed from ${oldMode} to ${mode}`)
-      
+
       if (mode === TranslationMode.OFF) {
         // Turn off translation
         this.#updateTranslationDisplay()
@@ -509,7 +536,7 @@ export class Translator {
     }
 
     try {
-      const translatedText = await translate(text)
+      const translatedText = await this.#translateWithRetry(text)
 
       const cacheData = {
         originalText: text,
@@ -832,14 +859,14 @@ export class Translator {
               }
             } else {
               const item = batch[0]
-              const translatedText = await translate(item.text)
+              const translatedText = await this.#translateWithRetry(item.text)
               this.#applyTranslated(item.element, item.text, translatedText)
             }
           } catch (error) {
             // Fallback to individual
             for (const item of batch) {
               try {
-                const translatedText = await translate(item.text)
+                const translatedText = await this.#translateWithRetry(item.text)
                 this.#applyTranslated(item.element, item.text, translatedText)
               } catch (e) {
                 console.warn('Translation failed:', e)
@@ -852,7 +879,7 @@ export class Translator {
           const item = this.#translationQueue.shift()
           if (!item) break
           try {
-            const translatedText = await translate(item.text)
+            const translatedText = await this.#translateWithRetry(item.text)
             this.#applyTranslated(item.element, item.text, translatedText)
           } catch (e) {
             console.warn('Translation failed:', e)
@@ -956,7 +983,7 @@ export class Translator {
     if (!text) return false
 
     try {
-      const translatedText = await translate(text)
+      const translatedText = await this.#translateWithRetry(text)
       this.#translatedElements.set(paragraphElement, {
         originalText: text,
         translatedText: translatedText

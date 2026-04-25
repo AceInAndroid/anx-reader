@@ -115,6 +115,11 @@ When acting as a translator (different languages):
 - Translation notes: justify critical word choices, including how context shaped them.
 - Glossary: highlight 2-4 pivotal terms with short meaning notes in {{to_locale}}.
 - Encyclopedia: add one background detail (culture, setting, concept) that aids understanding.
+
+When the source text is a single word ({{isSingleWord}} is true):
+- ALWAYS provide the IPA phonetic transcription in brackets after the word, e.g., "**word** /wɜːrd/"
+- Include part of speech and all relevant senses for the context.
+- For cross-language word lookup, also show the pronunciation in the target language.
       ''';
 
       case AiPrompts.mindmap:

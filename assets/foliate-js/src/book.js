@@ -144,7 +144,7 @@ const handleSelection = (view, doc, index) => {
   const selection = doc.getSelection();
   const range = getSelectionRange(selection);
 
-  if (!range) return;
+  if (!range) return false;
 
   const position = getPosition(range);
   const cfi = view.getCFI(index, range);
@@ -169,6 +169,7 @@ const handleSelection = (view, doc, index) => {
     text,
     contextText
   });
+  return true;
 };
 
 const setSelectionHandler = (view, doc, index) => {
@@ -304,6 +305,20 @@ const setSelectionHandler = (view, doc, index) => {
     });
   } else { // Android
     let hasNativeSelectionStarted = false;
+    var androidDebounceTimerId = undefined;
+
+    const scheduleAndroidSelection = (delay = 600) => {
+      const selRange = getSelectionRange(doc.getSelection());
+      if (!selRange || selRange.toString().trim().length === 0) return;
+
+      clearTimeout(androidDebounceTimerId);
+      androidDebounceTimerId = setTimeout(() => {
+        const currentRange = getSelectionRange(doc.getSelection());
+        if (currentRange && currentRange.toString().trim().length > 0) {
+          handleSelection(view, doc, index);
+        }
+      }, delay);
+    };
 
     doc.addEventListener('pointerdown', () => {
       hasNativeSelectionStarted = false;
@@ -313,12 +328,31 @@ const setSelectionHandler = (view, doc, index) => {
     // This event signals that the user has started dragging handles
     doc.addEventListener('pointercancel', () => {
       hasNativeSelectionStarted = true;
+      scheduleAndroidSelection(700);
+    });
+
+    doc.addEventListener('pointerup', (e) => {
+      if (e.pointerType === 'mouse') {
+        if (shouldSkipPointerUp()) return;
+        handleSelection(view, doc, index);
+        return;
+      }
+
+      scheduleAndroidSelection(200);
     });
 
     doc.addEventListener('contextmenu', e => {
       // Allow mouse context menu (if any)
       if (e.pointerType === 'mouse') {
         handleSelection(view, doc, index);
+        return;
+      }
+
+      // If there's an active text selection, always handle it
+      const selRange = getSelectionRange(doc.getSelection());
+      if (selRange && selRange.toString().trim().length > 0) {
+        e.preventDefault();
+        scheduleAndroidSelection(0);
         return;
       }
 
@@ -333,7 +367,14 @@ const setSelectionHandler = (view, doc, index) => {
       // If we have entered native selection mode (pointercancel happened),
       // this contextmenu event is likely triggered by the system or user interaction
       // after the selection phase (e.g. on release). We handle it.
-      handleSelection(view, doc, index);
+      e.preventDefault();
+      scheduleAndroidSelection(0);
+    });
+
+    // Android WebView may swallow touchend/contextmenu once native handles appear.
+    // A debounced selectionchange is the most reliable signal for long-press word selection.
+    doc.addEventListener('selectionchange', () => {
+      scheduleAndroidSelection(hasNativeSelectionStarted ? 700 : 500);
     });
   }
   // doc.addEventListener('selectionchange', () => handleSelection(view, doc, index));
@@ -1721,9 +1762,9 @@ const onSelectionEnd = (selection) => {
 
 window.showContextMenu = () => {
   if (window.isFootNoteOpen()) {
-    footnoteSelection()
+    return footnoteSelection()
   } else {
-    reader.showContextMenu()
+    return reader.showContextMenu()
   }
 }
 

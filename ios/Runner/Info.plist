@@ -39,6 +39,8 @@
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>We need access to your photo library to save images.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Anx Reader needs local network access to receive book files from your browser.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>We need access to your photo library to save images.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

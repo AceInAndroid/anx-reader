@@ -129,14 +129,15 @@ class _SubMoreSettingsState extends State<SubMoreSettings> {
                   L10n.of(context).settingsTranslate,
                 ],
               },
-              {
-                "title": L10n.of(context).vocabularyTitle,
-                "icon": Icons.menu_book_outlined,
-                "sections": const VocabularyPage(),
-                "subtitles": [
-                  L10n.of(context).vocabularySubtitle,
-                ],
-              },
+              if (Prefs().bottomNavigatorShowVocabulary)
+                {
+                  "title": L10n.of(context).vocabularyTitle,
+                  "icon": Icons.menu_book_outlined,
+                  "sections": const VocabularyPage(),
+                  "subtitles": [
+                    L10n.of(context).vocabularySubtitle,
+                  ],
+                },
               if (EnvVar.enableAIFeature)
                 {
                   "title": L10n.of(context).settingsAi,

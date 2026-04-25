@@ -112,6 +112,7 @@ PromptTemplatePayload generatePromptTranslate(
   final template = ChatPromptTemplate.fromPromptMessages([
     HumanChatMessagePromptTemplate.fromTemplate(normalized),
   ]);
+  final isSingleWord = !text.contains(' ') && text.trim().length <= 30;
   return PromptTemplatePayload(
     template: template,
     variables: {
@@ -119,6 +120,7 @@ PromptTemplatePayload generatePromptTranslate(
       'to_locale': toLocale,
       'from_locale': fromLocale,
       'contextText': (contextText ?? '').trim(),
+      'isSingleWord': isSingleWord.toString(),
     },
     identifier: AiPrompts.translate,
   );

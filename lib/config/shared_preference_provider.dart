@@ -1153,7 +1153,7 @@ class Prefs extends ChangeNotifier {
   }
 
   bool get bottomNavigatorShowVocabulary {
-    return prefs.getBool('bottomNavigatorShowVocabulary') ?? true;
+    return prefs.getBool('bottomNavigatorShowVocabulary') ?? false;
   }
 
   set bottomNavigatorShowStatistics(bool status) {
@@ -1724,6 +1724,20 @@ class Prefs extends ChangeNotifier {
 
   set translationMargin(int px) {
     prefs.setInt('translationMargin', px);
+    notifyListeners();
+  }
+
+  // AI Fallback provider
+  String? get aiFallbackProvider {
+    return prefs.getString('aiFallbackProvider');
+  }
+
+  set aiFallbackProvider(String? providerId) {
+    if (providerId != null) {
+      prefs.setString('aiFallbackProvider', providerId);
+    } else {
+      prefs.remove('aiFallbackProvider');
+    }
     notifyListeners();
   }
 }

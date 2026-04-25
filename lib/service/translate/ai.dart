@@ -5,6 +5,7 @@ import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/config/config_item.dart';
 import 'package:anx_reader/service/translate/index.dart';
+import 'package:anx_reader/utils/ai_reasoning_parser.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:flutter/material.dart';
 

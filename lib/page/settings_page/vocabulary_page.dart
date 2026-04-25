@@ -1,6 +1,8 @@
+import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/vocabulary_item.dart';
 import 'package:anx_reader/providers/vocabulary.dart';
+import 'package:anx_reader/service/vocabulary_webdav_sync_service.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/widgets/common/container/filled_container.dart';
 import 'package:anx_reader/widgets/settings/settings_section.dart';
@@ -17,6 +19,8 @@ class VocabularyPage extends ConsumerStatefulWidget {
 
 class _VocabularyPageState extends ConsumerState<VocabularyPage> {
   bool _dueOnly = false;
+  bool _isBackingUp = false;
+  bool _isSyncing = false;
   final Set<String> _expandedIds = {};
 
   @override
@@ -30,6 +34,18 @@ class _VocabularyPageState extends ConsumerState<VocabularyPage> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
             child: _VocabularySummary(summaryState: summaryState),
+          ),
+        ),
+        CustomSettingsSection(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: _VocabularyWebdavPanel(
+              webdavEnabled: Prefs().webdavStatus,
+              isBackingUp: _isBackingUp,
+              isSyncing: _isSyncing,
+              onBackup: _backupToWebdav,
+              onSync: _syncWithWebdav,
+            ),
           ),
         ),
         CustomSettingsSection(
@@ -125,6 +141,153 @@ class _VocabularyPageState extends ConsumerState<VocabularyPage> {
     if (message != null) {
       AnxToast.show(message);
     }
+  }
+
+  Future<void> _backupToWebdav() async {
+    if (_isBackingUp || _isSyncing) return;
+    final successMessage = _vocabularyBackupSuccessMessage(context);
+    final failedPrefix = _vocabularyBackupFailedPrefix(context);
+
+    setState(() {
+      _isBackingUp = true;
+    });
+
+    try {
+      final result = await VocabularyWebdavSyncService.backup();
+      if (!mounted) return;
+      AnxToast.show(successMessage(result.finalCount));
+    } catch (e) {
+      if (!mounted) return;
+      AnxToast.show('$failedPrefix: ${_friendlySyncError(context, e)}');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBackingUp = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _syncWithWebdav() async {
+    if (_isBackingUp || _isSyncing) return;
+    final successMessage = _vocabularySyncSuccessMessage(context);
+    final failedPrefix = _vocabularySyncFailedPrefix(context);
+
+    setState(() {
+      _isSyncing = true;
+    });
+
+    try {
+      final result = await VocabularyWebdavSyncService.sync();
+      if (!mounted) return;
+      await ref.read(vocabularyProvider.notifier).load(dueOnly: _dueOnly);
+      ref.invalidate(vocabularySummaryProvider);
+      AnxToast.show(successMessage(result.changedCount, result.finalCount));
+    } catch (e) {
+      if (!mounted) return;
+      AnxToast.show('$failedPrefix: ${_friendlySyncError(context, e)}');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSyncing = false;
+        });
+      }
+    }
+  }
+}
+
+class _VocabularyWebdavPanel extends StatelessWidget {
+  const _VocabularyWebdavPanel({
+    required this.webdavEnabled,
+    required this.isBackingUp,
+    required this.isSyncing,
+    required this.onBackup,
+    required this.onSync,
+  });
+
+  final bool webdavEnabled;
+  final bool isBackingUp;
+  final bool isSyncing;
+  final VoidCallback onBackup;
+  final VoidCallback onSync;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final busy = isBackingUp || isSyncing;
+    final enabled = webdavEnabled && !busy;
+
+    return FilledContainer(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.cloud_sync_outlined,
+                size: 18,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _vocabularyWebdavTitle(context),
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            webdavEnabled
+                ? _vocabularyWebdavEnabledTip(context)
+                : _vocabularyWebdavDisabledTip(context),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              OutlinedButton.icon(
+                onPressed: enabled ? onBackup : null,
+                icon: isBackingUp
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.cloud_upload_outlined),
+                label: Text(
+                  isBackingUp
+                      ? _vocabularyBackingUp(context)
+                      : _vocabularyBackupAction(context),
+                ),
+              ),
+              FilledButton.icon(
+                onPressed: enabled ? onSync : null,
+                icon: isSyncing
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.sync_outlined),
+                label: Text(
+                  isSyncing
+                      ? L10n.of(context).webdavSyncing
+                      : L10n.of(context).settingsSyncWebdavSyncNow,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -751,6 +914,76 @@ String _familiarityLabel(BuildContext context, VocabularyItem item) {
     VocabularyFamiliarity.hard => L10n.of(context).vocabularyHard,
     VocabularyFamiliarity.familiar => L10n.of(context).vocabularyFamiliar,
     VocabularyFamiliarity.mastered => L10n.of(context).vocabularyMastered,
+  };
+}
+
+bool _isChineseLocale(BuildContext context) {
+  return L10n.of(context).localeName.startsWith('zh');
+}
+
+String _vocabularyWebdavTitle(BuildContext context) {
+  return _isChineseLocale(context) ? 'WebDAV 备份与同步' : 'WebDAV Backup & Sync';
+}
+
+String _vocabularyWebdavEnabledTip(BuildContext context) {
+  return _isChineseLocale(context)
+      ? '仅同步单词本数据。备份会覆盖云端单词本；同步会下载云端单词并按更新时间合并后回传。'
+      : 'Syncs vocabulary data only. Backup overwrites the cloud vocabulary; Sync downloads remote words, merges by update time, then uploads the merged copy.';
+}
+
+String _vocabularyWebdavDisabledTip(BuildContext context) {
+  return _isChineseLocale(context)
+      ? '请先在同步设置中配置并启用 WebDAV。单词本关闭时此功能不可用。'
+      : 'Configure and enable WebDAV in Sync settings first. This is unavailable when Vocabulary is disabled.';
+}
+
+String _vocabularyBackupAction(BuildContext context) {
+  return _isChineseLocale(context) ? '备份到 WebDAV' : 'Back up to WebDAV';
+}
+
+String _vocabularyBackingUp(BuildContext context) {
+  return _isChineseLocale(context) ? '备份中...' : 'Backing up...';
+}
+
+String Function(int count) _vocabularyBackupSuccessMessage(
+  BuildContext context,
+) {
+  final isChinese = _isChineseLocale(context);
+  return (count) => isChinese
+      ? '单词本已备份到 WebDAV，共 $count 个单词'
+      : 'Vocabulary backed up to WebDAV: $count words';
+}
+
+String Function(int changed, int total) _vocabularySyncSuccessMessage(
+  BuildContext context,
+) {
+  final isChinese = _isChineseLocale(context);
+  return (changed, total) => isChinese
+      ? '单词本同步完成，更新 $changed 个，共 $total 个单词'
+      : 'Vocabulary sync complete: $changed updated, $total words total';
+}
+
+String _vocabularyBackupFailedPrefix(BuildContext context) {
+  return _isChineseLocale(context) ? '单词本备份失败' : 'Vocabulary backup failed';
+}
+
+String _vocabularySyncFailedPrefix(BuildContext context) {
+  return _isChineseLocale(context) ? '单词本同步失败' : 'Vocabulary sync failed';
+}
+
+String _friendlySyncError(BuildContext context, Object error) {
+  final l10n = L10n.of(context);
+  final message =
+      error is VocabularyWebdavSyncException ? error.message : error.toString();
+
+  return switch (message) {
+    'Vocabulary is disabled' => _isChineseLocale(context)
+        ? '请先在外观设置中开启单词本功能'
+        : 'Enable Vocabulary in Appearance settings first',
+    'WebDAV is not enabled' => l10n.webdavWebdavNotEnabled,
+    'Wi-Fi is required' => l10n.webdavOnlyWifi,
+    'Please set WebDAV information first' => l10n.webdavSetInfoFirst,
+    _ => message,
   };
 }
 
