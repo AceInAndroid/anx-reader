@@ -2,16 +2,15 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/vocabulary.dart';
 import 'package:anx_reader/enums/lang_list.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
-import 'package:anx_reader/models/vocabulary_item.dart';
 import 'package:anx_reader/page/reading_page.dart';
 import 'package:anx_reader/service/dictionary/english_dictionary.dart';
 import 'package:anx_reader/service/translate/index.dart';
+import 'package:anx_reader/service/vocabulary_capture_service.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
 import 'package:flutter/material.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'dart:async';
-import 'package:uuid/uuid.dart';
 
 class TranslationMenu extends StatefulWidget {
   const TranslationMenu({
@@ -137,19 +136,6 @@ class _TranslationMenuState extends State<TranslationMenu> {
     if (_isAdding) return;
     final l10n = L10n.of(context);
 
-    final existing = await vocabularyDao.selectByWord(widget.content);
-    if (_isAdded || existing != null) {
-      if (existing != null) {
-        await _updateVocabularyPronunciation(existing);
-      }
-      if (!mounted) return;
-      setState(() {
-        _isAdded = true;
-      });
-      AnxToast.show(l10n.vocabularyAlreadyExists);
-      return;
-    }
-
     final player = epubPlayerKey.currentState;
     final book = player?.book;
     final word = widget.content.trim();
@@ -162,66 +148,17 @@ class _TranslationMenuState extends State<TranslationMenu> {
       _isAdding = true;
     });
 
-    final effectiveContextText = _effectiveContextText;
-    final sourceSentence = _extractSourceSentence(word, effectiveContextText);
-    String? definition;
-    String? sourceSentenceTranslation;
-    final dictionaryEntryFuture = EnglishDictionaryService.lookup(word);
+    VocabularyCaptureResult result;
     try {
-      definition = await translateTextOnly(
-        word,
-        contextText: effectiveContextText,
+      result = await VocabularyCaptureService.capture(
+        word: word,
+        bookId: book.id.toString(),
+        bookTitle: book.title,
+        chapterId: player?.chapterHref,
+        chapterTitle: player?.chapterTitle,
+        contextText: _effectiveContextText,
+        position: widget.position,
       );
-    } catch (_) {
-      definition = null;
-    }
-    try {
-      if (sourceSentence.isNotEmpty && sourceSentence != word) {
-        sourceSentenceTranslation = await translateTextOnly(
-          sourceSentence,
-          contextText: effectiveContextText,
-        );
-      }
-    } catch (_) {
-      sourceSentenceTranslation = null;
-    }
-
-    final now = DateTime.now();
-    final translateToCode = Prefs().translateTo.code;
-    final isChineseDefinition = translateToCode.startsWith('zh');
-    final dictionaryEntry = await dictionaryEntryFuture;
-    final item = VocabularyItem(
-      id: const Uuid().v4(),
-      word: word,
-      phonetic: dictionaryEntry?.phonetic ?? _extractPhonetic(definition),
-      definitionCn: isChineseDefinition ? definition : null,
-      definitionEn: isChineseDefinition ? null : definition,
-      partOfSpeech:
-          _extractPartOfSpeech(definition) ?? dictionaryEntry?.partOfSpeech,
-      audioUrl: dictionaryEntry?.audioUrl,
-      bookId: book.id.toString(),
-      bookTitle: book.title,
-      chapterId: player?.chapterHref,
-      chapterTitle: player?.chapterTitle,
-      sourceSentence: sourceSentence,
-      sourceSentenceTranslation: sourceSentenceTranslation,
-      contextualDefinition: definition,
-      exampleSentence: sourceSentence,
-      exampleTranslation: sourceSentenceTranslation,
-      position: widget.position,
-      reviewStage: 0,
-      nextReviewAt: now,
-      lastReviewedAt: null,
-      familiarity: VocabularyFamiliarity.newWord,
-      correctCount: 0,
-      wrongCount: 0,
-      isMastered: false,
-      createdAt: now,
-      updatedAt: now,
-    );
-
-    try {
-      await vocabularyDao.save(item);
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -236,30 +173,8 @@ class _TranslationMenuState extends State<TranslationMenu> {
       _isAdding = false;
       _isAdded = true;
     });
-    AnxToast.show(l10n.vocabularyAddedToast);
-  }
-
-  Future<void> _updateVocabularyPronunciation(VocabularyItem item) async {
-    if ((item.phonetic?.trim().isNotEmpty ?? false) &&
-        (item.audioUrl?.trim().isNotEmpty ?? false)) {
-      return;
-    }
-
-    final entry = await EnglishDictionaryService.lookup(item.word);
-    final phonetic = entry?.phonetic;
-    final audioUrl = entry?.audioUrl;
-    if ((phonetic == null || phonetic.isEmpty) &&
-        (audioUrl == null || audioUrl.isEmpty)) {
-      return;
-    }
-
-    await vocabularyDao.updateItem(
-      item.copyWith(
-        phonetic: phonetic ?? item.phonetic,
-        audioUrl: audioUrl ?? item.audioUrl,
-        partOfSpeech: item.partOfSpeech ?? entry?.partOfSpeech,
-        updatedAt: DateTime.now(),
-      ),
+    AnxToast.show(
+      result.created ? l10n.vocabularyAddedToast : l10n.vocabularyAlreadyExists,
     );
   }
 
@@ -267,41 +182,6 @@ class _TranslationMenuState extends State<TranslationMenu> {
     return (widget.contextText?.trim().isEmpty ?? true)
         ? null
         : widget.contextText!.trim();
-  }
-
-  String _extractSourceSentence(String word, String? contextText) {
-    final text = contextText?.trim();
-    if (text == null || text.isEmpty) {
-      return word;
-    }
-
-    final lowerText = text.toLowerCase();
-    final index = lowerText.indexOf(word.toLowerCase());
-    if (index == -1) {
-      return text;
-    }
-
-    final sentenceStart = text.lastIndexOf(RegExp(r'[.!?。！？\n]'), index);
-    final sentenceEnd = text.indexOf(RegExp(r'[.!?。！？\n]'), index);
-    final start = sentenceStart == -1 ? 0 : sentenceStart + 1;
-    final end = sentenceEnd == -1 ? text.length : sentenceEnd + 1;
-    return text.substring(start, end).trim();
-  }
-
-  String? _extractPhonetic(String? definition) {
-    if (definition == null) return null;
-    final match =
-        RegExp(r'(/[^/\n]{1,48}/|\[[^\]\n]{1,48}\])').firstMatch(definition);
-    return match?.group(0);
-  }
-
-  String? _extractPartOfSpeech(String? definition) {
-    if (definition == null) return null;
-    final match = RegExp(
-      r'\b(n|v|adj|adv|prep|pron|conj|interj|abbr)\.',
-      caseSensitive: false,
-    ).firstMatch(definition);
-    return match?.group(0);
   }
 
   String _buttonLabel(BuildContext context) {

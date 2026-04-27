@@ -5,8 +5,10 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/page/reading_page.dart';
+import 'package:anx_reader/service/vocabulary_capture_service.dart';
 import 'package:anx_reader/service/tts/tts_handler.dart';
 import 'package:anx_reader/utils/env_var.dart';
+import 'package:anx_reader/utils/log/common.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/widgets/book_share/excerpt_share_service.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
@@ -19,6 +21,7 @@ import 'package:url_launcher/url_launcher.dart';
 class ExcerptMenu extends StatefulWidget {
   final String annoCfi;
   final String annoContent;
+  final String? contextText;
   final int? id;
   final Function() onClose;
   final bool footnote;
@@ -34,6 +37,7 @@ class ExcerptMenu extends StatefulWidget {
     super.key,
     required this.annoCfi,
     required this.annoContent,
+    this.contextText,
     this.id,
     required this.onClose,
     required this.footnote,
@@ -102,6 +106,44 @@ class ExcerptMenuState extends State<ExcerptMenu> {
       return await bookNoteDao.selectBookNoteById(existingId);
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<void> _addToVocabulary() async {
+    final word = widget.annoContent.trim();
+    if (word.isEmpty) return;
+
+    try {
+      final playerKey = epubPlayerKey.currentState;
+      final book = playerKey?.widget.book;
+      if (book == null) {
+        if (mounted) {
+          AnxToast.show(L10n.of(context).commonFailed);
+        }
+        return;
+      }
+
+      final result = await VocabularyCaptureService.capture(
+        word: word,
+        bookId: book.id.toString(),
+        bookTitle: book.title,
+        chapterTitle: playerKey?.chapterTitle,
+        contextText: widget.contextText,
+        position: widget.annoCfi,
+      );
+
+      if (mounted) {
+        AnxToast.show(
+          result.created
+              ? L10n.of(context).vocabularyAdded
+              : L10n.of(context).vocabularyAlreadyExists,
+        );
+      }
+    } catch (e) {
+      AnxLog.warning('Failed to add vocabulary: $e');
+      if (mounted) {
+        AnxToast.show(L10n.of(context).commonFailed);
+      }
     }
   }
 
@@ -296,12 +338,22 @@ class ExcerptMenuState extends State<ExcerptMenu> {
             icon: const Icon(Icons.translate),
             text: L10n.of(context).contextMenuTranslate,
           ),
+          // add to vocabulary
+          IconAndText(
+            compact: true,
+            onTap: () {
+              _addToVocabulary();
+            },
+            icon: const Icon(Icons.bookmark_add_outlined),
+            text: L10n.of(context).contextMenuAddToVocabulary,
+          ),
           // paragraph translation (inline insert below original)
           IconAndText(
             compact: true,
             onTap: () {
               widget.onClose();
-              epubPlayerKey.currentState?.translateSelectedParagraph(cfi: widget.annoCfi);
+              epubPlayerKey.currentState
+                  ?.translateSelectedParagraph(cfi: widget.annoCfi);
             },
             icon: const Icon(Icons.text_fields),
             text: L10n.of(context).contextMenuParagraphTranslate,

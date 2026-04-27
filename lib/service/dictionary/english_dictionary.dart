@@ -6,33 +6,52 @@ import 'package:dio/dio.dart';
 
 class EnglishDictionaryEntry {
   const EnglishDictionaryEntry({
+    this.lemma,
     this.phonetic,
     this.audioUrl,
     this.partOfSpeech,
+    this.definitionEn,
+    this.exampleSentence,
   });
 
+  final String? lemma;
   final String? phonetic;
   final String? audioUrl;
   final String? partOfSpeech;
+  final String? definitionEn;
+  final String? exampleSentence;
 
   bool get hasPronunciation =>
       (phonetic?.trim().isNotEmpty ?? false) ||
       (audioUrl?.trim().isNotEmpty ?? false);
 
+  bool get hasContent =>
+      hasPronunciation ||
+      (lemma?.trim().isNotEmpty ?? false) ||
+      (partOfSpeech?.trim().isNotEmpty ?? false) ||
+      (definitionEn?.trim().isNotEmpty ?? false) ||
+      (exampleSentence?.trim().isNotEmpty ?? false);
+
   Map<String, dynamic> toJson() {
     return {
+      'lemma': lemma,
       'phonetic': phonetic,
       'audioUrl': audioUrl,
       'partOfSpeech': partOfSpeech,
+      'definitionEn': definitionEn,
+      'exampleSentence': exampleSentence,
       'updatedAt': DateTime.now().toIso8601String(),
     };
   }
 
   factory EnglishDictionaryEntry.fromJson(Map<String, dynamic> json) {
     return EnglishDictionaryEntry(
+      lemma: _cleanString(json['lemma']),
       phonetic: _cleanString(json['phonetic']),
       audioUrl: _normalizeAudioUrl(_cleanString(json['audioUrl'])),
       partOfSpeech: _cleanString(json['partOfSpeech']),
+      definitionEn: _cleanString(json['definitionEn']),
+      exampleSentence: _cleanString(json['exampleSentence']),
     );
   }
 }
@@ -91,10 +110,14 @@ class EnglishDictionaryService {
     String? phonetic;
     String? audioUrl;
     String? partOfSpeech;
+    String? lemma;
+    String? definitionEn;
+    String? exampleSentence;
 
     for (final rawEntry in data) {
       if (rawEntry is! Map) continue;
 
+      lemma ??= _cleanString(rawEntry['word']);
       phonetic ??= _normalizePhonetic(_cleanString(rawEntry['phonetic']));
 
       final phonetics = rawEntry['phonetics'];
@@ -112,21 +135,39 @@ class EnglishDictionaryService {
         for (final rawMeaning in meanings) {
           if (rawMeaning is! Map) continue;
           partOfSpeech ??= _cleanString(rawMeaning['partOfSpeech']);
+          final definitions = rawMeaning['definitions'];
+          if (definitions is List) {
+            for (final rawDefinition in definitions) {
+              if (rawDefinition is! Map) continue;
+              definitionEn ??= _cleanString(rawDefinition['definition']);
+              exampleSentence ??= _cleanString(rawDefinition['example']);
+              if (definitionEn != null && exampleSentence != null) {
+                break;
+              }
+            }
+          }
           if (partOfSpeech != null) break;
         }
       }
 
-      if (phonetic != null && audioUrl != null && partOfSpeech != null) {
+      if (phonetic != null &&
+          audioUrl != null &&
+          partOfSpeech != null &&
+          definitionEn != null &&
+          exampleSentence != null) {
         break;
       }
     }
 
     final entry = EnglishDictionaryEntry(
+      lemma: lemma,
       phonetic: phonetic,
       audioUrl: audioUrl,
       partOfSpeech: partOfSpeech,
+      definitionEn: definitionEn,
+      exampleSentence: exampleSentence,
     );
-    return entry.hasPronunciation || partOfSpeech != null ? entry : null;
+    return entry.hasContent ? entry : null;
   }
 
   static void _remember(String word, EnglishDictionaryEntry? entry) {
