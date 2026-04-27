@@ -32,6 +32,11 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+/android/build/
+/assets/foliate-js/build/
+/assets/foliate-js/docs/
+**/.omc/
+*.arb.tmp
 
 # Symbolication related
 app.*.symbols
@@ -59,6 +64,7 @@ macos/DerivedData/
 
 .env
 *.jks
+*.keystore
 key.properties
 google_service_account.json
 **/fastlane/report.xml

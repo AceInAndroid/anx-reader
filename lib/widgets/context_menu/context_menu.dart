@@ -521,6 +521,7 @@ class _ContextMenuOverlayState extends State<_ContextMenuOverlay>
                                   onNoteCreated: _handleNoteCreated,
                                   axis: widget.axis,
                                   reverse: _reverse,
+                                  contextText: widget.contextText,
                                 ),
                               ],
                             ),

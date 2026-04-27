@@ -143,6 +143,12 @@ class _HomePageState extends ConsumerState<HomePage> {
           'label': L10n.of(context).navBarStatistics,
           'identifier': 'statistics'
         },
+      if (Prefs().bottomNavigatorShowVocabulary)
+        {
+          'icon': Icons.menu_book,
+          'label': L10n.of(context).navBarVocabulary,
+          'identifier': 'vocabulary'
+        },
       if (Prefs().bottomNavigatorShowAI && EnvVar.enableAIFeature)
         {
           'icon': Icons.auto_awesome,
