@@ -14,13 +14,15 @@ Future<List<String>> fetchAiModels({
   final modelsUrl =
       baseUrl.endsWith('/') ? '${baseUrl}models' : '$baseUrl/models';
 
-  final response = await http.get(
-    Uri.parse(modelsUrl),
-    headers: {
-      'Authorization': 'Bearer $apiKey',
-      'Content-Type': 'application/json',
-    },
-  ).timeout(timeout);
+  final request = http
+      .get(
+        Uri.parse(modelsUrl),
+        headers: {
+          'Authorization': 'Bearer $apiKey',
+          'Content-Type': 'application/json',
+        },
+      );
+  final response = timeout == Duration.zero ? await request : await request.timeout(timeout);
 
   if (response.statusCode != 200) {
     throw Exception('HTTP ${response.statusCode}: ${response.body}');

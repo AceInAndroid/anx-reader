@@ -31,6 +31,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   late TextEditingController _nameController;
   late TextEditingController _urlController;
   late TextEditingController _modelController;
+  late TextEditingController _timeoutController;
 
   AiProtocol _selectedProtocol = AiProtocol.openai;
   AiReasoningEffort _reasoningEffort = AiReasoningEffort.auto;
@@ -52,6 +53,9 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     _nameController = TextEditingController(text: provider?.title ?? '');
     _urlController = TextEditingController(text: provider?.url ?? '');
     _modelController = TextEditingController(text: provider?.model ?? '');
+    _timeoutController = TextEditingController(
+      text: (provider?.requestTimeoutSeconds ?? 0).toString(),
+    );
     _selectedProtocol = provider?.protocol ?? AiProtocol.openai;
     _reasoningEffort = provider?.reasoningEffort ?? AiReasoningEffort.auto;
     _apiKeys = provider?.apiKeys.toList() ?? [];
@@ -59,6 +63,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     _nameController.addListener(() => setState(() => _isModified = true));
     _urlController.addListener(() => setState(() => _isModified = true));
     _modelController.addListener(() => setState(() => _isModified = true));
+    _timeoutController.addListener(() => setState(() => _isModified = true));
   }
 
   @override
@@ -66,6 +71,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     _nameController.dispose();
     _urlController.dispose();
     _modelController.dispose();
+    _timeoutController.dispose();
     super.dispose();
   }
 
@@ -307,10 +313,6 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
                 child: Text(l10n.settingsAiProviderReasoningEffortAuto),
               ),
               DropdownMenuItem(
-                value: AiReasoningEffort.off,
-                child: Text(l10n.settingsAiProviderReasoningEffortOff),
-              ),
-              DropdownMenuItem(
                 value: AiReasoningEffort.low,
                 child: Text(l10n.settingsAiProviderReasoningEffortLow),
               ),
@@ -351,6 +353,16 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _timeoutController,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: _requestTimeoutLabel(context),
+              helperText: _requestTimeoutHelp(context),
+              border: const OutlineInputBorder(),
+            ),
           ),
         ],
       ),
@@ -542,9 +554,13 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     setState(() => _isFetchingModels = true);
 
     try {
+      final timeout = _parseRequestTimeoutSeconds() <= 0
+          ? Duration.zero
+          : Duration(seconds: _parseRequestTimeoutSeconds());
       final models = await fetchAiModels(
         url: _urlController.text.trim(),
         apiKey: enabledKeys.first.key,
+        timeout: timeout,
       );
 
       if (!mounted) return;
@@ -627,6 +643,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
       apiKeys: _apiKeys,
       model: _modelController.text,
       reasoningEffort: _reasoningEffort,
+      requestTimeoutSeconds: _parseRequestTimeoutSeconds(),
       keyIndex: 0,
       createdAt: widget.providerId != null
           ? ref
@@ -673,6 +690,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
         apiKeys: _apiKeys,
         model: _modelController.text,
         reasoningEffort: _reasoningEffort,
+        requestTimeoutSeconds: _parseRequestTimeoutSeconds(),
         keyIndex: 0,
         createdAt: widget.providerId != null
             ? ref
@@ -706,5 +724,28 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
         ),
       ),
     );
+  }
+
+  int _parseRequestTimeoutSeconds() {
+    final parsed = int.tryParse(_timeoutController.text.trim()) ?? 0;
+    return parsed < 0 ? 0 : parsed;
+  }
+
+  String _requestTimeoutLabel(BuildContext context) {
+    final isChinese = Localizations.localeOf(context)
+        .languageCode
+        .toLowerCase()
+        .startsWith('zh');
+    return isChinese ? '请求超时（秒）' : 'Request Timeout (seconds)';
+  }
+
+  String _requestTimeoutHelp(BuildContext context) {
+    final isChinese = Localizations.localeOf(context)
+        .languageCode
+        .toLowerCase()
+        .startsWith('zh');
+    return isChinese
+        ? '0 表示不主动超时，适合本地部署 LLM。仅对 OpenAI 兼容协议生效。'
+        : '0 disables app-level timeout. Useful for local LLMs. Applies to OpenAI-compatible providers only.';
   }
 }

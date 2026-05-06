@@ -141,6 +141,7 @@ Stream<String> _generateStream({
             apiKey: apiKey,
             url: provider.url,
             reasoningEffort: provider.reasoningEffort,
+            requestTimeoutSeconds: provider.requestTimeoutSeconds,
           );
 
           AnxLog.info(
@@ -208,6 +209,7 @@ Stream<String> _generateStream({
               apiKey: apiKey,
               url: provider.url,
               reasoningEffort: provider.reasoningEffort,
+              requestTimeoutSeconds: provider.requestTimeoutSeconds,
             );
 
             AnxLog.info(

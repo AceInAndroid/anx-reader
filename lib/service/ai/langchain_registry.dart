@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/current_reading.dart';
+import 'package:anx_reader/service/ai/timeout_http_client.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:langchain_anthropic/langchain_anthropic.dart';
 import 'package:langchain_core/chat_models.dart';
 import 'package:langchain_core/tools.dart';
@@ -76,11 +78,19 @@ class LangchainAiRegistry {
   }
 
   BaseChatModel _buildOpenAi(LangchainAiConfig config) {
+    final httpClient = config.requestTimeoutSeconds > 0
+        ? TimeoutHttpClient(
+            http.Client(),
+            timeout: Duration(seconds: config.requestTimeoutSeconds),
+          )
+        : null;
+
     return ChatOpenAI(
       apiKey: config.apiKey.isEmpty ? null : config.apiKey,
       baseUrl: config.baseUrl ?? 'https://api.openai.com/v1',
       headers: config.headers.isEmpty ? null : config.headers,
       defaultOptions: config.toOpenAIOptions(),
+      client: httpClient,
     );
   }
 

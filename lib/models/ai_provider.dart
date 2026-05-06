@@ -38,6 +38,7 @@ abstract class AiProvider with _$AiProvider {
     @Default('') String model, // Current selected model
     @Default(AiReasoningEffort.auto)
     AiReasoningEffort reasoningEffort, // AI reasoning effort
+    @Default(0) int requestTimeoutSeconds, // 0 means no app-level timeout
     @Default(0) int keyIndex, // Current round-robin key index
     DateTime? createdAt, // Creation time
     DateTime? updatedAt, // Last update time

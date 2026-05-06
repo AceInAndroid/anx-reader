@@ -18,6 +18,7 @@ class LangchainAiConfig {
     this.maxTokens,
     this.maxOutputTokens,
     this.reasoningEffort = AiReasoningEffort.auto,
+    this.requestTimeoutSeconds = 0,
     this.additional,
   }) : headers = Map.unmodifiable(headers ?? const {});
 
@@ -31,6 +32,7 @@ class LangchainAiConfig {
   final int? maxTokens;
   final int? maxOutputTokens;
   final AiReasoningEffort reasoningEffort;
+  final int requestTimeoutSeconds;
   final Map<String, dynamic>? additional;
 
   ChatOpenAIOptions toOpenAIOptions() {
@@ -98,6 +100,7 @@ class LangchainAiConfig {
       maxTokens: parseInt(raw['max_tokens']),
       maxOutputTokens: parseInt(raw['max_output_tokens']),
       reasoningEffort: AiReasoningEffort.fromCode(raw['reasoning_effort']),
+      requestTimeoutSeconds: parseInt(raw['request_timeout_seconds']) ?? 0,
       additional: additional,
     );
   }
@@ -109,6 +112,7 @@ class LangchainAiConfig {
     required String apiKey,
     required String url,
     AiReasoningEffort reasoningEffort = AiReasoningEffort.auto,
+    int requestTimeoutSeconds = 0,
   }) {
     return LangchainAiConfig(
       identifier: providerId,
@@ -116,6 +120,7 @@ class LangchainAiConfig {
       model: model,
       baseUrl: _deriveBaseUrl(url),
       reasoningEffort: reasoningEffort,
+      requestTimeoutSeconds: requestTimeoutSeconds,
     );
   }
 
@@ -129,6 +134,7 @@ class LangchainAiConfig {
     int? maxTokens,
     int? maxOutputTokens,
     AiReasoningEffort? reasoningEffort,
+    int? requestTimeoutSeconds,
     Map<String, dynamic>? additional,
   }) {
     return LangchainAiConfig(
@@ -142,6 +148,7 @@ class LangchainAiConfig {
       maxTokens: maxTokens ?? this.maxTokens,
       maxOutputTokens: maxOutputTokens ?? this.maxOutputTokens,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
+      requestTimeoutSeconds: requestTimeoutSeconds ?? this.requestTimeoutSeconds,
       additional: additional ?? this.additional,
     );
   }
@@ -242,6 +249,9 @@ LangchainAiConfig mergeConfigs(
     reasoningEffort: override.reasoningEffort != AiReasoningEffort.auto
         ? override.reasoningEffort
         : base.reasoningEffort,
+    requestTimeoutSeconds: override.requestTimeoutSeconds != 0
+        ? override.requestTimeoutSeconds
+        : base.requestTimeoutSeconds,
     additional: mergeMaps(base.additional, override.additional),
   );
 }
