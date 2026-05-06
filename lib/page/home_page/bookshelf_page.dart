@@ -15,6 +15,7 @@ import 'package:anx_reader/providers/tags.dart';
 import 'package:anx_reader/service/book.dart';
 import 'package:anx_reader/page/search/search_page.dart';
 import 'package:anx_reader/utils/get_path/get_temp_dir.dart';
+import 'package:anx_reader/utils/permission/android_storage_permission.dart';
 import 'package:anx_reader/utils/color/hash_color.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/utils/log/common.dart';
@@ -74,6 +75,10 @@ class BookshelfPageState extends ConsumerState<BookshelfPage>
   }
 
   Future<void> _importBook() async {
+    if (!await ensureAndroidStoragePermission(context: context)) {
+      return;
+    }
+
     FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.any,
       allowMultiple: true,
@@ -97,6 +102,7 @@ class BookshelfPageState extends ConsumerState<BookshelfPage>
       fileList = files.map((file) => File(file.path!)).toList();
     }
 
+    if (!mounted) return;
     importBookList(fileList, context, ref);
   }
 
@@ -481,7 +487,10 @@ class BookshelfPageState extends ConsumerState<BookshelfPage>
                   fileName: file.name,
                 ));
               }
-              importBookList(files, context, ref);
+              if (!mounted) return;
+              final rootContext = navigatorKey.currentContext;
+              if (rootContext == null || !rootContext.mounted) return;
+              importBookList(files, rootContext, ref);
               setState(() {
                 _dragging = false;
               });
