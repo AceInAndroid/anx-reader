@@ -98,7 +98,7 @@ CREATE TABLE tb_groups (
 ''';
 
 const createVocabularySQL = '''
-CREATE TABLE tb_vocabulary (
+CREATE TABLE IF NOT EXISTS tb_vocabulary (
   id TEXT PRIMARY KEY,
   word TEXT NOT NULL,
   normalized_word TEXT NOT NULL UNIQUE,
@@ -133,7 +133,7 @@ CREATE TABLE tb_vocabulary (
 ''';
 
 const createVocabularyReviewIndexSQL = '''
-CREATE INDEX idx_vocabulary_next_review_at
+CREATE INDEX IF NOT EXISTS idx_vocabulary_next_review_at
 ON tb_vocabulary(next_review_at, is_mastered)
 ''';
 
@@ -470,7 +470,8 @@ class DBHelper {
       case 7:
         await db.execute(createVocabularySQL);
         await db.execute(createVocabularyReviewIndexSQL);
-        break;
+        continue case8Migration;
+      case8Migration:
       case 8:
         await _addColumnIfMissing(
           db,
