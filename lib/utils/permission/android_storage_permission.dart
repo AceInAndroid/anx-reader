@@ -5,7 +5,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-Future<bool> ensureAndroidStoragePermission({
+Future<bool> ensureAndroidDirectStoragePermission({
   BuildContext? context,
 }) async {
   if (!AnxPlatform.isAndroid) return true;

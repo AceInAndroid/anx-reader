@@ -1,6 +1,8 @@
 # Changelog
 
 ## 1.15.0
+- Fix(android): Stop pre-requesting storage permission for picker-based imports, and only request direct storage access when reading or writing public directories
+- Fix(android): Unify Android storage permission handling for export and download-path flows to reduce false permission failures
 - Feat(network): Add global HTTP proxy support in advanced settings (#838) Thanks @dddXzz
 - Feat(network): Add HTTP proxy connectivity test feature (#838) Thanks @dddXzz
 - Fix(reader): Fix Android selection auto-page turn — continuous turns and missed turns when dragging across pages (#875) Thanks @addtion99
@@ -15,6 +17,8 @@
 - Feat(wireless): Add wireless book transfer - upload books from browser via local network with auto-shutdown
 - Fix(translation): Filter reasoning tags from translation output to prevent thinking content leaking
 
+- 修复(android): 调整存储权限策略，导入书籍和图片这类系统选取流程不再预先申请存储权限
+- 修复(android): 统一导出与下载目录直连场景的存储权限处理，减少误报权限失败
 - Feat(network): 新增全局 HTTP 代理支持，可在高级设置中配置代理服务器地址和端口 (#838) 感谢 @dddXzz
 - Feat(network): 新增代理连接测试功能 (#838) 感谢 @dddXzz
 - Fix(reader): 修复 Android 选区跨页自动翻页的连续翻页与漏翻问题 (#875) 感谢 @addtion99
