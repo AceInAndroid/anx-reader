@@ -2428,6 +2428,8 @@ var url = JSON.parse(urlParams.get('url'))
 var initialCfi = JSON.parse(urlParams.get('initialCfi'))
 var style = JSON.parse(urlParams.get('style'))
 var readingRules = JSON.parse(urlParams.get('readingRules'))
+var i18n = JSON.parse(urlParams.get('i18n') || '{}')
+globalThis.i18n = i18n
 
 fetch(url)
   .then(res => res.blob())

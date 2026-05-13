@@ -17,6 +17,7 @@ String generateUrl(
   String? backgroundColor,
   bool? importing,
   bool isDarkMode = false,
+  Map<String, dynamic>? i18n,
 }) {
   String indexHtmlPath =
       "http://127.0.0.1:${Server().port}/foliate-js/index.html";
@@ -109,6 +110,7 @@ String generateUrl(
     'initialCfi': cfi,
     'style': style,
     'readingRules': readingRules,
+    'i18n': i18n ?? {},
   };
 
   String query = '';
