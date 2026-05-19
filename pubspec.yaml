@@ -185,6 +185,7 @@ flutter:
     - assets/images/book_share/
     - assets/images/bgimg/
     - assets/icon/
+    - assets/transfer/
     - assets/CHANGELOG.md
 
   fonts:

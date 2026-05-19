@@ -13,14 +13,61 @@ if (typeof window !== 'undefined') {
 
 const isTranslationFailure = (value) => {
   if (typeof value !== 'string' || value.trim().length === 0) return true
-  const normalized = value.trim().toLowerCase()
+  const raw = value.trim()
+  const normalized = raw.toLowerCase().replace(/\s+/g, ' ')
   return normalized === '...'
     || normalized.startsWith('translation failed:')
     || normalized.startsWith('translation error:')
+    || normalized.startsWith('translate error')
     || normalized.startsWith('error:')
     || normalized.startsWith('failed:')
     || (normalized.includes('api key') && normalized.includes('please set'))
     || (normalized.includes('api key') && normalized.includes('invalid'))
+    || normalized.includes('authentication failed')
+    || normalized.includes('service not configured')
+    || (normalized.includes('ai service') && (normalized.includes('configure')
+      || normalized.includes('configured')
+      || normalized.includes('setting')
+      || normalized.includes('settins')))
+    || raw.includes('AI配置')
+    || raw.includes('AI 配置')
+    || raw.includes('AI設定')
+    || raw.includes('AI 設定')
+    || raw.includes('AI服务')
+    || raw.includes('AI 服務')
+}
+
+const getTranslationErrorFallbackText = () => window.i18n?.translateError || 'Translation failed'
+
+const getRetryText = () => window.i18n?.retry || 'Retry'
+
+const getRetryingText = () => window.i18n?.retrying || `${getRetryText()}...`
+
+const getTranslationErrorMessage = (value) => {
+  if (typeof value !== 'string') return getTranslationErrorFallbackText()
+  const sanitized = sanitizeTranslationResult(value)
+  return sanitized && sanitized.trim().length > 0
+    ? sanitized.trim()
+    : getTranslationErrorFallbackText()
+}
+
+const isNonRetryableTranslationFailure = (value) => {
+  if (typeof value !== 'string' || value.trim().length === 0) return false
+  const raw = value.trim()
+  const normalized = raw.toLowerCase().replace(/\s+/g, ' ')
+  return normalized.includes('authentication failed')
+    || normalized.includes('service not configured')
+    || (normalized.includes('ai service') && (normalized.includes('configure')
+      || normalized.includes('configured')
+      || normalized.includes('setting')
+      || normalized.includes('settins')))
+    || (normalized.includes('api key') && normalized.includes('invalid'))
+    || raw.includes('AI配置')
+    || raw.includes('AI 配置')
+    || raw.includes('AI設定')
+    || raw.includes('AI 設定')
+    || raw.includes('AI服务')
+    || raw.includes('AI 服務')
 }
 
 const sanitizeTranslationResult = (value) => {
@@ -35,7 +82,7 @@ const translate = async (text) => {
     const result = await window.flutter_inappwebview.callHandler('translateText', text)
     const sanitizedResult = sanitizeTranslationResult(result)
     if (isTranslationFailure(sanitizedResult)) {
-      throw new Error('Translation returned an empty or failed result')
+      throw new Error(getTranslationErrorMessage(sanitizedResult))
     }
     return sanitizedResult
   } catch (error) {
@@ -180,7 +227,7 @@ export class Translator {
           this.#applyTranslated(item.element, item.text, translatedText)
         } catch (e) {
           console.warn('Translation failed:', e)
-          this.#applyTranslationError(item.element, item.text)
+          this.#applyTranslationError(item.element, item.text, e?.message || String(e))
           this.#finishProgressItem(true)
         }
       }
@@ -213,7 +260,7 @@ export class Translator {
       this.#applyTranslated(item.element, item.text, translatedText)
     } catch (error) {
       console.warn('Translation failed:', error)
-      this.#applyTranslationError(item.element, item.text)
+      this.#applyTranslationError(item.element, item.text, error?.message || String(error))
       this.#finishProgressItem(true)
     }
   }
@@ -231,8 +278,15 @@ export class Translator {
         const result = await translate(text)
         if (!isTranslationFailure(result)) return result
         lastError = new Error(result)
+        if (isNonRetryableTranslationFailure(result)) {
+          throw lastError
+        }
       } catch (e) {
         lastError = e
+        const errorMessage = e?.message ?? e?.toString?.() ?? ''
+        if (isNonRetryableTranslationFailure(errorMessage)) {
+          throw e
+        }
       }
     }
 
@@ -242,7 +296,11 @@ export class Translator {
   // Apply translated text and update cache
   #applyTranslated(element, originalText, translatedText) {
     if (isTranslationFailure(translatedText)) {
-      this.#applyTranslationError(element, originalText)
+      this.#applyTranslationError(
+        element,
+        originalText,
+        translatedText,
+      )
       this.#finishProgressItem(true)
       return
     }
@@ -273,7 +331,7 @@ export class Translator {
     return true
   }
 
-  #applyTranslationError(element, originalText) {
+  #applyTranslationError(element, originalText, errorMessage = 'Translation failed') {
     this.#translatedElements.delete(element)
 
     const cacheKey = this.#getCacheKey(element)
@@ -282,7 +340,7 @@ export class Translator {
       this.#schedulePersistCache()
     }
 
-    const existingTranslation = element.querySelector('.translated-text')
+    const existingTranslation = this.#findTranslationWrapper(element)
     if (existingTranslation) {
       existingTranslation.remove()
     }
@@ -293,24 +351,25 @@ export class Translator {
 
     const message = document.createElement('span')
     message.className = 'translated-error-message'
-    message.textContent = 'Translation failed'
+    message.textContent = getTranslationErrorMessage(errorMessage)
     wrapper.appendChild(message)
 
     const retryButton = document.createElement('button')
     retryButton.type = 'button'
     retryButton.className = 'translated-error-retry'
-    retryButton.textContent = 'Retry'
+    retryButton.textContent = getRetryText()
     retryButton.style.marginLeft = '8px'
     retryButton.addEventListener('click', async () => {
       retryButton.disabled = true
-      retryButton.textContent = 'Retrying...'
+      retryButton.textContent = getRetryingText()
       try {
         const translatedText = await this.#translateWithRetry(originalText)
         this.#applyTranslated(element, originalText, translatedText)
       } catch (error) {
         console.warn('Retry translation failed:', error)
+        message.textContent = getTranslationErrorMessage(error?.message || String(error))
         retryButton.disabled = false
-        retryButton.textContent = 'Retry'
+        retryButton.textContent = getRetryText()
       }
     })
     wrapper.appendChild(retryButton)
@@ -494,11 +553,27 @@ export class Translator {
     })
   }
 
+  #findTranslationWrapper(element) {
+    let sibling = element?.nextElementSibling
+    while (sibling) {
+      if (sibling.classList?.contains('translated-text')) {
+        return sibling
+      }
+      if (!sibling.hasAttribute?.('data-translation-mark')) {
+        break
+      }
+      sibling = sibling.nextElementSibling
+    }
+    return null
+  }
+
   clearTranslations() {
     // Remove all translation elements and restore original content
     this.observedElements.forEach(element => {
-      const translationElements = element.querySelectorAll('.translated-text')
-      translationElements.forEach(trans => trans.remove())
+      const translationWrapper = this.#findTranslationWrapper(element)
+      if (translationWrapper) {
+        translationWrapper.remove()
+      }
       
       // Restore original text if hidden
       this.#restoreOriginalText(element)
@@ -633,7 +708,7 @@ export class Translator {
       this.#applyTranslation(element, translatedText)
     } catch (error) {
       console.warn('Translation failed:', error)
-      this.#applyTranslationError(element, text)
+      this.#applyTranslationError(element, text, error?.message || String(error))
     }
   }
 
@@ -756,7 +831,7 @@ export class Translator {
 
   #applyTranslation(element, translatedText) {
     // Remove existing translation if any
-    const existingTranslation = element.querySelector('.translated-text')
+    const existingTranslation = this.#findTranslationWrapper(element)
     if (existingTranslation) {
       existingTranslation.remove()
     }
@@ -911,7 +986,7 @@ export class Translator {
         this.#queueTranslation(element)
       } else if (isVisible && this.#translatedElements.has(element)) {
         // Element already translated, just update display
-        const translationWrapper = element.querySelector('.translated-text')
+        const translationWrapper = this.#findTranslationWrapper(element)
         if (translationWrapper) {
           this.#updateElementDisplay(element, translationWrapper)
         }
@@ -962,7 +1037,7 @@ export class Translator {
                 this.#applyTranslated(item.element, item.text, translatedText)
               } catch (e) {
                 console.warn('Translation failed:', e)
-                this.#applyTranslationError(item.element, item.text)
+                this.#applyTranslationError(item.element, item.text, e?.message || String(e))
                 this.#finishProgressItem(true)
               }
             }
@@ -976,7 +1051,7 @@ export class Translator {
             this.#applyTranslated(item.element, item.text, translatedText)
           } catch (e) {
             console.warn('Translation failed:', e)
-            this.#applyTranslationError(item.element, item.text)
+            this.#applyTranslationError(item.element, item.text, e?.message || String(e))
             this.#finishProgressItem(true)
           }
         }
@@ -998,7 +1073,7 @@ export class Translator {
   #updateTranslationDisplay() {
     // console.log('Updating translation display for mode:', this.#translationMode, 'Elements:', this.observedElements.size)
     this.observedElements.forEach(element => {
-      const translationWrapper = element.querySelector('.translated-text')
+      const translationWrapper = this.#findTranslationWrapper(element)
       if (translationWrapper) {
         // console.log('Updating display for element with translation:', element)
         this.#updateElementDisplay(element, translationWrapper)
@@ -1065,10 +1140,14 @@ export class Translator {
     // If already translated, just show the translation
     if (this.#translatedElements.has(paragraphElement)) {
       console.log('Element already translated')
-      const wrapper = paragraphElement.querySelector('.translated-text')
+      const wrapper = this.#findTranslationWrapper(paragraphElement)
       if (wrapper) {
-        wrapper.style.display = 'block'
-        return true
+        if (wrapper.classList.contains('translated-error')) {
+          wrapper.remove()
+        } else {
+          wrapper.style.display = 'block'
+          return true
+        }
       }
     }
 
@@ -1086,7 +1165,11 @@ export class Translator {
       return true
     } catch (error) {
       console.warn('Translation failed:', error)
-      this.#applyTranslationError(paragraphElement, text)
+      this.#applyTranslationError(
+        paragraphElement,
+        text,
+        error?.message || String(error),
+      )
       return false
     }
   }

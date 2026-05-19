@@ -153,11 +153,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     _activeTranslationMode = mode;
     _resetTranslationProgress();
 
-    await webViewController.evaluateJavascript(source: '''
-      if (typeof reader.view !== 'undefined' && reader.view.setTranslationMode) {
-        reader.view.setTranslationMode('${mode.code}');
-      }
-      ''');
+    await _applyTranslationModeToWebView(mode);
 
     if (!restoreProgress || widget.cfi != null) return;
 
@@ -167,6 +163,38 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     await Future.delayed(const Duration(milliseconds: 120));
     if (!mounted) return;
     goToCfi(savedCfi);
+  }
+
+  Future<void> _applyTranslationModeToWebView(
+    TranslationModeEnum mode,
+  ) async {
+    final jsMode = jsonEncode(mode.code);
+
+    for (var attempt = 0; attempt < 30; attempt++) {
+      final applied = await webViewController.evaluateJavascript(source: '''
+        (function() {
+          if (
+            window.reader &&
+            window.reader.view &&
+            typeof window.reader.view.setTranslationMode === 'function'
+          ) {
+            window.reader.view.setTranslationMode($jsMode);
+            return true;
+          }
+          return false;
+        })();
+      ''');
+
+      if (applied == true || applied?.toString() == 'true') {
+        return;
+      }
+
+      await Future.delayed(const Duration(milliseconds: 120));
+    }
+
+    AnxLog.warning(
+      'Timed out applying translation mode ${mode.code} for book ${widget.book.id}',
+    );
   }
 
   void _triggerCurrentPageTranslation() {
@@ -677,8 +705,12 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   Future<void> setHandler(InAppWebViewController controller) async {
     controller.addJavaScriptHandler(
         handlerName: 'onLoadEnd',
-        callback: (args) {
+        callback: (args) async {
           widget.onLoadEnd();
+          final savedMode = Prefs().getBookTranslationMode(widget.book.id);
+          if (savedMode != TranslationModeEnum.off) {
+            await setTranslationMode(savedMode, restoreProgress: false);
+          }
         });
 
     controller.addJavaScriptHandler(
@@ -1110,14 +1142,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   bool _isFailedTranslationText(String text) {
-    final normalized = text.trim().toLowerCase();
-    if (normalized.isEmpty || normalized == '...') return true;
-    return normalized.startsWith('translation error:') ||
-        normalized.startsWith('translation failed:') ||
-        normalized.startsWith('error:') ||
-        normalized.startsWith('failed:') ||
-        (normalized.contains('api key') && normalized.contains('please set')) ||
-        (normalized.contains('api key') && normalized.contains('invalid'));
+    return isFailedTranslationResult(text);
   }
 
   String _stableTranslationTextKey(String text) {
@@ -1614,6 +1639,11 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             backgroundColor: backgroundColor,
             textColor: textColor,
             isDarkMode: Theme.of(context).brightness == Brightness.dark,
+            i18n: {
+              'translateError': L10n.of(context).translateError,
+              'retry': L10n.of(context).commonRetry,
+              'retrying': '${L10n.of(context).commonRetry}...',
+            },
           ),
         ),
       ),

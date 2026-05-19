@@ -124,7 +124,8 @@ abstract class TranslateServiceProvider {
 
         if (lastResult != null &&
             lastResult.trim().isNotEmpty &&
-            lastResult != '...') {
+            lastResult != '...' &&
+            !isFailedTranslationResult(lastResult)) {
           return lastResult;
         }
 
@@ -188,6 +189,47 @@ abstract class TranslateServiceProvider {
       },
     );
   }
+}
+
+bool isFailedTranslationResult(String text) {
+  final raw = text.trim();
+  final normalized = raw.toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  if (normalized.isEmpty || normalized == '...') return true;
+
+  if (normalized.startsWith('translation error:') ||
+      normalized.startsWith('translation failed:') ||
+      normalized.startsWith('translate error') ||
+      normalized.startsWith('error:') ||
+      normalized.startsWith('failed:')) {
+    return true;
+  }
+
+  if ((normalized.contains('api key') && normalized.contains('please set')) ||
+      (normalized.contains('api key') && normalized.contains('invalid')) ||
+      normalized.contains('authentication failed') ||
+      normalized.contains('service not configured')) {
+    return true;
+  }
+
+  if (normalized.contains('ai service') &&
+      (normalized.contains('configure') ||
+          normalized.contains('configured') ||
+          normalized.contains('setting') ||
+          normalized.contains('settins'))) {
+    return true;
+  }
+
+  if (raw.contains('AI配置') ||
+      raw.contains('AI 配置') ||
+      raw.contains('AI設定') ||
+      raw.contains('AI 設定') ||
+      raw.contains('AI服务') ||
+      raw.contains('AI 服務')) {
+    return true;
+  }
+
+  return false;
 }
 
 // ============================================================================
@@ -277,7 +319,11 @@ Future<String> translateTextOnlyCached(
 
   final cached = _selectionTranslationCache[cacheKey];
   if (cached != null && cached.trim().isNotEmpty) {
-    return cached;
+    if (isFailedTranslationResult(cached)) {
+      _selectionTranslationCache.remove(cacheKey);
+    } else {
+      return cached;
+    }
   }
 
   final translated = await service.provider.translateTextOnly(
@@ -287,7 +333,9 @@ Future<String> translateTextOnlyCached(
     contextText: contextText,
   );
 
-  if (translated.trim().isNotEmpty && translated != '...') {
+  if (translated.trim().isNotEmpty &&
+      translated != '...' &&
+      !isFailedTranslationResult(translated)) {
     _selectionTranslationCache[cacheKey] = translated;
   }
   return translated;
