@@ -1499,6 +1499,42 @@ class Prefs extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool get httpProxyEnabled {
+    return prefs.getBool('httpProxyEnabled') ?? false;
+  }
+
+  set httpProxyEnabled(bool enabled) {
+    prefs.setBool('httpProxyEnabled', enabled);
+    notifyListeners();
+  }
+
+  String get httpProxyHost {
+    return prefs.getString('httpProxyHost') ?? '';
+  }
+
+  set httpProxyHost(String host) {
+    prefs.setString('httpProxyHost', host);
+    notifyListeners();
+  }
+
+  int get httpProxyPort {
+    return prefs.getInt('httpProxyPort') ?? 7890;
+  }
+
+  set httpProxyPort(int port) {
+    prefs.setInt('httpProxyPort', port);
+    notifyListeners();
+  }
+
+  String get httpProxyTestUrl {
+    return prefs.getString('httpProxyTestUrl') ?? 'https://google.com';
+  }
+
+  set httpProxyTestUrl(String url) {
+    prefs.setString('httpProxyTestUrl', url);
+    notifyListeners();
+  }
+
   String? get lastAppVersion {
     return prefs.getString('lastAppVersion');
   }

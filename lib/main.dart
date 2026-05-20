@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:anx_reader/utils/platform_utils.dart';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
@@ -9,6 +11,7 @@ import 'package:anx_reader/models/window_info.dart';
 import 'package:anx_reader/page/home_page.dart';
 import 'package:anx_reader/page/migration_page.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
+import 'package:anx_reader/service/network/http_proxy_overrides.dart';
 import 'package:anx_reader/service/tts/tts_handler.dart';
 import 'package:anx_reader/utils/get_path/macos_migration.dart';
 import 'package:anx_reader/utils/color_scheme.dart';
@@ -36,6 +39,7 @@ MigrationCheckResult? _migrationCheckResult;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Prefs().initPrefs();
+  HttpOverrides.global = AnxHttpProxyOverrides();
 
   // Initialize desktop window with validated position
   if (AnxPlatform.isWindows || AnxPlatform.isMacOS) {

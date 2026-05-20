@@ -166,6 +166,7 @@ class _SubMoreSettingsState extends State<SubMoreSettings> {
                   L10n.of(context).settingsAdvancedLog,
                   L10n.of(context).duplicateFile,
                   L10n.of(context).settingsAdvancedJavascript,
+                  L10n.of(context).settingsAdvancedNetwork,
                 ],
               },
             ];
