@@ -19,6 +19,18 @@ import 'package:langchain_core/prompts.dart';
 
 final CancelableLangchainRunner _runner = CancelableLangchainRunner();
 
+class _AiExecutionResult {
+  const _AiExecutionResult({
+    required this.stream,
+    required this.providerId,
+    required this.isError,
+  });
+
+  final Stream<String> stream;
+  final String? providerId;
+  final bool isError;
+}
+
 // Global request timestamps list for RPM throttling
 final List<DateTime> _aiRequestTimestamps = [];
 
@@ -61,47 +73,43 @@ Stream<String> aiGenerateStream(
   if (useAgent) {
     assert(ref != null, 'ref must be provided when useAgent is true');
   }
-  LangchainAiRegistry registry = LangchainAiRegistry(ref);
+  final registry = LangchainAiRegistry(ref);
 
-  // Try primary provider
-  bool primaryFailed = false;
-  String? lastOutput;
-  await for (final chunk in _generateStream(
+  final primary = await _generateStream(
     messages: messages,
     identifier: identifier,
     overrideConfig: config,
     regenerate: regenerate,
     useAgent: useAgent,
     registry: registry,
-  )) {
-    lastOutput = chunk;
+  );
+
+  await for (final chunk in primary.stream) {
     yield chunk;
   }
 
-  // Detect if primary failed
-  if (lastOutput != null) {
-    final lower = lastOutput.toLowerCase();
-    primaryFailed =
-        lower.startsWith('error:') || lower.startsWith('translation error');
-  }
+  if (!primary.isError) return;
 
-  // Try fallback if primary failed
-  if (primaryFailed) {
-    final fallbackId = Prefs().aiFallbackProvider;
-    if (fallbackId != null && fallbackId != identifier) {
-      AnxLog.info('Trying fallback provider: $fallbackId');
-      yield '\n[Falling back to backup provider...]';
-      await for (final chunk in _generateStream(
-        messages: messages,
-        identifier: fallbackId,
-        overrideConfig: config,
-        regenerate: regenerate,
-        useAgent: useAgent,
-        registry: registry,
-      )) {
-        yield chunk;
-      }
-    }
+  final fallbackId = _resolveRunnableFallbackId(
+    registry: registry,
+    primaryIdentifier: primary.providerId ?? identifier,
+  );
+  if (fallbackId == null) return;
+
+  AnxLog.info('Trying fallback provider: $fallbackId');
+  yield '\n[Falling back to backup provider...]';
+
+  final fallback = await _generateStream(
+    messages: messages,
+    identifier: fallbackId,
+    overrideConfig: config,
+    regenerate: regenerate,
+    useAgent: useAgent,
+    registry: registry,
+  );
+
+  await for (final chunk in fallback.stream) {
+    yield chunk;
   }
 }
 
@@ -109,18 +117,52 @@ void cancelActiveAiRequest() {
   _runner.cancel();
 }
 
-Stream<String> _generateStream({
+String? _resolveRunnableFallbackId({
+  required LangchainAiRegistry registry,
+  required String? primaryIdentifier,
+}) {
+  final fallbackId = Prefs().aiFallbackProvider;
+  if (fallbackId == null || fallbackId == primaryIdentifier) {
+    return null;
+  }
+
+  if (registry.ref != null) {
+    final notifier = registry.ref!.read(aiProvidersProvider.notifier);
+    final fallback = notifier.getRunnableProviderById(fallbackId);
+    if (fallback != null) return fallback.id;
+    Prefs().aiFallbackProvider = null;
+    return null;
+  }
+
+  try {
+    final providers = Prefs()
+        .getAiProviders()
+        .map((json) => AiProvider.fromJson(json as Map<String, dynamic>))
+        .toList();
+    final fallback = providers
+        .where((p) => p.id == fallbackId)
+        .where((p) => p.enabled && AiKeyRotator.hasValidKey(p))
+        .firstOrNull;
+    if (fallback != null) return fallback.id;
+  } catch (_) {}
+
+  Prefs().aiFallbackProvider = null;
+  return null;
+}
+
+Future<_AiExecutionResult> _generateStream({
   required List<ChatMessage> messages,
   String? identifier,
   Map<String, String>? overrideConfig,
   required bool regenerate,
   required bool useAgent,
   required LangchainAiRegistry registry,
-}) async* {
+}) async {
   AnxLog.info('aiGenerateStream called identifier: $identifier');
   final sanitizedMessages = _sanitizeMessagesForPrompt(messages);
 
   LangchainAiConfig config;
+  String? resolvedProviderId;
 
   // Try to use new provider system first if ref is available
   if (registry.ref != null && overrideConfig == null) {
@@ -128,13 +170,12 @@ Stream<String> _generateStream({
       final notifier = registry.ref!.read(aiProvidersProvider.notifier);
       // If a specific provider id was passed, use it; otherwise use the default
       final AiProvider? provider = identifier != null
-          ? notifier.getProviderById(identifier)
-          : notifier.getSelectedProvider();
-      if (provider != null &&
-          provider.enabled &&
-          AiKeyRotator.hasValidKey(provider)) {
+          ? notifier.getRunnableProviderById(identifier)
+          : notifier.getRunnableSelectedProvider();
+      if (provider != null) {
         final apiKey = AiKeyRotator.getNextKey(provider);
         if (apiKey != null) {
+          resolvedProviderId = provider.id;
           config = LangchainAiConfig.fromProvider(
             providerId: provider.id,
             model: provider.model,
@@ -152,7 +193,7 @@ Stream<String> _generateStream({
           final model = pipeline.model;
 
           await _throttleIfNeeded();
-          yield* _executeStream(
+          final result = await _executeStream(
             model: model,
             pipeline: pipeline,
             sanitizedMessages: sanitizedMessages,
@@ -162,10 +203,16 @@ Stream<String> _generateStream({
           );
 
           // Advance key index for round-robin rotation after successful call
-          registry.ref!
-              .read(aiProvidersProvider.notifier)
-              .advanceKeyIndex(provider.id);
-          return;
+          if (!result.isError) {
+            registry.ref!
+                .read(aiProvidersProvider.notifier)
+                .advanceKeyIndex(provider.id);
+          }
+          return _AiExecutionResult(
+            stream: result.stream,
+            providerId: resolvedProviderId,
+            isError: result.isError,
+          );
         }
       }
     } catch (e) {
@@ -186,23 +233,29 @@ Stream<String> _generateStream({
         AiProvider? provider;
         if (identifier != null) {
           try {
-            provider = providers.firstWhere((p) => p.id == identifier);
+            provider = providers.firstWhere((p) =>
+                p.id == identifier &&
+                p.enabled &&
+                AiKeyRotator.hasValidKey(p));
           } catch (_) {
             provider = null;
           }
         } else {
           final selectedId = Prefs().selectedAiService;
           try {
-            provider = providers.firstWhere((p) => p.id == selectedId);
+            provider = providers.firstWhere((p) =>
+                p.id == selectedId &&
+                p.enabled &&
+                AiKeyRotator.hasValidKey(p));
           } catch (_) {}
-          provider ??= providers.where((p) => p.enabled).firstOrNull;
+          provider ??=
+              providers.where((p) => p.enabled && AiKeyRotator.hasValidKey(p)).firstOrNull;
         }
 
-        if (provider != null &&
-            provider.enabled &&
-            AiKeyRotator.hasValidKey(provider)) {
+        if (provider != null) {
           final apiKey = AiKeyRotator.getNextKey(provider);
           if (apiKey != null) {
+            resolvedProviderId = provider.id;
             config = LangchainAiConfig.fromProvider(
               providerId: provider.id,
               model: provider.model,
@@ -221,7 +274,7 @@ Stream<String> _generateStream({
             final model = pipeline.model;
 
             await _throttleIfNeeded();
-            yield* _executeStream(
+            final result = await _executeStream(
               model: model,
               pipeline: pipeline,
               sanitizedMessages: sanitizedMessages,
@@ -231,15 +284,21 @@ Stream<String> _generateStream({
             );
 
             // Advance key index in persistent storage for round-robin rotation
-            final updatedProviders = providers.map((p) {
-              if (p.id == provider!.id) {
-                return p.copyWith(
-                    keyIndex: p.keyIndex + 1, updatedAt: DateTime.now());
-              }
-              return p;
-            }).toList();
-            Prefs().saveAiProviders(updatedProviders);
-            return;
+            if (!result.isError) {
+              final updatedProviders = providers.map((p) {
+                if (p.id == provider!.id) {
+                  return p.copyWith(
+                      keyIndex: p.keyIndex + 1, updatedAt: DateTime.now());
+                }
+                return p;
+              }).toList();
+              Prefs().saveAiProviders(updatedProviders);
+            }
+            return _AiExecutionResult(
+              stream: result.stream,
+              providerId: resolvedProviderId,
+              isError: result.isError,
+            );
           }
         }
       }
@@ -256,11 +315,18 @@ Stream<String> _generateStream({
       (overrideConfig == null || overrideConfig.isEmpty)) {
     final context = navigatorKey.currentContext;
     if (context != null) {
-      yield L10n.of(context).aiServiceNotConfigured;
+      return _AiExecutionResult(
+        stream: Stream.value(L10n.of(context).aiServiceNotConfigured),
+        providerId: resolvedProviderId ?? selectedIdentifier,
+        isError: true,
+      );
     } else {
-      yield 'AI service not configured';
+      return _AiExecutionResult(
+        stream: Stream.value('AI service not configured'),
+        providerId: null,
+        isError: true,
+      );
     }
-    return;
   }
 
   config = LangchainAiConfig.fromPrefs(selectedIdentifier, savedConfig);
@@ -277,7 +343,7 @@ Stream<String> _generateStream({
   final model = pipeline.model;
 
   await _throttleIfNeeded();
-  yield* _executeStream(
+  final result = await _executeStream(
     model: model,
     pipeline: pipeline,
     sanitizedMessages: sanitizedMessages,
@@ -285,22 +351,39 @@ Stream<String> _generateStream({
     registry: registry,
     config: config,
   );
+  return _AiExecutionResult(
+    stream: result.stream,
+    providerId: resolvedProviderId ?? selectedIdentifier,
+    isError: result.isError,
+  );
 }
 
 /// Execute the AI stream with the given model and pipeline
 /// Pass registry and config to allow creating fresh model on retry
-Stream<String> _executeStream({
+Future<_AiExecutionResult> _executeStream({
   required BaseChatModel model,
   required LangchainPipeline pipeline,
   required List<ChatMessage> sanitizedMessages,
   required bool useAgent,
   required LangchainAiRegistry registry,
   required LangchainAiConfig config,
-}) async* {
-  var buffer = '';
+}) async {
   int retryCount = 0;
   const maxRetries = 3;
   BaseChatModel currentModel = model;
+  final chunks = <String>[];
+
+  void emit(String value) {
+    chunks.add(value);
+  }
+
+  _AiExecutionResult finish(bool isError) {
+    return _AiExecutionResult(
+      stream: Stream<String>.fromIterable(chunks),
+      providerId: config.identifier,
+      isError: isError,
+    );
+  }
 
   try {
     Stream<String> stream = _createStream(
@@ -311,9 +394,9 @@ Stream<String> _executeStream({
     );
 
     await for (final chunk in stream) {
-      buffer = chunk;
-      yield buffer;
+      emit(chunk);
     }
+    return finish(false);
   } catch (error, stack) {
     final errorType = parseRateLimitError(error);
 
@@ -326,7 +409,7 @@ Stream<String> _executeStream({
         'AI request failed, retry $retryCount/$maxRetries after ${delay.inSeconds}s: $error',
       );
 
-      yield 'Retrying... ($retryCount/$maxRetries)';
+      emit('Retrying... ($retryCount/$maxRetries)');
 
       await Future.delayed(delay);
 
@@ -349,18 +432,20 @@ Stream<String> _executeStream({
         );
 
         await for (final chunk in retryStream) {
-          buffer = chunk;
-          yield buffer;
+          emit(chunk);
         }
+        return finish(false);
       } catch (retryError, retryStack) {
         final mapped = _mapError(retryError);
         AnxLog.severe('AI retry error: $mapped\n$retryStack');
-        yield mapped;
+        emit(mapped);
+        return finish(true);
       }
     } else {
       final mapped = _mapError(error);
       AnxLog.severe('AI error: $mapped\n$stack');
-      yield mapped;
+      emit(mapped);
+      return finish(true);
     }
   } finally {
     try {

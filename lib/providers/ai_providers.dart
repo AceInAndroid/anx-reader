@@ -1,5 +1,6 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
+import 'package:anx_reader/service/ai/ai_key_rotator.dart';
 import 'package:anx_reader/service/ai/ai_services.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:uuid/uuid.dart';
@@ -105,6 +106,32 @@ class AiProviders extends _$AiProviders {
     }
   }
 
+  AiProvider? getRunnableSelectedProvider() {
+    final selectedId = Prefs().selectedAiService;
+    final selected = getRunnableProviderById(selectedId);
+    if (selected != null) return selected;
+
+    return state.where(_isRunnableProvider).firstOrNull;
+  }
+
+  AiProvider? getRunnableProviderById(String id) {
+    final provider = getProviderById(id);
+    if (provider == null || !_isRunnableProvider(provider)) {
+      return null;
+    }
+    return provider;
+  }
+
+  List<AiProvider> getRunnableFallbackCandidates(String? primaryId) {
+    return state
+        .where((p) => p.id != primaryId && _isRunnableProvider(p))
+        .toList(growable: false);
+  }
+
+  bool _isRunnableProvider(AiProvider provider) {
+    return provider.enabled && AiKeyRotator.hasValidKey(provider);
+  }
+
   /// Set the selected provider
   void setSelectedProvider(String providerId) {
     Prefs().selectedAiService = providerId;
@@ -134,6 +161,19 @@ class AiProviders extends _$AiProviders {
         if (p.id == provider.id) updatedProvider else p
     ];
     Prefs().saveAiProviders(state);
+
+    final fallbackId = Prefs().aiFallbackProvider;
+    if (fallbackId == updatedProvider.id && !_isRunnableProvider(updatedProvider)) {
+      Prefs().aiFallbackProvider = null;
+    }
+
+    final selectedId = Prefs().selectedAiService;
+    if (selectedId == updatedProvider.id && !_isRunnableProvider(updatedProvider)) {
+      final nextProvider = state.where(_isRunnableProvider).firstOrNull;
+      if (nextProvider != null) {
+        setSelectedProvider(nextProvider.id);
+      }
+    }
   }
 
   /// Delete a provider (only custom providers can be deleted)
@@ -149,10 +189,14 @@ class AiProviders extends _$AiProviders {
 
     // If deleted provider was selected, select another
     if (Prefs().selectedAiService == providerId) {
-      final enabled = state.where((p) => p.enabled).toList();
+      final enabled = state.where(_isRunnableProvider).toList();
       if (enabled.isNotEmpty) {
         setSelectedProvider(enabled.first.id);
       }
+    }
+
+    if (Prefs().aiFallbackProvider == providerId) {
+      Prefs().aiFallbackProvider = null;
     }
   }
 
@@ -163,6 +207,20 @@ class AiProviders extends _$AiProviders {
         if (p.id == providerId) p.copyWith(enabled: enabled) else p
     ];
     Prefs().saveAiProviders(state);
+
+    if (Prefs().selectedAiService == providerId && !enabled) {
+      final nextProvider = state.where(_isRunnableProvider).firstOrNull;
+      if (nextProvider != null) {
+        setSelectedProvider(nextProvider.id);
+      }
+    }
+
+    if (Prefs().aiFallbackProvider == providerId) {
+      final fallback = getProviderById(providerId);
+      if (fallback == null || !_isRunnableProvider(fallback)) {
+        Prefs().aiFallbackProvider = null;
+      }
+    }
   }
 
   /// Advance the key index for round-robin (called after successful API call)

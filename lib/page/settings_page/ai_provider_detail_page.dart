@@ -1,4 +1,5 @@
 import 'package:anx_reader/enums/ai_reasoning_effort.dart';
+import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
@@ -245,9 +246,19 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
             if (provider != null)
               SizedBox(
                 width: double.infinity,
-                child: AnxButton.outlined(
-                  onPressed: _testConnection,
-                  child: Text(l10n.settingsAiProviderTestConnection),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AnxButton.outlined(
+                      onPressed: _testConnection,
+                      child: Text(l10n.settingsAiProviderTestConnection),
+                    ),
+                    const SizedBox(height: 8),
+                    AnxButton.outlined(
+                      onPressed: _testFallbackChain,
+                      child: const Text('Test Fallback Chain'),
+                    ),
+                  ],
                 ),
               ),
           ],
@@ -721,6 +732,48 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
             identifier: widget.providerId,
             regenerate: true,
           ),
+        ),
+      ),
+    );
+  }
+
+  void _testFallbackChain() {
+    final l10n = L10n.of(context);
+    final fallbackId = Prefs().aiFallbackProvider;
+    if (fallbackId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.aiFallbackTip)),
+      );
+      return;
+    }
+
+    SmartDialog.show(
+      onDismiss: () {
+        cancelActiveAiRequest();
+      },
+      builder: (context) => AlertDialog(
+        title: Text('${l10n.commonTest} Fallback'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Expected success result: FALLBACK_OK',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.maxFinite,
+              child: AiStream(
+                prompt: generatePromptFallbackProbe(),
+                identifier: widget.providerId,
+                config: const {
+                  'api_key': 'INVALID_API_KEY_FOR_FALLBACK_TEST',
+                },
+                regenerate: true,
+              ),
+            ),
+          ],
         ),
       ),
     );

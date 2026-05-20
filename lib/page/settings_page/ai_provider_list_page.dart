@@ -118,13 +118,18 @@ class AiProviderListPage extends ConsumerWidget {
   ) {
     final l10n = L10n.of(context);
     final fallbackId = Prefs().aiFallbackProvider;
+    final notifier = ref.watch(aiProvidersProvider.notifier);
+    final fallbackCandidates = notifier.getRunnableFallbackCandidates(selectedId);
+    final validFallbackId = fallbackCandidates.any((p) => p.id == fallbackId)
+        ? fallbackId
+        : null;
 
     // Find provider names for display
     String primaryName = 'Unknown';
     String? fallbackName;
     for (final p in providers) {
       if (p.id == selectedId) primaryName = p.title;
-      if (p.id == fallbackId) fallbackName = p.title;
+      if (p.id == validFallbackId) fallbackName = p.title;
     }
 
     return Container(
@@ -153,7 +158,7 @@ class AiProviderListPage extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<String?>(
-            value: fallbackId,
+            initialValue: validFallbackId,
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
               contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -163,8 +168,7 @@ class AiProviderListPage extends ConsumerWidget {
                 value: null,
                 child: Text(l10n.aiFallbackNone),
               ),
-              for (final p in providers)
-                if (p.id != selectedId)
+              for (final p in fallbackCandidates)
                   DropdownMenuItem<String?>(
                     value: p.id,
                     child: Text(p.title),
