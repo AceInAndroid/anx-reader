@@ -154,7 +154,9 @@ PromptTemplatePayload generatePromptFullTextTranslate(
   final normalized = _normalizePrompt(prompt);
   final template = ChatPromptTemplate.fromPromptMessages([
     SystemChatMessagePromptTemplate.fromTemplate(normalized),
-    HumanChatMessagePromptTemplate.fromTemplate('{{text}}'),
+    HumanChatMessagePromptTemplate.fromTemplate('''
+{{text}}
+'''),
   ]);
   return PromptTemplatePayload(
     template: template,
