@@ -102,6 +102,7 @@ export class Translator {
   #requestDelay = 500 // Delay between requests in ms
   #cache = {} // Persistent translation cache, keyed by stable element identifiers
   #cacheLoadPromise = null
+  #cacheNamespace = null
   #rootMargin = '1600px' // ~3 pages ahead (default)
   #maxCacheSize = 5000 // Maximum cache entries
   #separator = '\x1f' // Unit Separator for batch translation
@@ -475,10 +476,10 @@ export class Translator {
       return
     }
 
-    await this.loadCache()
-
     const oldMode = this.#translationMode
     this.#translationMode = mode
+
+    await this.loadCache({ forceReload: true, resetRendered: true })
 
     if (oldMode !== mode) {
       // console.log(`Translation mode changed from ${oldMode} to ${mode}`)
@@ -503,6 +504,10 @@ export class Translator {
         window.renderAnnotations(existingAnnotations)
       }
     }
+  }
+
+  async refreshCache() {
+    return this.loadCache({ forceReload: true, resetRendered: true })
   }
 
   getTranslationMode() {
@@ -551,6 +556,18 @@ export class Translator {
         }
       }
     })
+  }
+
+  #resetRenderedTranslations() {
+    this.observedElements.forEach(element => {
+      const translationWrapper = this.#findTranslationWrapper(element)
+      if (translationWrapper) {
+        translationWrapper.remove()
+      }
+      this.#restoreOriginalText(element)
+    })
+
+    this.#translatedElements = new WeakMap()
   }
 
   #findTranslationWrapper(element) {
@@ -792,7 +809,10 @@ export class Translator {
     try {
       if (window.flutter_inappwebview) {
         const cacheJson = JSON.stringify(this.#cache)
-        window.flutter_inappwebview.callHandler('saveTranslationCache', cacheJson)
+        window.flutter_inappwebview.callHandler('saveTranslationCache', {
+          namespace: this.#cacheNamespace,
+          cacheJson,
+        })
       }
     } catch (e) {
       // Silently fail - cache loss is not critical
@@ -800,26 +820,48 @@ export class Translator {
   }
 
   // Load cache from Flutter on document ready
-  async loadCache() {
+  async loadCache({ forceReload = false, resetRendered = false } = {}) {
+    if (forceReload) this.#cacheLoadPromise = null
     if (this.#cacheLoadPromise) return this.#cacheLoadPromise
 
     this.#cacheLoadPromise = (async () => {
       try {
+        let namespace = null
+        let nextCache = {}
+
         if (window.flutter_inappwebview) {
-          const cacheJson = await window.flutter_inappwebview.callHandler('loadTranslationCache')
+          const payload = await window.flutter_inappwebview.callHandler('loadTranslationCache')
+          let cacheJson = ''
+
+          if (typeof payload === 'string') {
+            cacheJson = payload
+          } else if (payload && typeof payload === 'object') {
+            namespace = typeof payload.namespace === 'string' ? payload.namespace : null
+            cacheJson = typeof payload.cacheJson === 'string' ? payload.cacheJson : ''
+          }
+
           if (cacheJson) {
             const decoded = JSON.parse(cacheJson)
-            this.#cache = Object.fromEntries(
+            nextCache = Object.fromEntries(
               Object.entries(decoded || {}).filter(([, value]) =>
                 value &&
                 typeof value === 'object' &&
                 !isTranslationFailure(value.translatedText)
               )
             )
-            console.log(`Translation cache loaded: ${Object.keys(this.#cache).length} entries`)
-            this.#applyCachedTranslations()
           }
         }
+
+        const namespaceChanged = namespace !== this.#cacheNamespace
+        this.#cacheNamespace = namespace
+        this.#cache = nextCache
+
+        if (namespaceChanged || resetRendered) {
+          this.#resetRenderedTranslations()
+        }
+
+        console.log(`Translation cache loaded: ${Object.keys(this.#cache).length} entries`)
+        this.#applyCachedTranslations()
       } catch (e) {
         console.warn('Failed to load translation cache:', e)
       }
@@ -1121,6 +1163,8 @@ export class Translator {
   async translateSelectedParagraph(cfi) {
     console.log('translateSelectedParagraph called, cfi:', cfi)
 
+    await this.loadCache()
+
     // Find the paragraph element from CFI
     const element = this.#findElementByCfi(cfi)
     console.log('Found element:', element)
@@ -1155,13 +1199,23 @@ export class Translator {
     const text = paragraphElement.innerText?.trim()
     if (!text) return false
 
+    if (this.#applyCachedTranslation(paragraphElement, text)) {
+      const wrapper = this.#findTranslationWrapper(paragraphElement)
+      if (wrapper) wrapper.style.display = 'block'
+      return true
+    }
+
     try {
       const translatedText = await this.#translateWithRetry(text)
-      this.#translatedElements.set(paragraphElement, {
+      const cacheData = {
         originalText: text,
         translatedText: translatedText
-      })
+      }
+      this.#translatedElements.set(paragraphElement, cacheData)
+      const cacheKey = this.#getCacheKey(paragraphElement)
+      if (cacheKey) this.#cache[cacheKey] = cacheData
       this.#applyTranslation(paragraphElement, translatedText)
+      this.#schedulePersistCache()
       return true
     } catch (error) {
       console.warn('Translation failed:', error)

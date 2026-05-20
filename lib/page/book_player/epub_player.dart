@@ -1009,8 +1009,19 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
       handlerName: 'saveTranslationCache',
       callback: (args) async {
         try {
-          final cacheJson = args[0] as String;
-          final cacheKey = _translationDomCacheStorageKey();
+          final payload = args[0];
+          String cacheJson;
+          String cacheKey;
+
+          if (payload is Map) {
+            cacheJson = payload['cacheJson']?.toString() ?? '';
+            cacheKey = payload['namespace']?.toString() ??
+                _translationDomCacheStorageKey();
+          } else {
+            cacheJson = payload?.toString() ?? '';
+            cacheKey = _translationDomCacheStorageKey();
+          }
+
           Prefs().prefs.setString(cacheKey, cacheJson);
         } catch (e) {
           AnxLog.warning('Failed to save translation cache: $e');
@@ -1023,10 +1034,16 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         try {
           final cacheKey = _translationDomCacheStorageKey();
           final cacheJson = Prefs().prefs.getString(cacheKey);
-          return cacheJson ?? '';
+          return {
+            'namespace': cacheKey,
+            'cacheJson': cacheJson ?? '',
+          };
         } catch (e) {
           AnxLog.warning('Failed to load translation cache: $e');
-          return '';
+          return {
+            'namespace': _translationDomCacheStorageKey(),
+            'cacheJson': '',
+          };
         }
       },
     );
