@@ -112,6 +112,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   int _translationProgressTotal = 0;
   int _translationProgressFailed = 0;
   bool _translationProgressActive = false;
+  Timer? _currentPageTranslationTimer;
 
   // Scroll wheel debounce
   Timer? _scrollDebounceTimer;
@@ -203,6 +204,17 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         window.translator.translateCurrentPage();
       }
       ''');
+  }
+
+  void _scheduleCurrentPageTranslation({required String expectedCfi}) {
+    _currentPageTranslationTimer?.cancel();
+
+    _currentPageTranslationTimer = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      if (_activeTranslationMode == TranslationModeEnum.off) return;
+      if (cfi != expectedCfi) return;
+      _triggerCurrentPageTranslation();
+    });
   }
 
   Future<void> translateSelectedParagraph({required String cfi}) async {
@@ -749,10 +761,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
           // Auto-translate visible elements on page/chapter change if translation mode is enabled
           final currentMode = Prefs().getBookTranslationMode(widget.book.id);
           if (currentMode != TranslationModeEnum.off) {
-            Future.delayed(const Duration(milliseconds: 300), () {
-              if (!mounted) return;
-              _triggerCurrentPageTranslation();
-            });
+            _scheduleCurrentPageTranslation(expectedCfi: cfi);
           }
         });
     controller.addJavaScriptHandler(
@@ -1322,6 +1331,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   void _resetTranslationProgress() {
+    _currentPageTranslationTimer?.cancel();
+
     if (!mounted) return;
     setState(() {
       _translationProgressActive = false;
@@ -1333,6 +1344,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
 
   @override
   void dispose() {
+    _currentPageTranslationTimer?.cancel();
     _scrollDebounceTimer?.cancel();
     _animationController?.dispose();
     saveReadingProgress();

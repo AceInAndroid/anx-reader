@@ -97,6 +97,7 @@ export class Translator {
   #translatedElements = new WeakMap()
   #observer = null
   #translationQueue = []
+  #pendingTasks = new Map()
   #isTranslating = false
   #maxConcurrent = 3 // Maximum concurrent translations
   #requestDelay = 500 // Delay between requests in ms
@@ -148,8 +149,75 @@ export class Translator {
     }
   }
 
+  #isElementConnected(element) {
+    return Boolean(element?.isConnected && element.parentNode)
+  }
+
+  #canApplyToElement(element, expectedText = null) {
+    if (!this.#isElementConnected(element)) return false
+    if (!this.observedElements.has(element)) return false
+    if (expectedText == null) return true
+
+    const translated = this.#translatedElements.get(element)
+    if (translated?.originalText === expectedText) return true
+
+    const text = element.innerText?.trim()
+    return Boolean(text) && text === expectedText
+  }
+
+  #getTaskKey(cacheKey, text) {
+    return `${cacheKey || this.#getChapterId()}::${text}`
+  }
+
+  #takePendingElements(item) {
+    const pending = item?.taskKey ? this.#pendingTasks.get(item.taskKey) : null
+    if (item?.taskKey) this.#pendingTasks.delete(item.taskKey)
+    if (pending) return Array.from(pending.elements)
+    return item?.element ? [item.element] : []
+  }
+
+  #pruneStaleWork() {
+    const staleElements = new Set()
+
+    this.observedElements.forEach(element => {
+      if (this.#isElementConnected(element)) return
+      staleElements.add(element)
+      this.#translatedElements.delete(element)
+      try { this.#observer?.unobserve(element) } catch (e) {}
+      this.observedElements.delete(element)
+    })
+
+    if (staleElements.size === 0) return
+
+    this.#translationQueue = this.#translationQueue.filter(item => !staleElements.has(item.element))
+
+    for (const [taskKey, pending] of this.#pendingTasks.entries()) {
+      pending.elements = new Set(
+        Array.from(pending.elements).filter(element => !staleElements.has(element))
+      )
+
+      if (pending.elements.size === 0) {
+        this.#pendingTasks.delete(taskKey)
+      }
+    }
+  }
+
+  #clearQueuedTranslations() {
+    if (this.#translationQueue.length === 0) return
+
+    const removedCount = this.#translationQueue.length
+    const queuedTaskKeys = new Set(this.#translationQueue.map(item => item.taskKey))
+    this.#translationQueue = []
+    queuedTaskKeys.forEach(taskKey => this.#pendingTasks.delete(taskKey))
+
+    this.#progressTotal = Math.max(this.#progressCompleted, this.#progressTotal - removedCount)
+    this.#reportTranslationProgress(this.#isTranslating)
+  }
+
   // Queue translation requests
   #queueTranslation(element) {
+    this.#pruneStaleWork()
+
     if (this.#translationMode === TranslationMode.OFF) return
     if (this.#translatedElements.has(element)) return
 
@@ -158,16 +226,27 @@ export class Translator {
 
     if (this.#applyCachedTranslation(element, text)) return
 
+    const cacheKey = this.#getCacheKey(element)
+    const taskKey = this.#getTaskKey(cacheKey, text)
+    const pendingTask = this.#pendingTasks.get(taskKey)
+    if (pendingTask) {
+      pendingTask.elements.add(element)
+      return
+    }
+
     // Add to queue if not already queued
     if (!this.#translationQueue.find(item => item.element === element)) {
       this.#startProgressItem()
-      this.#translationQueue.push({ element, text })
+      this.#translationQueue.push({ element, text, cacheKey, taskKey })
+      this.#pendingTasks.set(taskKey, { elements: new Set([element]) })
       this.#reportTranslationProgress(true)
     }
   }
 
   // Process queue using batch translation
   async #processQueue() {
+    this.#pruneStaleWork()
+
     if (this.#isTranslating) return
     if (this.#translationQueue.length === 0) return
     if (this.#translationMode === TranslationMode.OFF) return
@@ -213,22 +292,22 @@ export class Translator {
 
         for (let i = 0; i < batch.length; i++) {
           const item = batch[i]
-          this.#applyTranslated(item.element, item.text, translations[i])
+          this.#applyTranslated(item, item.text, translations[i])
         }
       } else if (batch.length === 1) {
         const item = batch[0]
         const translatedText = await this.#translateWithRetry(item.text)
-        this.#applyTranslated(item.element, item.text, translatedText)
+        this.#applyTranslated(item, item.text, translatedText)
       }
     } catch (error) {
       console.warn('Batch translation failed, falling back to individual:', error)
       for (const item of batch) {
         try {
           const translatedText = await this.#translateWithRetry(item.text)
-          this.#applyTranslated(item.element, item.text, translatedText)
+          this.#applyTranslated(item, item.text, translatedText)
         } catch (e) {
           console.warn('Translation failed:', e)
-          this.#applyTranslationError(item.element, item.text, e?.message || String(e))
+          this.#applyTranslationError(item, item.text, e?.message || String(e))
           this.#finishProgressItem(true)
         }
       }
@@ -258,10 +337,10 @@ export class Translator {
 
     try {
       const translatedText = await this.#translateWithRetry(item.text)
-      this.#applyTranslated(item.element, item.text, translatedText)
+      this.#applyTranslated(item, item.text, translatedText)
     } catch (error) {
       console.warn('Translation failed:', error)
-      this.#applyTranslationError(item.element, item.text, error?.message || String(error))
+      this.#applyTranslationError(item, item.text, error?.message || String(error))
       this.#finishProgressItem(true)
     }
   }
@@ -296,21 +375,34 @@ export class Translator {
 
   // Apply translated text and update cache
   #applyTranslated(element, originalText, translatedText) {
+    const item = element?.element && element?.text
+      ? element
+      : {
+          element,
+          text: originalText,
+          cacheKey: this.#getCacheKey(element),
+          taskKey: this.#getTaskKey(this.#getCacheKey(element), originalText),
+        }
+
     if (isTranslationFailure(translatedText)) {
       this.#applyTranslationError(
-        element,
-        originalText,
+        item,
+        item.text,
         translatedText,
       )
       this.#finishProgressItem(true)
       return
     }
 
-    const cacheData = { originalText, translatedText }
-    this.#translatedElements.set(element, cacheData)
-    const cacheKey = this.#getCacheKey(element)
-    if (cacheKey) this.#cache[cacheKey] = cacheData
-    this.#applyTranslation(element, translatedText)
+    const cacheData = { originalText: item.text, translatedText }
+    if (item.cacheKey) this.#cache[item.cacheKey] = cacheData
+
+    for (const target of this.#takePendingElements(item)) {
+      if (!this.#canApplyToElement(target, item.text)) continue
+      this.#translatedElements.set(target, cacheData)
+      this.#applyTranslation(target, translatedText)
+    }
+
     this.#schedulePersistCache()
     this.#finishProgressItem(false)
   }
@@ -333,50 +425,64 @@ export class Translator {
   }
 
   #applyTranslationError(element, originalText, errorMessage = 'Translation failed') {
-    this.#translatedElements.delete(element)
+    const item = element?.element && element?.text
+      ? element
+      : {
+          element,
+          text: originalText,
+          cacheKey: this.#getCacheKey(element),
+          taskKey: this.#getTaskKey(this.#getCacheKey(element), originalText),
+        }
 
-    const cacheKey = this.#getCacheKey(element)
-    if (cacheKey && this.#cache[cacheKey]) {
-      delete this.#cache[cacheKey]
+    if (item.cacheKey && this.#cache[item.cacheKey]) {
+      delete this.#cache[item.cacheKey]
       this.#schedulePersistCache()
     }
 
-    const existingTranslation = this.#findTranslationWrapper(element)
-    if (existingTranslation) {
-      existingTranslation.remove()
-    }
+    for (const target of this.#takePendingElements(item)) {
+      if (!this.#canApplyToElement(target, item.text)) continue
 
-    const wrapper = document.createElement('div')
-    wrapper.className = 'translated-text translated-error'
-    wrapper.setAttribute('data-translation-mark', '1')
+      this.#translatedElements.delete(target)
 
-    const message = document.createElement('span')
-    message.className = 'translated-error-message'
-    message.textContent = getTranslationErrorMessage(errorMessage)
-    wrapper.appendChild(message)
-
-    const retryButton = document.createElement('button')
-    retryButton.type = 'button'
-    retryButton.className = 'translated-error-retry'
-    retryButton.textContent = getRetryText()
-    retryButton.style.marginLeft = '8px'
-    retryButton.addEventListener('click', async () => {
-      retryButton.disabled = true
-      retryButton.textContent = getRetryingText()
-      try {
-        const translatedText = await this.#translateWithRetry(originalText)
-        this.#applyTranslated(element, originalText, translatedText)
-      } catch (error) {
-        console.warn('Retry translation failed:', error)
-        message.textContent = getTranslationErrorMessage(error?.message || String(error))
-        retryButton.disabled = false
-        retryButton.textContent = getRetryText()
+      const existingTranslation = this.#findTranslationWrapper(target)
+      if (existingTranslation) {
+        existingTranslation.remove()
       }
-    })
-    wrapper.appendChild(retryButton)
 
-    this.#restoreOriginalText(element)
-    element.parentNode.insertBefore(wrapper, element.nextSibling)
+      const wrapper = document.createElement('div')
+      wrapper.className = 'translated-text translated-error'
+      wrapper.setAttribute('data-translation-mark', '1')
+
+      const message = document.createElement('span')
+      message.className = 'translated-error-message'
+      message.textContent = getTranslationErrorMessage(errorMessage)
+      wrapper.appendChild(message)
+
+      const retryButton = document.createElement('button')
+      retryButton.type = 'button'
+      retryButton.className = 'translated-error-retry'
+      retryButton.textContent = getRetryText()
+      retryButton.style.marginLeft = '8px'
+      retryButton.addEventListener('click', async () => {
+        retryButton.disabled = true
+        retryButton.textContent = getRetryingText()
+        try {
+          const translatedText = await this.#translateWithRetry(item.text)
+          this.#applyTranslated(target, item.text, translatedText)
+        } catch (error) {
+          console.warn('Retry translation failed:', error)
+          message.textContent = getTranslationErrorMessage(error?.message || String(error))
+          retryButton.disabled = false
+          retryButton.textContent = getRetryText()
+        }
+      })
+      wrapper.appendChild(retryButton)
+
+      this.#restoreOriginalText(target)
+      if (target.parentNode) {
+        target.parentNode.insertBefore(wrapper, target.nextSibling)
+      }
+    }
   }
 
   #startProgressItem() {
@@ -521,6 +627,8 @@ export class Translator {
       return
     }
 
+    this.#pruneStaleWork()
+
     const textElements = this.#walkTextNodes(doc.body || doc.documentElement)
     // console.log(`Found ${textElements.length} text elements to observe`)
 
@@ -542,6 +650,8 @@ export class Translator {
   #applyCachedTranslations() {
     const cacheKeys = Object.keys(this.#cache)
     if (cacheKeys.length === 0) return
+
+    this.#pruneStaleWork()
 
     this.observedElements.forEach(element => {
       if (this.#translatedElements.has(element)) return
@@ -585,6 +695,8 @@ export class Translator {
   }
 
   clearTranslations() {
+    this.#clearQueuedTranslations()
+
     // Remove all translation elements and restore original content
     this.observedElements.forEach(element => {
       const translationWrapper = this.#findTranslationWrapper(element)
@@ -600,6 +712,8 @@ export class Translator {
     this.#observer.disconnect()
     this.observedElements.clear()
     this.#translatedElements = new WeakMap()
+    this.#pendingTasks.clear()
+    this.#isTranslating = false
     
     // Reinitialize observer
     this.#initializeObserver()
@@ -872,6 +986,8 @@ export class Translator {
   }
 
   #applyTranslation(element, translatedText) {
+    if (!this.#isElementConnected(element)) return
+
     // Remove existing translation if any
     const existingTranslation = this.#findTranslationWrapper(element)
     if (existingTranslation) {
@@ -1016,6 +1132,8 @@ export class Translator {
   }
 
   async #forceTranslateVisibleElements() {
+    this.#pruneStaleWork()
+
     // console.log('Force translating visible elements')
 
     // Find elements in viewport and queue them for translation
@@ -1044,6 +1162,8 @@ export class Translator {
 
   // Process queue completely and wait for all translations
   async #processQueueAndWait() {
+    this.#pruneStaleWork()
+
     this.#isTranslating = true
     const useBatch =
       this.#translationMode === TranslationMode.TRANSLATION_ONLY ||
@@ -1064,22 +1184,22 @@ export class Translator {
               const translations = this.#splitBatchResult(combinedResult, batch.length)
               for (let i = 0; i < batch.length; i++) {
                 const item = batch[i]
-                this.#applyTranslated(item.element, item.text, translations[i])
+                this.#applyTranslated(item, item.text, translations[i])
               }
             } else {
               const item = batch[0]
               const translatedText = await this.#translateWithRetry(item.text)
-              this.#applyTranslated(item.element, item.text, translatedText)
+              this.#applyTranslated(item, item.text, translatedText)
             }
           } catch (error) {
             // Fallback to individual
             for (const item of batch) {
               try {
                 const translatedText = await this.#translateWithRetry(item.text)
-                this.#applyTranslated(item.element, item.text, translatedText)
+                this.#applyTranslated(item, item.text, translatedText)
               } catch (e) {
                 console.warn('Translation failed:', e)
-                this.#applyTranslationError(item.element, item.text, e?.message || String(e))
+                this.#applyTranslationError(item, item.text, e?.message || String(e))
                 this.#finishProgressItem(true)
               }
             }
@@ -1090,10 +1210,10 @@ export class Translator {
           if (!item) break
           try {
             const translatedText = await this.#translateWithRetry(item.text)
-            this.#applyTranslated(item.element, item.text, translatedText)
+            this.#applyTranslated(item, item.text, translatedText)
           } catch (e) {
             console.warn('Translation failed:', e)
-            this.#applyTranslationError(item.element, item.text, e?.message || String(e))
+            this.#applyTranslationError(item, item.text, e?.message || String(e))
             this.#finishProgressItem(true)
           }
         }
@@ -1113,6 +1233,8 @@ export class Translator {
   }
 
   #updateTranslationDisplay() {
+    this.#pruneStaleWork()
+
     // console.log('Updating translation display for mode:', this.#translationMode, 'Elements:', this.observedElements.size)
     this.observedElements.forEach(element => {
       const translationWrapper = this.#findTranslationWrapper(element)
@@ -1134,6 +1256,9 @@ export class Translator {
   // Translate ONLY the currently visible page elements immediately
   async translateCurrentPage() {
     if (this.#translationMode === TranslationMode.OFF) return
+
+    this.#pruneStaleWork()
+    this.#clearQueuedTranslations()
 
     // Find elements currently in the viewport (no margin buffer)
     const visibleElements = []
