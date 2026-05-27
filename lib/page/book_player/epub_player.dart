@@ -981,8 +981,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             return cached;
           }
 
-          final translatedText = await service.provider
-              .translateTextOnly(text, from, to, isFullText: true);
+          final translatedText = await translateTextOnlyWithFallback(
+            text,
+            from,
+            to,
+            service: service,
+            isFullText: true,
+          );
           await _setCachedTranslationText(
             service: service,
             from: from,
@@ -992,24 +997,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
           );
           return translatedText;
         } catch (e) {
-          AnxLog.warning('Primary translation failed: $e, trying fallback');
-          try {
-            final fallbackService = TranslateService.bingWeb;
-            final translatedText = await fallbackService.provider
-                .translateTextOnly(text, from, to, isFullText: true);
-            await _setCachedTranslationText(
-              service: service,
-              from: from,
-              to: to,
-              text: normalizedText,
-              translatedText: translatedText,
-            );
-            AnxLog.info('Fallback translation succeeded');
-            return translatedText;
-          } catch (fallbackError) {
-            AnxLog.severe('Fallback translation also failed: $fallbackError');
-            return 'Translation error: $e';
-          }
+          AnxLog.severe('Translation failed: $e');
+          return 'Translation error: $e';
         }
       },
     );

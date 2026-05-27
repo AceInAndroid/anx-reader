@@ -113,6 +113,38 @@ Stream<String> aiGenerateStream(
   }
 }
 
+Future<String> aiGenerateText(
+  List<ChatMessage> messages, {
+  String? identifier,
+  Map<String, String>? config,
+  bool regenerate = false,
+  bool useAgent = false,
+  WidgetRef? ref,
+}) async {
+  String? lastResult;
+  await for (final chunk in aiGenerateStream(
+    messages,
+    identifier: identifier,
+    config: config,
+    regenerate: regenerate,
+    useAgent: useAgent,
+    ref: ref,
+  )) {
+    lastResult = chunk;
+  }
+  return lastResult ?? '';
+}
+
+Future<String?> resolveRunnableAiFallbackProviderId({
+  String? primaryIdentifier,
+  WidgetRef? ref,
+}) async {
+  return _resolveRunnableFallbackId(
+    registry: LangchainAiRegistry(ref),
+    primaryIdentifier: primaryIdentifier,
+  );
+}
+
 void cancelActiveAiRequest() {
   _runner.cancel();
 }
@@ -234,9 +266,7 @@ Future<_AiExecutionResult> _generateStream({
         if (identifier != null) {
           try {
             provider = providers.firstWhere((p) =>
-                p.id == identifier &&
-                p.enabled &&
-                AiKeyRotator.hasValidKey(p));
+                p.id == identifier && p.enabled && AiKeyRotator.hasValidKey(p));
           } catch (_) {
             provider = null;
           }
@@ -244,12 +274,11 @@ Future<_AiExecutionResult> _generateStream({
           final selectedId = Prefs().selectedAiService;
           try {
             provider = providers.firstWhere((p) =>
-                p.id == selectedId &&
-                p.enabled &&
-                AiKeyRotator.hasValidKey(p));
+                p.id == selectedId && p.enabled && AiKeyRotator.hasValidKey(p));
           } catch (_) {}
-          provider ??=
-              providers.where((p) => p.enabled && AiKeyRotator.hasValidKey(p)).firstOrNull;
+          provider ??= providers
+              .where((p) => p.enabled && AiKeyRotator.hasValidKey(p))
+              .firstOrNull;
         }
 
         if (provider != null) {

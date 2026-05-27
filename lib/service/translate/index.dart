@@ -229,6 +229,29 @@ bool isFailedTranslationResult(String text) {
     return true;
   }
 
+  // Some models occasionally echo the translation prompt or instruction block
+  // instead of returning only the translated content. Treat these as failures
+  // so they won't be shown or cached as valid translations.
+  final leakedPromptMarkers = <String>[
+    '目标语言：',
+    '源文本：',
+    '要求：',
+    '仅输出翻译后的文本',
+    '不要包含任何解释',
+    '保留段落结构及格式',
+    '保持原文的语气和风格',
+    'source text:',
+    'reader context:',
+    'output only the final translated text',
+    'do not output the source text',
+  ];
+  final matchedMarkers = leakedPromptMarkers
+      .where((marker) => normalized.contains(marker.toLowerCase()))
+      .length;
+  if (matchedMarkers >= 2) {
+    return true;
+  }
+
   return false;
 }
 
@@ -270,12 +293,58 @@ Future<String> translateTextOnly(String text,
   final from = Prefs().translateFrom;
   final to = Prefs().translateTo;
 
-  return await service.provider.translateTextOnly(
+  return await translateTextOnlyWithFallback(
     text,
     from,
     to,
+    service: service,
     contextText: contextText,
   );
+}
+
+Future<String> translateTextOnlyWithFallback(
+  String text,
+  LangListEnum from,
+  LangListEnum to, {
+  required TranslateService service,
+  String? contextText,
+  bool isFullText = false,
+}) async {
+  final candidates = _fallbackTranslateServices(service);
+  Object? firstError;
+
+  for (final candidate in candidates) {
+    try {
+      final translated = await candidate.provider.translateTextOnly(
+        text,
+        from,
+        to,
+        contextText: contextText,
+        isFullText: isFullText,
+      );
+
+      if (translated.trim().isNotEmpty &&
+          translated != '...' &&
+          !isFailedTranslationResult(translated)) {
+        if (candidate != service) {
+          AnxLog.info(
+              'Translation fallback succeeded: ${service.name} -> ${candidate.name}');
+        }
+        return translated;
+      }
+
+      throw Exception('Translation returned no valid result: $translated');
+    } catch (e) {
+      firstError ??= e;
+      if (candidate == service) {
+        AnxLog.warning('Primary translation failed: $e');
+      } else {
+        AnxLog.warning('Fallback translation failed (${candidate.name}): $e');
+      }
+    }
+  }
+
+  throw Exception('Translation failed after fallback chain: $firstError');
 }
 
 bool supportsFastTextTranslation(TranslateService service) {
@@ -299,6 +368,23 @@ TranslateService? resolveFastTextTranslateService(TranslateService preferred) {
     }
   }
   return null;
+}
+
+List<TranslateService> _fallbackTranslateServices(TranslateService primary) {
+  final services = <TranslateService>[primary];
+  const fallbacks = [
+    TranslateService.microsoftApi,
+    TranslateService.googleApi,
+    TranslateService.deepl,
+  ];
+
+  for (final service in fallbacks) {
+    if (service != primary && _hasUsableTranslateConfig(service)) {
+      services.add(service);
+    }
+  }
+
+  return services;
 }
 
 Future<String> translateTextOnlyCached(
@@ -326,10 +412,11 @@ Future<String> translateTextOnlyCached(
     }
   }
 
-  final translated = await service.provider.translateTextOnly(
+  final translated = await translateTextOnlyWithFallback(
     text,
     from,
     to,
+    service: service,
     contextText: contextText,
   );
 
