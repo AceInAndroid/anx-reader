@@ -2,6 +2,7 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
 import 'package:anx_reader/service/ai/ai_services.dart';
+import 'package:anx_reader/service/translate/translation_ai_provider_resolver.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:uuid/uuid.dart';
 
@@ -69,7 +70,7 @@ class AiProviders extends _$AiProviders {
                   key: apiKey,
                   enabled: true,
                   createdAt: now,
-                )
+                ),
               ]
             : [],
         model: model,
@@ -112,6 +113,17 @@ class AiProviders extends _$AiProviders {
     if (selected != null) return selected;
 
     return state.where(_isRunnableProvider).firstOrNull;
+  }
+
+  AiProvider? getRunnableTranslationProvider() {
+    final resolution = TranslationAiProviderResolver.resolve(
+      providers: state,
+      selectedProviderId: Prefs().selectedAiService,
+      translationProviderId: Prefs().translationAiProvider,
+    );
+    final providerId = resolution.effectiveProviderId;
+    if (providerId == null) return null;
+    return getRunnableProviderById(providerId);
   }
 
   AiProvider? getRunnableProviderById(String id) {
@@ -158,17 +170,25 @@ class AiProviders extends _$AiProviders {
 
     state = [
       for (final p in state)
-        if (p.id == provider.id) updatedProvider else p
+        if (p.id == provider.id) updatedProvider else p,
     ];
     Prefs().saveAiProviders(state);
 
     final fallbackId = Prefs().aiFallbackProvider;
-    if (fallbackId == updatedProvider.id && !_isRunnableProvider(updatedProvider)) {
+    if (fallbackId == updatedProvider.id &&
+        !_isRunnableProvider(updatedProvider)) {
       Prefs().aiFallbackProvider = null;
     }
 
+    final translationId = Prefs().translationAiProvider;
+    if (translationId == updatedProvider.id &&
+        !_isRunnableProvider(updatedProvider)) {
+      Prefs().translationAiProvider = null;
+    }
+
     final selectedId = Prefs().selectedAiService;
-    if (selectedId == updatedProvider.id && !_isRunnableProvider(updatedProvider)) {
+    if (selectedId == updatedProvider.id &&
+        !_isRunnableProvider(updatedProvider)) {
       final nextProvider = state.where(_isRunnableProvider).firstOrNull;
       if (nextProvider != null) {
         setSelectedProvider(nextProvider.id);
@@ -198,13 +218,17 @@ class AiProviders extends _$AiProviders {
     if (Prefs().aiFallbackProvider == providerId) {
       Prefs().aiFallbackProvider = null;
     }
+
+    if (Prefs().translationAiProvider == providerId) {
+      Prefs().translationAiProvider = null;
+    }
   }
 
   /// Toggle provider enabled state
   void toggleProvider(String providerId, bool enabled) {
     state = [
       for (final p in state)
-        if (p.id == providerId) p.copyWith(enabled: enabled) else p
+        if (p.id == providerId) p.copyWith(enabled: enabled) else p,
     ];
     Prefs().saveAiProviders(state);
 
@@ -221,6 +245,14 @@ class AiProviders extends _$AiProviders {
         Prefs().aiFallbackProvider = null;
       }
     }
+
+    if (Prefs().translationAiProvider == providerId) {
+      final translationProvider = getProviderById(providerId);
+      if (translationProvider == null ||
+          !_isRunnableProvider(translationProvider)) {
+        Prefs().translationAiProvider = null;
+      }
+    }
   }
 
   /// Advance the key index for round-robin (called after successful API call)
@@ -230,7 +262,7 @@ class AiProviders extends _$AiProviders {
         if (p.id == providerId)
           p.copyWith(keyIndex: p.keyIndex + 1, updatedAt: DateTime.now())
         else
-          p
+          p,
     ];
     Prefs().saveAiProviders(state);
   }
@@ -255,8 +287,13 @@ class AiProviders extends _$AiProviders {
   }
 
   /// Update an API key
-  void updateApiKey(String providerId, String keyId,
-      {String? key, String? label, bool? enabled}) {
+  void updateApiKey(
+    String providerId,
+    String keyId, {
+    String? key,
+    String? label,
+    bool? enabled,
+  }) {
     final provider = state.firstWhere((p) => p.id == providerId);
 
     final updatedKeys = provider.apiKeys.map((k) {

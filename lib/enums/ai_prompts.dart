@@ -67,6 +67,9 @@ Requirements:
 - If the input is only a fragment, sentence slice, or truncated paragraph, translate only the visible fragment faithfully. Do not try to complete missing context.
 - If the source already contains multiple paragraphs, the translation must keep the same paragraph count whenever naturally possible.
 - If the source is plain prose, return plain prose. Do not use markdown or bullet formatting unless the source itself uses it.
+- Batch input may contain multiple independent text segments separated by the ASCII Unit Separator character U+001F.
+- When U+001F separators appear, translate each segment independently, keep the exact same number of segments, and output the translated segments joined by the exact same U+001F separator.
+- Do not remove, replace, escape, quote, number, reorder, or explain U+001F separators. Do not output JSON, XML, markdown tables, or bullet lists for batched input.
         ''';
 
       case AiPrompts.translate:

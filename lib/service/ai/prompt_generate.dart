@@ -154,8 +154,9 @@ PromptTemplatePayload generatePromptFullTextTranslate(
   final normalized = _normalizePrompt(prompt);
   final template = ChatPromptTemplate.fromPromptMessages([
     SystemChatMessagePromptTemplate.fromTemplate(normalized),
+    SystemChatMessagePromptTemplate.fromTemplate(_fullTextBatchProtocol),
     HumanChatMessagePromptTemplate.fromTemplate('''
-{{text}}
+{text}
 '''),
   ]);
   return PromptTemplatePayload(
@@ -168,6 +169,15 @@ PromptTemplatePayload generatePromptFullTextTranslate(
     identifier: AiPrompts.fullTextTranslate,
   );
 }
+
+const String _fullTextBatchProtocol = '''
+Batch protocol:
+- The input may contain multiple independent segments separated by the ASCII Unit Separator character U+001F.
+- If U+001F appears in the input, translate each segment independently and output the translated segments joined by the exact same U+001F separator.
+- The output must contain the same number of U+001F-separated segments as the input.
+- Do not remove, replace, escape, quote, number, reorder, or explain U+001F separators.
+- Do not output JSON, XML, markdown tables, or bullet lists for batched input.
+''';
 
 String _normalizePrompt(String template) {
   return template.replaceAll('{{', '{').replaceAll('}}', '}');

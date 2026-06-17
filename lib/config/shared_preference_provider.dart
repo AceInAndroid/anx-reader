@@ -847,6 +847,20 @@ class Prefs extends ChangeNotifier {
     return prefs.getString('selectedAiService') ?? 'openai';
   }
 
+  set translationAiProvider(String? providerId) {
+    final normalized = providerId?.trim();
+    if (normalized != null && normalized.isNotEmpty) {
+      prefs.setString('translationAiProvider', normalized);
+    } else {
+      prefs.remove('translationAiProvider');
+    }
+    notifyListeners();
+  }
+
+  String? get translationAiProvider {
+    return prefs.getString('translationAiProvider');
+  }
+
   void deleteAiConfig(String identifier) {
     prefs.remove('aiConfig_$identifier');
     notifyListeners();

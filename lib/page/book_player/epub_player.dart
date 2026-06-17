@@ -28,8 +28,10 @@ import 'package:anx_reader/providers/book_toc.dart';
 import 'package:anx_reader/providers/bookmark.dart';
 import 'package:anx_reader/providers/chapter_content_bridge.dart';
 import 'package:anx_reader/providers/current_reading.dart';
+import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
 import 'package:anx_reader/service/translate/index.dart';
+import 'package:anx_reader/service/translate/translation_ai_provider_resolver.dart';
 import 'package:anx_reader/providers/toc_search.dart';
 import 'package:anx_reader/service/tts/base_tts.dart';
 import 'package:anx_reader/service/tts/models/tts_sentence.dart';
@@ -108,11 +110,17 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   late TranslationModeEnum _activeTranslationMode;
   String? _translationTextCacheStorageKey;
   Map<String, dynamic> _translationTextCache = {};
+  Timer? _translationTextCacheFlushTimer;
+  bool _translationTextCacheDirty = false;
+  int _translationTextCachePendingChanges = 0;
+  String? _activeTranslationDomCacheNamespace;
+  Timer? _translationSettingsRefreshTimer;
   int _translationProgressCompleted = 0;
   int _translationProgressTotal = 0;
   int _translationProgressFailed = 0;
   bool _translationProgressActive = false;
   Timer? _currentPageTranslationTimer;
+  bool _webViewReady = false;
 
   // Scroll wheel debounce
   Timer? _scrollDebounceTimer;
@@ -204,6 +212,62 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         window.translator.translateCurrentPage();
       }
       ''');
+  }
+
+  void _handleTranslationPrefsChanged() {
+    final nextNamespace = _translationDomCacheStorageKey();
+    final namespaceChanged =
+        nextNamespace != _activeTranslationDomCacheNamespace;
+    _activeTranslationDomCacheNamespace = nextNamespace;
+
+    if (!namespaceChanged || !_webViewReady) return;
+    _scheduleTranslationSettingsRefresh();
+  }
+
+  void _scheduleTranslationSettingsRefresh() {
+    _translationSettingsRefreshTimer?.cancel();
+    _translationSettingsRefreshTimer = Timer(
+      const Duration(milliseconds: 250),
+      () => unawaited(_refreshTranslationForSettingsChange()),
+    );
+  }
+
+  Future<void> _refreshTranslationForSettingsChange() async {
+    _translationSettingsRefreshTimer?.cancel();
+    _translationSettingsRefreshTimer = null;
+
+    if (!mounted || !_webViewReady) return;
+    if (_activeTranslationMode == TranslationModeEnum.off) return;
+
+    _resetTranslationProgress();
+
+    try {
+      await webViewController.evaluateJavascript(source: '''
+        (async function() {
+          if (
+            window.translator &&
+            typeof window.translator.setRootMargin === 'function'
+          ) {
+            window.translator.setRootMargin('${Prefs().translationMargin}px');
+          }
+          if (
+            window.translator &&
+            typeof window.translator.refreshCache === 'function'
+          ) {
+            await window.translator.refreshCache();
+          }
+          if (
+            window.translator &&
+            typeof window.translator.translateCurrentPage === 'function'
+          ) {
+            await window.translator.translateCurrentPage();
+          }
+          return true;
+        })();
+      ''');
+    } catch (e) {
+      AnxLog.warning('Failed to refresh translation after settings change: $e');
+    }
   }
 
   void _scheduleCurrentPageTranslation({required String expectedCfi}) {
@@ -1067,7 +1131,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     final service = Prefs().fullTextTranslateService;
     final from = Prefs().fullTextTranslateFrom;
     final to = Prefs().fullTextTranslateTo;
-    return 'translationDomCache_${widget.book.id}_${service.name}_${from.code}_${to.code}';
+    final scope = _translationServiceCacheScope(service);
+    return 'translationDomCache_${widget.book.id}_${service.name}_${from.code}_${to.code}_$scope';
   }
 
   String _translationTextCacheKey(
@@ -1075,7 +1140,49 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     LangListEnum from,
     LangListEnum to,
   ) {
-    return 'translationTextCache_${widget.book.id}_${service.name}_${from.code}_${to.code}';
+    final scope = _translationServiceCacheScope(service);
+    return 'translationTextCache_${widget.book.id}_${service.name}_${from.code}_${to.code}_$scope';
+  }
+
+  String _translationServiceCacheScope(TranslateService service) {
+    if (service != TranslateService.ai) return 'default';
+
+    final provider = _resolveEffectiveAiTranslationProvider();
+    if (provider == null) return 'ai_none';
+
+    final fingerprint = [
+      provider.id,
+      provider.protocol.code,
+      provider.url.trim(),
+      provider.model.trim(),
+      provider.reasoningEffort.name,
+    ].join('|');
+    return 'ai_${_stableTranslationTextKey(fingerprint)}';
+  }
+
+  AiProvider? _resolveEffectiveAiTranslationProvider() {
+    final providers = _loadStoredAiProviders();
+    final resolution = TranslationAiProviderResolver.resolve(
+      providers: providers,
+      selectedProviderId: Prefs().selectedAiService,
+      translationProviderId: Prefs().translationAiProvider,
+    );
+
+    final providerId = resolution.effectiveProviderId;
+    if (providerId == null) return null;
+    return TranslationAiProviderResolver.providerById(providers, providerId);
+  }
+
+  List<AiProvider> _loadStoredAiProviders() {
+    try {
+      return Prefs()
+          .getAiProviders()
+          .map((json) => AiProvider.fromJson(json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      AnxLog.warning('Failed to load AI providers for translation cache: $e');
+      return [];
+    }
   }
 
   Future<void> _ensureTranslationTextCacheLoaded(
@@ -1083,19 +1190,26 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   ) async {
     if (_translationTextCacheStorageKey == storageKey) return;
 
+    await _flushTranslationTextCacheNow();
     _translationTextCacheStorageKey = storageKey;
     final cacheJson = Prefs().prefs.getString(storageKey);
     if (cacheJson == null || cacheJson.isEmpty) {
       _translationTextCache = {};
+      _translationTextCacheDirty = false;
+      _translationTextCachePendingChanges = 0;
       return;
     }
 
     try {
       final decoded = jsonDecode(cacheJson);
       _translationTextCache = decoded is Map<String, dynamic> ? decoded : {};
+      _translationTextCacheDirty = false;
+      _translationTextCachePendingChanges = 0;
     } catch (e) {
       AnxLog.warning('Failed to load translation text cache: $e');
       _translationTextCache = {};
+      _translationTextCacheDirty = false;
+      _translationTextCachePendingChanges = 0;
     }
   }
 
@@ -1116,7 +1230,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     if (translation == null || translation.trim().isEmpty) return null;
     if (_isFailedTranslationText(translation)) {
       _translationTextCache.remove(_stableTranslationTextKey(text));
-      Prefs().prefs.setString(storageKey, jsonEncode(_translationTextCache));
+      _scheduleTranslationTextCacheFlush();
       return null;
     }
     return translation;
@@ -1149,7 +1263,48 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
       }
     }
 
-    Prefs().prefs.setString(storageKey, jsonEncode(_translationTextCache));
+    _scheduleTranslationTextCacheFlush();
+  }
+
+  void _scheduleTranslationTextCacheFlush() {
+    if (_translationTextCacheStorageKey == null) return;
+
+    _translationTextCacheDirty = true;
+    _translationTextCachePendingChanges += 1;
+
+    const flushThreshold = 25;
+    if (_translationTextCachePendingChanges >= flushThreshold) {
+      _translationTextCacheFlushTimer?.cancel();
+      _translationTextCacheFlushTimer = null;
+      unawaited(_flushTranslationTextCacheNow());
+      return;
+    }
+
+    _translationTextCacheFlushTimer?.cancel();
+    _translationTextCacheFlushTimer = Timer(
+      const Duration(milliseconds: 800),
+      () => unawaited(_flushTranslationTextCacheNow()),
+    );
+  }
+
+  Future<void> _flushTranslationTextCacheNow() async {
+    _translationTextCacheFlushTimer?.cancel();
+    _translationTextCacheFlushTimer = null;
+
+    final storageKey = _translationTextCacheStorageKey;
+    if (storageKey == null || !_translationTextCacheDirty) return;
+
+    final cacheJson = jsonEncode(_translationTextCache);
+    _translationTextCacheDirty = false;
+    _translationTextCachePendingChanges = 0;
+
+    try {
+      await Prefs().prefs.setString(storageKey, cacheJson);
+    } catch (e) {
+      AnxLog.warning('Failed to flush translation text cache: $e');
+      _translationTextCacheDirty = true;
+      _scheduleTranslationTextCacheFlush();
+    }
   }
 
   String _normalizeTranslationText(String text) {
@@ -1175,6 +1330,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
       await InAppWebViewController.setWebContentsDebuggingEnabled(true);
     }
     webViewController = controller;
+    _webViewReady = true;
     setHandler(controller);
     _registerChapterContentBridge();
 
@@ -1195,6 +1351,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         Prefs().getBookTranslationMode(widget.book.id),
         restoreProgress: false,
       );
+      _activeTranslationDomCacheNamespace = _translationDomCacheStorageKey();
     });
   }
 
@@ -1253,6 +1410,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   void initState() {
     book = widget.book;
     _activeTranslationMode = Prefs().getBookTranslationMode(widget.book.id);
+    _activeTranslationDomCacheNamespace = _translationDomCacheStorageKey();
+    Prefs().addListener(_handleTranslationPrefsChanged);
     getThemeColor();
 
     contextMenu = ContextMenu(
@@ -1333,6 +1492,9 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
 
   @override
   void dispose() {
+    Prefs().removeListener(_handleTranslationPrefsChanged);
+    unawaited(_flushTranslationTextCacheNow());
+    _translationSettingsRefreshTimer?.cancel();
     _currentPageTranslationTimer?.cancel();
     _scrollDebounceTimer?.cancel();
     _animationController?.dispose();

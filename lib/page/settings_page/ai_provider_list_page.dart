@@ -7,8 +7,65 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 
+enum AiProviderListMode { general, translation }
+
+class AiProviderCenterPage extends StatelessWidget {
+  const AiProviderCenterPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
+
+    return Scaffold(
+      appBar: AppBar(title: Text(l10n.settingsAiProviders)),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.auto_awesome),
+            title: Text(l10n.settingsAiGeneralProviders),
+            subtitle: Text(l10n.settingsAiGeneralProvidersTip),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const AiProviderListPage(
+                    mode: AiProviderListMode.general,
+                  ),
+                ),
+              );
+            },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.translate_rounded),
+            title: Text(l10n.settingsAiTranslationProviders),
+            subtitle: Text(l10n.settingsAiTranslationProvidersTip),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const AiProviderListPage(
+                    mode: AiProviderListMode.translation,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class AiProviderListPage extends ConsumerWidget {
-  const AiProviderListPage({super.key});
+  const AiProviderListPage({
+    super.key,
+    this.mode = AiProviderListMode.general,
+  });
+
+  final AiProviderListMode mode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -19,7 +76,11 @@ class AiProviderListPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(l10n.settingsAiProviders),
+        title: Text(
+          mode == AiProviderListMode.translation
+              ? l10n.settingsAiTranslationProviders
+              : l10n.settingsAiGeneralProviders,
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
@@ -36,6 +97,8 @@ class AiProviderListPage extends ConsumerWidget {
               itemBuilder: (context, index) {
                 final provider = providers[index];
                 final isSelected = provider.id == selectedId;
+                final isTranslationSelected =
+                    provider.id == _validTranslationProviderId(providers);
                 final hasValidKey = provider.hasValidKey;
 
                 return ListTile(
@@ -62,7 +125,19 @@ class AiProviderListPage extends ConsumerWidget {
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (isSelected)
+                      if (mode == AiProviderListMode.translation)
+                        IconButton(
+                          tooltip: l10n.settingsAiTranslationProviders,
+                          onPressed: hasValidKey && provider.enabled
+                              ? () => _setTranslationProvider(ref, provider.id)
+                              : null,
+                          icon: Icon(
+                            isTranslationSelected
+                                ? Icons.check_circle
+                                : Icons.radio_button_unchecked,
+                          ),
+                        )
+                      else if (isSelected)
                         Chip(
                           label: Text(l10n.settingsAiProviderDefault),
                           labelStyle: TextTheme.of(context).labelSmall,
@@ -104,7 +179,116 @@ class AiProviderListPage extends ConsumerWidget {
               },
             ),
           ),
-          _buildFallbackCard(context, ref, providers, selectedId),
+          if (mode == AiProviderListMode.translation)
+            _buildTranslationProviderCard(context, ref, providers, selectedId),
+          if (mode == AiProviderListMode.general)
+            _buildFallbackCard(context, ref, providers, selectedId),
+        ],
+      ),
+    );
+  }
+
+  String? _validTranslationProviderId(List<AiProvider> providers) {
+    final translationId = Prefs().translationAiProvider;
+    if (translationId == null) return null;
+    final isValid = providers.any(
+      (provider) =>
+          provider.id == translationId &&
+          provider.enabled &&
+          provider.hasValidKey,
+    );
+    return isValid ? translationId : null;
+  }
+
+  void _setTranslationProvider(WidgetRef ref, String? providerId) {
+    Prefs().translationAiProvider = providerId;
+    ref.read(aiProvidersProvider.notifier).refresh();
+  }
+
+  Widget _buildTranslationProviderCard(
+    BuildContext context,
+    WidgetRef ref,
+    List<AiProvider> providers,
+    String? selectedId,
+  ) {
+    final l10n = L10n.of(context);
+    final notifier = ref.watch(aiProvidersProvider.notifier);
+    final selectedProvider = selectedId == null
+        ? null
+        : notifier.getRunnableProviderById(selectedId);
+    final runnableProviders = providers.where(
+      (provider) => provider.enabled && provider.hasValidKey,
+    );
+    final translationId = Prefs().translationAiProvider;
+    final validTranslationId =
+        runnableProviders.any((provider) => provider.id == translationId)
+            ? translationId
+            : null;
+    final effectiveName = validTranslationId == null
+        ? selectedProvider?.title
+        : providers
+            .firstWhere((provider) => provider.id == validTranslationId)
+            .title;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: Border(
+          top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.translate_rounded,
+                size: 20,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                l10n.aiTranslationProvider,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String?>(
+            initialValue: validTranslationId,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            items: [
+              DropdownMenuItem<String?>(
+                value: null,
+                child: Text(l10n.aiTranslationProviderDefault),
+              ),
+              for (final provider in runnableProviders)
+                DropdownMenuItem<String?>(
+                  value: provider.id,
+                  child: Text(provider.title),
+                ),
+            ],
+            onChanged: (value) {
+              Prefs().translationAiProvider = value;
+              ref.read(aiProvidersProvider.notifier).refresh();
+            },
+          ),
+          const SizedBox(height: 8),
+          Text(
+            effectiveName == null
+                ? l10n.aiTranslationProviderTip
+                : l10n.aiTranslationProviderUsing(effectiveName),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
         ],
       ),
     );
@@ -119,10 +303,11 @@ class AiProviderListPage extends ConsumerWidget {
     final l10n = L10n.of(context);
     final fallbackId = Prefs().aiFallbackProvider;
     final notifier = ref.watch(aiProvidersProvider.notifier);
-    final fallbackCandidates = notifier.getRunnableFallbackCandidates(selectedId);
-    final validFallbackId = fallbackCandidates.any((p) => p.id == fallbackId)
-        ? fallbackId
-        : null;
+    final fallbackCandidates = notifier.getRunnableFallbackCandidates(
+      selectedId,
+    );
+    final validFallbackId =
+        fallbackCandidates.any((p) => p.id == fallbackId) ? fallbackId : null;
 
     // Find provider names for display
     String primaryName = 'Unknown';
@@ -145,14 +330,17 @@ class AiProviderListPage extends ConsumerWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.backup_rounded,
-                  size: 20, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                Icons.backup_rounded,
+                size: 20,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(width: 8),
               Text(
                 l10n.aiFallbackProvider,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -169,10 +357,7 @@ class AiProviderListPage extends ConsumerWidget {
                 child: Text(l10n.aiFallbackNone),
               ),
               for (final p in fallbackCandidates)
-                  DropdownMenuItem<String?>(
-                    value: p.id,
-                    child: Text(p.title),
-                  ),
+                DropdownMenuItem<String?>(value: p.id, child: Text(p.title)),
             ],
             onChanged: (value) {
               Prefs().aiFallbackProvider = value;

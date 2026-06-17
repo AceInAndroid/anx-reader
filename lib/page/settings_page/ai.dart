@@ -221,7 +221,7 @@ class _AISettingsState extends ConsumerState<AISettings> {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => const AiProviderListPage(),
+                  builder: (context) => const AiProviderCenterPage(),
                 ),
               );
             },

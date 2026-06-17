@@ -104,7 +104,7 @@ export class Translator {
   #cache = {} // Persistent translation cache, keyed by stable element identifiers
   #cacheLoadPromise = null
   #cacheNamespace = null
-  #rootMargin = '1600px' // ~3 pages ahead (default)
+  #rootMargin = '1600px' // Medium pre-translation level (default)
   #maxCacheSize = 5000 // Maximum cache entries
   #separator = '\x1f' // Unit Separator for batch translation
   #maxBatchSize = 5 // Maximum paragraphs per batch
