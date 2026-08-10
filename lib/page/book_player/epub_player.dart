@@ -121,6 +121,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   bool _translationProgressActive = false;
   Timer? _currentPageTranslationTimer;
   bool _webViewReady = false;
+  late bool _lastEInkMode;
 
   // Scroll wheel debounce
   Timer? _scrollDebounceTimer;
@@ -215,6 +216,17 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   void _handleTranslationPrefsChanged() {
+    final nextEInkMode = Prefs().isEInkMode;
+    if (nextEInkMode != _lastEInkMode) {
+      _lastEInkMode = nextEInkMode;
+      if (_webViewReady) {
+        getThemeColor();
+        changeTheme(Prefs().effectiveReadTheme);
+        changeStyle(null);
+        changePageTurnStyle(Prefs().effectivePageTurnStyle);
+      }
+      if (mounted) setState(() {});
+    }
     final nextNamespace = _translationDomCacheStorageKey();
     final namespaceChanged =
         nextNamespace != _activeTranslationDomCacheNamespace;
@@ -312,6 +324,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   void changeTheme(ReadTheme readTheme) {
+    if (Prefs().isEInkMode) readTheme = Prefs().effectiveReadTheme;
     textColor = readTheme.textColor;
     backgroundColor = readTheme.backgroundColor;
 
@@ -328,10 +341,12 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
 
   void changeStyle(BookStyle? bookStyle) {
     styleTimer?.cancel();
-    String bgimgUrl = Prefs().bgimg.getEffectiveUrl(
-          isDarkMode: isDarkMode,
-          autoAdjust: Prefs().autoAdjustReadingTheme,
-        );
+    String bgimgUrl = Prefs().isEInkMode
+        ? ''
+        : Prefs().bgimg.getEffectiveUrl(
+              isDarkMode: isDarkMode,
+              autoAdjust: Prefs().autoAdjustReadingTheme,
+            );
 
     styleTimer = Timer(const Duration(milliseconds: 300), () {
       if (!mounted) return;
@@ -359,7 +374,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         customCSSEnabled: ${Prefs().customCSSEnabled},
         useBookStyles: ${Prefs().useBookStyles},
         headingFontSize: ${style.headingFontSize},
-        codeHighlightTheme: '${Prefs().codeHighlightTheme.code}',
+        codeHighlightTheme: '${Prefs().effectiveCodeHighlightTheme.code}',
+        eInkMode: ${Prefs().isEInkMode},
       })
       ''');
     });
@@ -401,6 +417,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   void changePageTurnStyle(PageTurn pageTurnStyle) {
+    pageTurnStyle =
+        Prefs().isEInkMode ? Prefs().effectivePageTurnStyle : pageTurnStyle;
     webViewController.evaluateJavascript(source: '''
       changeStyle({
         pageTurnStyle: '${pageTurnStyle.name}',
@@ -765,6 +783,11 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   void getThemeColor() {
+    if (Prefs().isEInkMode) {
+      backgroundColor = Prefs().effectiveReadTheme.backgroundColor;
+      textColor = Prefs().effectiveReadTheme.textColor;
+      return;
+    }
     if (Prefs().autoAdjustReadingTheme) {
       List<ReadTheme> themes = widget.initialThemes;
       final isDayMode =
@@ -1411,6 +1434,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     book = widget.book;
     _activeTranslationMode = Prefs().getBookTranslationMode(widget.book.id);
     _activeTranslationDomCacheNamespace = _translationDomCacheStorageKey();
+    _lastEInkMode = Prefs().isEInkMode;
     Prefs().addListener(_handleTranslationPrefsChanged);
     getThemeColor();
 
@@ -1423,7 +1447,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         // removeOverlay();
       },
     );
-    if (Prefs().openBookAnimation) {
+    if (Prefs().openBookAnimation && !Prefs().reduceMotion) {
       _animationController = AnimationController(
         duration: const Duration(milliseconds: 600),
         vsync: this,
@@ -1874,7 +1898,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             readingInfoWidget(),
             translationProgressWidget(),
             if (showHistory) _buildHistoryCapsule(),
-            if (Prefs().openBookAnimation)
+            if (Prefs().openBookAnimation && !Prefs().reduceMotion)
               SizedBox.expand(
                   child: IgnorePointer(
                 ignoring: true,

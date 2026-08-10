@@ -68,27 +68,24 @@ class _AppearanceSettingState extends State<AppearanceSetting> {
             SettingsTile.navigation(
                 title: Text(L10n.of(context).settingsAppearanceThemeColor),
                 leading: const Icon(Icons.color_lens),
+                enabled: !Prefs().isEInkMode,
+                description: Prefs().isEInkMode
+                    ? Text(L10n.of(context).eInkSettingDisabledTip)
+                    : null,
                 onPressed: (context) async {
                   await showColorPickerDialog(context);
                 }),
             SettingsTile.switchTile(
               title: const Text("OLED Dark Mode"),
               leading: const Icon(Icons.brightness_2),
+              enabled: !Prefs().isEInkMode,
+              description: Prefs().isEInkMode
+                  ? Text(L10n.of(context).eInkSettingDisabledTip)
+                  : null,
               initialValue: Prefs().trueDarkMode,
               onToggle: (bool value) {
                 setState(() {
                   Prefs().trueDarkMode = value;
-                });
-              },
-            ),
-            SettingsTile.switchTile(
-              title: Text(L10n.of(context).eInkMode),
-              leading: const Icon(Icons.contrast),
-              initialValue: Prefs().eInkMode,
-              onToggle: (bool value) {
-                setState(() {
-                  Prefs().saveThemeModeToPrefs('light');
-                  Prefs().eInkMode = value;
                 });
               },
             ),

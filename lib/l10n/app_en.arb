@@ -562,6 +562,7 @@
   "syncMismatchTip": "Database version mismatch. The remote database (version {remoteVersion}) is newer than what your app supports (version {currentDbVersion}). Please update your app to the latest version.",
   "dbUpdatedTip": "The database structure has been updated. Please update Anx Reader App on your other devices to ensure compatibility with the new database for smooth data synchronization.",
   "eInkMode": "E-ink Mode",
+  "eInkSettingDisabledTip": "Not available while the E-ink theme is active",
   "readingPageWritingDirection": "Writing Direction",
   "readingPageWritingDirectionAuto": "Auto",
   "readingPageWritingDirectionVertical": "Vertical",

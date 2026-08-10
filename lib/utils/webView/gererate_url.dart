@@ -82,12 +82,12 @@ String generateUrl(
     'sideMargin': bookStyle.sideMargin,
     'justify': true,
     'hyphenate': false,
-    'pageTurnStyle': Prefs().pageTurnStyle.name,
+    'pageTurnStyle': Prefs().effectivePageTurnStyle.name,
     'maxColumnCount': bookStyle.maxColumnCount,
     'columnThreshold': bookStyle.columnThreshold,
     'writingMode': Prefs().writingMode.code,
     'textAlign': Prefs().textAlignment.code,
-    'backgroundImage': bgimgUrl,
+    'backgroundImage': Prefs().isEInkMode ? '' : bgimgUrl,
     'bgimgBlur': Prefs().bgimg.blur,
     'bgimgOpacity': Prefs().bgimg.opacity,
     'bgimgFit': Prefs().bgimgFit.code,
@@ -96,7 +96,8 @@ String generateUrl(
     'customCSSEnabled': Prefs().customCSSEnabled,
     'useBookStyles': Prefs().useBookStyles,
     'headingFontSize': bookStyle.headingFontSize,
-    'codeHighlightTheme': Prefs().codeHighlightTheme.code,
+    'codeHighlightTheme': Prefs().effectiveCodeHighlightTheme.code,
+    'eInkMode': Prefs().isEInkMode,
   };
 
   Map<String, dynamic> readingRules = {

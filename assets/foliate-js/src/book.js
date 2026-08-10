@@ -705,7 +705,8 @@ const getCSS = ({ fontSize,
   customCSSEnabled,
   useBookStyles,
   headingFontSize,
-  codeHighlightTheme
+  codeHighlightTheme,
+  eInkMode
 }) => {
 
   const fontFamily = fontName === 'book' ? '' :
@@ -951,6 +952,31 @@ const getCSS = ({ fontSize,
     }
 
     ${customCSSEnabled && customCSS ? customCSS : ''}
+
+    ${eInkMode ? `
+      :root, html, body {
+        color: #000 !important;
+        background-color: #fff !important;
+      }
+      body *:not(img):not(svg):not(video):not(canvas) {
+        color: #000 !important;
+        background-color: transparent !important;
+        text-shadow: none !important;
+        box-shadow: none !important;
+      }
+      a { color: #000 !important; text-decoration: underline !important; }
+      mark, [epub\\|type~="highlight"] {
+        color: #000 !important;
+        background-color: #ddd !important;
+      }
+      .translated-text {
+        color: #000 !important;
+        opacity: 1 !important;
+        border-top: 1px solid #000 !important;
+        font-weight: 600 !important;
+      }
+      img, svg, video, canvas { filter: none !important; }
+    ` : ''}
 `}
 
 const fixHeadingColor = (themeColor) => {
@@ -1777,7 +1803,8 @@ const setStyle = (oldStyle) => {
     customCSS: style.customCSS,
     customCSSEnabled: style.customCSSEnabled,
     useBookStyles: style.useBookStyles,
-    headingFontSize: style.headingFontSize
+    headingFontSize: style.headingFontSize,
+    eInkMode: style.eInkMode
   }
   reader.view.renderer.setStyles?.(getCSS(newStyle))
 

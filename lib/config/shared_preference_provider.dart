@@ -20,6 +20,7 @@ import 'package:anx_reader/enums/ai_panel_position.dart';
 import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/bgimg_fit.dart';
 import 'package:anx_reader/enums/code_highlight_theme.dart';
+import 'package:anx_reader/enums/app_theme_mode.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/bgimg.dart';
@@ -73,6 +74,11 @@ class Prefs extends ChangeNotifier {
 
   Future<void> initPrefs() async {
     prefs = await SharedPreferences.getInstance();
+    if ((prefs.getBool('eInkMode') ?? false) &&
+        prefs.getString('themeMode') != AppThemeMode.eInk.code) {
+      await prefs.setString('themeMode', AppThemeMode.eInk.code);
+    }
+    await prefs.remove('eInkMode');
     saveBeginDate();
     notifyListeners();
   }
@@ -194,19 +200,23 @@ class Prefs extends ChangeNotifier {
   }
 
   ThemeMode get themeMode {
-    String themeMode = prefs.getString('themeMode') ?? 'system';
-    switch (themeMode) {
-      case 'dark':
-        return ThemeMode.dark;
-      case 'light':
-        return ThemeMode.light;
-      default:
-        return ThemeMode.system;
-    }
+    return effectiveThemeMode;
   }
 
+  AppThemeMode get appThemeMode =>
+      AppThemeMode.fromCode(prefs.getString('themeMode'));
+
+  ThemeMode get effectiveThemeMode => appThemeMode.effectiveThemeMode;
+
+  bool get isEInkMode => appThemeMode == AppThemeMode.eInk;
+
+  bool get reduceMotion => isEInkMode;
+
   Future<void> saveThemeModeToPrefs(String themeMode) async {
-    await prefs.setString('themeMode', themeMode);
+    await prefs.setString(
+      'themeMode',
+      AppThemeMode.fromCode(themeMode).code,
+    );
     notifyListeners();
   }
 
@@ -531,6 +541,20 @@ class Prefs extends ChangeNotifier {
     return PageTurn.values.firstWhere((element) => element.name == style);
   }
 
+  PageTurn get effectivePageTurnStyle =>
+      isEInkMode ? PageTurn.noAnimation : pageTurnStyle;
+
+  ReadTheme get effectiveReadTheme => isEInkMode
+      ? ReadTheme(
+          backgroundColor: 'FFFFFFFF',
+          textColor: 'FF000000',
+          backgroundImagePath: '',
+        )
+      : readTheme;
+
+  CodeHighlightThemeEnum get effectiveCodeHighlightTheme =>
+      isEInkMode ? CodeHighlightThemeEnum.off : codeHighlightTheme;
+
   set font(FontModel font) {
     prefs.setString('font', font.toJson());
     notifyListeners();
@@ -556,12 +580,13 @@ class Prefs extends ChangeNotifier {
   }
 
   set eInkMode(bool status) {
-    prefs.setBool('eInkMode', status);
-    notifyListeners();
+    saveThemeModeToPrefs(
+      status ? AppThemeMode.eInk.code : AppThemeMode.light.code,
+    );
   }
 
   bool get eInkMode {
-    return prefs.getBool('eInkMode') ?? false;
+    return isEInkMode;
   }
 
   set translateService(TranslateService service) {

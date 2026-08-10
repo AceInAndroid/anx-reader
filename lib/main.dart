@@ -181,10 +181,19 @@ class _MyAppState extends ConsumerState<MyApp>
       ],
       child: provider.Consumer<Prefs>(
         builder: (context, prefsNotifier, child) {
+          SmartDialog.config.custom = SmartConfigCustom(
+            maskColor: prefsNotifier.isEInkMode
+                ? Colors.white
+                : Colors.black.withAlpha(35),
+            useAnimation: !prefsNotifier.reduceMotion,
+            animationType: SmartAnimationType.centerFade_otherSlide,
+          );
           return MaterialApp(
             debugShowCheckedModeBanner: false,
             scrollBehavior: ScrollConfiguration.of(context).copyWith(
-              physics: const BouncingScrollPhysics(),
+              physics: prefsNotifier.isEInkMode
+                  ? const ClampingScrollPhysics()
+                  : const BouncingScrollPhysics(),
               // dragDevices: {
               //   PointerDeviceKind.touch,
               //   PointerDeviceKind.mouse,
@@ -194,14 +203,31 @@ class _MyAppState extends ConsumerState<MyApp>
               FlutterSmartDialog.observer,
               heroineController
             ],
-            builder: FlutterSmartDialog.init(),
+            builder: (context, child) {
+              final dialogBuilder = FlutterSmartDialog.init();
+              final dialogChild = dialogBuilder(context, child);
+              final mediaQuery = MediaQuery.maybeOf(context);
+              if (!prefsNotifier.reduceMotion || mediaQuery == null) {
+                return dialogChild;
+              }
+              return MediaQuery(
+                data: mediaQuery.copyWith(
+                  disableAnimations: true,
+                  accessibleNavigation: true,
+                ),
+                child: dialogChild,
+              );
+            },
             navigatorKey: navigatorKey,
             locale: prefsNotifier.locale,
             localeListResolutionCallback: _resolveLocale,
             localizationsDelegates: L10n.localizationsDelegates,
             supportedLocales: L10n.supportedLocales,
             title: 'Anx Reader',
-            themeMode: prefsNotifier.themeMode,
+            themeMode: prefsNotifier.effectiveThemeMode,
+            themeAnimationDuration: prefsNotifier.reduceMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 200),
             theme: colorSchema(prefsNotifier, context, Brightness.light),
             darkTheme: colorSchema(prefsNotifier, context, Brightness.dark),
             home: _needsMigration
