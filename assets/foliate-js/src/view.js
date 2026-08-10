@@ -131,7 +131,11 @@ export class View extends HTMLElement {
               .find(x => x.index = resolved.index)
             const el = resolved.anchor(doc)
             el.classList.add(activeClass)
-            lastActive = new WeakRef(el)
+            // WeakRef was introduced in Chrome 84. Keep a strong reference on
+            // older Android WebViews; it is replaced on every highlight.
+            lastActive = typeof WeakRef === 'function'
+              ? new WeakRef(el)
+              : { deref: () => el }
           })
       })
       this.mediaOverlay.addEventListener('unhighlight', () => {

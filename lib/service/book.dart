@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:anx_reader/dao/book.dart';
@@ -407,16 +408,44 @@ void _showImportDialog(
 }
 
 Future<void> importBook(File file, WidgetRef ref) async {
-  String? md5 = await MD5Service.calculateFileMd5(file.path);
+  final importId = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+  final originalName = path.basename(file.path);
+  final stopwatch = Stopwatch()..start();
+  try {
+    final size = await file.length();
+    AnxLog.info(
+      'BookImport[$importId] stage=import_start file=$originalName size=$size',
+    );
+    AnxLog.info('BookImport[$importId] stage=md5_start file=$originalName');
+    String? md5 = await MD5Service.calculateFileMd5(file.path);
+    AnxLog.info(
+      'BookImport[$importId] stage=md5_complete available=${md5 != null}',
+    );
 
-  if (file.path.split('.').last == 'txt') {
-    final tempFile = await convertFromTxt(file);
-    file.deleteSync();
-    file = tempFile;
+    if (file.path.split('.').last.toLowerCase() == 'txt') {
+      AnxLog.info('BookImport[$importId] stage=txt_conversion_start');
+      final tempFile = await convertFromTxt(file);
+      file.deleteSync();
+      file = tempFile;
+      AnxLog.info('BookImport[$importId] stage=txt_conversion_complete');
+    }
+
+    await getBookMetadata(file, md5: md5, importId: importId);
+    AnxLog.info('BookImport[$importId] stage=bookshelf_refresh_start');
+    await ref.read(bookListProvider.notifier).refresh();
+    AnxLog.info(
+      'BookImport[$importId] stage=import_complete '
+      'durationMs=${stopwatch.elapsedMilliseconds}',
+    );
+  } catch (error, stackTrace) {
+    AnxLog.severe(
+      'BookImport[$importId] stage=import_failed file=$originalName '
+      'durationMs=${stopwatch.elapsedMilliseconds}',
+      error,
+      stackTrace,
+    );
+    rethrow;
   }
-
-  await getBookMetadata(file, md5: md5, ref: ref);
-  ref.read(bookListProvider.notifier).refresh();
 }
 
 Future<void> pushToReadingPage(
@@ -503,7 +532,9 @@ Future<void> saveBook(
   String? md5,
   String cover, {
   Book? provideBook,
+  String? importId,
 }) async {
+  final logPrefix = 'BookImport[${importId ?? 'metadata'}]';
   // Extract original filename (without extension)
   final fileNameWithoutExt = path.basenameWithoutExtension(file.path);
 
@@ -525,7 +556,12 @@ Future<void> saveBook(
   String? dbCoverPath = 'cover/$newBookName';
   // final coverPath = getBasePath(dbCoverPath);
 
-  await file.copy(filePath);
+  AnxLog.info(
+      '$logPrefix stage=file_copy_start file=${path.basename(filePath)}');
+  final copiedFile = await file.copy(filePath);
+  AnxLog.info(
+    '$logPrefix stage=file_copy_complete size=${await copiedFile.length()}',
+  );
   // remove cached file
   file.delete();
 
@@ -548,25 +584,27 @@ Future<void> saveBook(
       createTime: provideBook?.createTime ?? DateTime.now(),
       updateTime: DateTime.now());
 
+  AnxLog.info('$logPrefix stage=database_write_start');
   book.id = await bookDao.insertBook(book);
+  AnxLog.info('$logPrefix stage=database_write_complete bookId=${book.id}');
   AnxToast.show(L10n.of(navigatorKey.currentContext!).serviceImportSuccess);
-  await headlessInAppWebView?.dispose();
-  headlessInAppWebView = null;
-  return;
 }
 
 Future<void> getBookMetadata(
   File file, {
   Book? book,
   String? md5,
-  WidgetRef? ref,
+  String? importId,
 }) async {
+  final metadataCompleter = Completer<void>();
+  bool metadataHandled = false;
   String serverFileName = Server().setTempFile(file);
 
   String cfi = '';
 
   String bookUrl = "http://127.0.0.1:${Server().port}/$serverFileName";
-  AnxLog.info("import start: book url: $bookUrl");
+  final logPrefix = 'BookImport[${importId ?? 'metadata'}]';
+  AnxLog.info('$logPrefix stage=metadata_webview_start');
 
   AnxHeadlessWebView webview = AnxHeadlessWebView(
     webViewEnvironment: webViewEnvironment,
@@ -580,6 +618,8 @@ Future<void> getBookMetadata(
       controller.addJavaScriptHandler(
           handlerName: 'onMetadata',
           callback: (args) async {
+            if (metadataHandled) return;
+            metadataHandled = true;
             Map<String, dynamic> metadata = args[0];
             String title = metadata['title'] ?? 'Unknown';
             dynamic authorData = metadata['author'];
@@ -594,41 +634,56 @@ Future<void> getBookMetadata(
             // base64 cover
             String cover = metadata['cover'] ?? '';
             String description = metadata['description'] ?? '';
-            saveBook(
-              file,
-              title,
-              author,
-              description,
-              md5,
-              cover,
-              provideBook: book,
+            AnxLog.info(
+              '$logPrefix stage=metadata_received titleLength=${title.length} '
+              'hasCover=${cover.isNotEmpty}',
             );
-            ref?.read(bookListProvider.notifier).refresh();
-            // return;
+            try {
+              await saveBook(
+                file,
+                title,
+                author,
+                description,
+                md5,
+                cover,
+                provideBook: book,
+                importId: importId,
+              );
+              metadataCompleter.complete();
+            } catch (error, stackTrace) {
+              metadataCompleter.completeError(error, stackTrace);
+            }
           });
     },
     onConsoleMessage: (controller, consoleMessage) {
       if (consoleMessage.messageLevel == ConsoleMessageLevel.ERROR) {
-        headlessInAppWebView?.dispose();
-        headlessInAppWebView = null;
-        throw Exception('Webview: ${consoleMessage.message}');
+        if (!metadataCompleter.isCompleted) {
+          metadataCompleter.completeError(
+            Exception('Webview: ${consoleMessage.message}'),
+          );
+        }
+        return;
       }
       webviewConsoleMessage(controller, consoleMessage);
     },
   );
 
-  await webview.run();
   headlessInAppWebView = webview;
-  // max 30s
-  int count = 0;
-  while (count < 300) {
-    if (headlessInAppWebView == null) {
-      return;
+  try {
+    await webview.run();
+    AnxLog.info('$logPrefix stage=metadata_webview_running');
+    await metadataCompleter.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw TimeoutException(
+        'Import: Get book metadata timeout',
+        const Duration(seconds: 30),
+      ),
+    );
+  } finally {
+    await webview.dispose();
+    AnxLog.info('$logPrefix stage=metadata_webview_disposed');
+    if (identical(headlessInAppWebView, webview)) {
+      headlessInAppWebView = null;
     }
-    await Future.delayed(const Duration(milliseconds: 100));
-    count++;
   }
-  await headlessInAppWebView?.dispose();
-  headlessInAppWebView = null;
-  throw Exception('Import: Get book metadata timeout');
 }

@@ -131,6 +131,8 @@ dependencies:
   in_app_purchase_android: ^0.4.0+8
 
 dependency_overrides:
+  share_handler_android:
+    path: third_party/share_handler_android
   langchain:
     git:
       url: https://github.com/Anxcye/langchain_dart.git

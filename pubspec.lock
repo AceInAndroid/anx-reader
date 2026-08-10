@@ -1749,13 +1749,11 @@ packages:
     source: git
     version: "0.0.25"
   share_handler_android:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      path: share_handler_android
-      ref: eeaa04d22e7e70babb55b6825b9ca7016e89c89a
-      resolved-ref: eeaa04d22e7e70babb55b6825b9ca7016e89c89a
-      url: "https://github.com/Anxcye/share_handler.git"
-    source: git
+      path: "third_party/share_handler_android"
+      relative: true
+    source: path
     version: "0.0.11"
   share_handler_ios:
     dependency: transitive

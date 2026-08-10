@@ -44,15 +44,23 @@ export class FixedLayout extends HTMLElement {
     constructor() {
         super()
 
-        const sheet = new CSSStyleSheet()
-        this.#root.adoptedStyleSheets = [sheet]
-        sheet.replaceSync(`:host {
+        const css = `:host {
             width: 100%;
             height: 100%;
             display: flex;
             justify-content: center;
             align-items: center;
-        }`)
+        }`
+        if ('adoptedStyleSheets' in this.#root &&
+            typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+            const sheet = new CSSStyleSheet()
+            sheet.replaceSync(css)
+            this.#root.adoptedStyleSheets = [sheet]
+        } else {
+            const style = document.createElement('style')
+            style.textContent = css
+            this.#root.append(style)
+        }
 
         this.#observer.observe(this)
     }
