@@ -317,23 +317,27 @@ class View {
     this.expand()
   }
   setImageSize() {
-    const { width, height, margin, columnWidth } = this.#layout
+    const { width, height, topMargin, bottomMargin, columnWidth } = this.#layout
     const vertical = this.#vertical
     const doc = this.document
+    const availablePageHeight = Math.max(1, height - topMargin - bottomMargin)
+    const availablePageWidth = Math.max(1, width - topMargin - bottomMargin)
     for (const el of doc.body.querySelectorAll('img, svg, video')) {
       // preserve max size if they are already set
       const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
       // Cap max-width to the column width to prevent images from overflowing
       // into the next page when the EPUB embeds a large inline max-width value.
-      const effectiveMaxWidth = vertical
-        ? `${width - margin * 2}px`
+      const effectiveMaxWidth = el.closest('table')
+        ? '100%'
+        : vertical
+        ? `${availablePageWidth}px`
         : columnWidth
           ? `${columnWidth}px`
           : (maxWidth !== 'none' && maxWidth !== '0px' ? maxWidth : '100%')
       setStylesImportant(el, {
         'max-height': vertical
           ? (maxHeight !== 'none' && maxHeight !== '0px' ? maxHeight : '100%')
-          : `${height - margin * 2}px`,
+          : `${availablePageHeight}px`,
         'max-width': effectiveMaxWidth,
         'object-fit': 'contain',
         'page-break-inside': 'avoid',
@@ -446,7 +450,6 @@ export class Paginator extends HTMLElement {
     this.#root.innerHTML = `<style>
         :host {
             display: block;
-            container-type: size;
         }
         :host, #top {
             box-sizing: border-box;
@@ -457,7 +460,7 @@ export class Paginator extends HTMLElement {
         }
         #top {
             height: 100%;
-            // --_gap: 7%;
+            /* --_gap: 7%; */
             background-color: var(--_background-color);
             --_max-inline-size: 720px;
             --_max-block-size: 1440px;
@@ -478,18 +481,18 @@ export class Paginator extends HTMLElement {
                 var(--_top-margin)
                 1fr
                 var(--_bottom-margin);
-            &.vertical {
+        }
+        #top.vertical {
+            --_max-column-count-spread: var(--_max-column-count-portrait);
+            --_max-width: var(--_max-block-size);
+            --_max-height: calc(var(--_max-inline-size) * var(--_max-column-count-spread));
+        }
+        @media (orientation: portrait) {
+            #top {
                 --_max-column-count-spread: var(--_max-column-count-portrait);
-                --_max-width: var(--_max-block-size);
-                --_max-height: calc(var(--_max-inline-size) * var(--_max-column-count-spread));
             }
-            @container (orientation: portrait) {
-                & {
-                    --_max-column-count-spread: var(--_max-column-count-portrait);
-                }
-                &.vertical {
-                    --_max-column-count-spread: var(--_max-column-count);
-                }
+            #top.vertical {
+                --_max-column-count-spread: var(--_max-column-count);
             }
         }
         #background {
@@ -526,12 +529,12 @@ export class Paginator extends HTMLElement {
             display: grid;
             height: var(--_margin);
         }
-        :is(#header, #footer) > * {
+        #header > *, #footer > * {
             display: flex;
             align-items: center;
             min-width: 0;
         }
-        :is(#header, #footer) > * > * {
+        #header > * > *, #footer > * > * {
             width: 100%;
             overflow: hidden;
             white-space: nowrap;

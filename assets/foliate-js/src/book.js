@@ -752,14 +752,10 @@ const getCSS = ({ fontSize,
     }
 
     img, svg {
-        // height: auto !important;
-        // width: auto !important;
         object-fit: contain !important;
         break-inside: avoid !important;
         box-sizing: border-box !important;
         font-size: initial !important;
-        // height: initial !important;
-        // width: initial !important;
     }
 
     a:link {
@@ -771,7 +767,6 @@ const getCSS = ({ fontSize,
     }
 
     * {
-        // line-height: ${spacing}em !important;
         ${fontFamily}
     }
 
@@ -802,7 +797,7 @@ const getCSS = ({ fontSize,
     }
     `}
 
-    p, li, blockquote, dd, div:not(:has(*:not(b, a, em, i, strong, u, span))), font {
+    p, li, blockquote, dd, div.anx-text-container, font {
         color: ${fontColor} !important;
         ${useBookStyles ? '' : `line-height: ${spacing} !important;`}
         ${useBookStyles ? '' : `font-weight: ${fontWeight} !important;`}
@@ -828,18 +823,55 @@ const getCSS = ({ fontSize,
 
 
     /*  Paragraphs containing only an image — don't change */
-    p:has(> img:only-child),
-    p:has(> span:only-child > img:only-child),
-    p:has(> img:not(.has-text-siblings)),
-    p:has(> a:first-child + img:last-child),
-    div:has(> img:only-child),
-    div:has(> span:only-child > img:only-child),
-    div:has(> img:not(.has-text-siblings)),
-    div:has(> a:first-child + img:last-child)  {
+    .anx-image-container {
         text-indent: initial !important;
         font-size: initial !important;
         height: initial !important;
         width: initial !important;
+    }
+
+    /* Keep headings with the content they introduce. */
+    h1, h2, h3, h4, h5, h6 {
+        break-after: avoid !important;
+        page-break-after: avoid !important;
+        -webkit-column-break-after: avoid !important;
+        orphans: 2;
+        widows: 2;
+    }
+
+    h1 + p, h2 + p, h3 + p, h4 + p, h5 + p, h6 + p {
+        break-before: avoid !important;
+        page-break-before: avoid !important;
+        -webkit-column-break-before: avoid !important;
+    }
+
+    /* Keep reflowable tables inside a page column on narrow WebViews. */
+    table {
+        border-collapse: collapse;
+        box-sizing: border-box !important;
+        inline-size: auto;
+        max-inline-size: 100% !important;
+        max-width: 100% !important;
+        overflow-wrap: break-word;
+        table-layout: auto;
+    }
+
+    th, td {
+        box-sizing: border-box !important;
+        max-width: 100% !important;
+        overflow-wrap: break-word;
+        word-break: break-word;
+    }
+
+    tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        -webkit-column-break-inside: avoid;
+    }
+
+    table img, table svg, table video {
+        height: auto !important;
+        max-width: 100% !important;
     }
 
     /*  Paragraphs inside list items — prevent double indentation */
@@ -1033,7 +1065,28 @@ const bionicReadingHandler = (doc) => {
 };
 
 
+const markLayoutElements = (doc) => {
+  const inlineElements = new Set(['b', 'a', 'em', 'i', 'strong', 'u', 'span'])
+
+  doc.querySelectorAll('div').forEach(element => {
+    const descendants = Array.from(element.querySelectorAll('*'))
+    if (descendants.every(child => inlineElements.has(child.localName))) {
+      element.classList.add('anx-text-container')
+    }
+  })
+
+  doc.querySelectorAll('p, div').forEach(element => {
+    const hasMedia = element.querySelector('img, svg, video') !== null
+    if (hasMedia && element.textContent.trim() === '') {
+      element.classList.add('anx-image-container')
+    }
+  })
+}
+
+
 const readingFeaturesDocHandler = (doc) => {
+  markLayoutElements(doc)
+
   if (readingRules.convertChineseMode !== 'none') {
     convertChineseHandler(readingRules.convertChineseMode, doc)
   }
