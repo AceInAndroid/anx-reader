@@ -8,6 +8,8 @@ import 'package:anx_reader/providers/ai_cache_count.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/providers/user_prompts.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
+import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/web_search.dart';
 import 'package:anx_reader/widgets/common/anx_button.dart';
 import 'package:anx_reader/widgets/common/anx_segmented_button.dart';
 import 'package:anx_reader/widgets/delete_confirm.dart';
@@ -251,6 +253,48 @@ class _AISettingsState extends ConsumerState<AISettings> {
         ],
       ),
       SettingsSection(
+        title: const Text('阅读模式'),
+        tiles: [
+          _readingModeTile(),
+        ],
+      ),
+      SettingsSection(
+        title: const Text('深度阅读'),
+        tiles: [
+          _deepReadingTile(),
+        ],
+      ),
+      SettingsSection(
+        title: const Text('专家'),
+        tiles: [
+          SettingsTile.switchTile(
+            initialValue: Prefs().readingMultiAgentEnabled,
+            onToggle: (value) {
+              Prefs().readingMultiAgentEnabled = value;
+              setState(() {});
+            },
+            title: const Text('主助手调度专家'),
+            description: const Text('复杂问题最多并行调用两个专家；简单问题直接回答'),
+          ),
+        ],
+      ),
+      SettingsSection(
+        title: const Text('网络检索'),
+        tiles: [
+          _webSearchTile(),
+        ],
+      ),
+      SettingsSection(
+        title: const Text('可信来源'),
+        tiles: [
+          SettingsTile.navigation(
+            title: const Text('查看模式来源包'),
+            description: const Text('联网结果必须匹配对应模式的可信域名'),
+            onPressed: (_) => _showTrustedSources(),
+          ),
+        ],
+      ),
+      SettingsSection(
         title: Text(L10n.of(context).settingsAiPrompt),
         tiles: [
           promptTile,
@@ -335,6 +379,409 @@ class _AISettingsState extends ConsumerState<AISettings> {
       ),
     ]);
   }
+
+  AbstractSettingsTile _readingModeTile() {
+    return CustomSettingsTile(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: DropdownButtonFormField<ReadingAiMode>(
+          initialValue: Prefs().defaultReadingAiMode,
+          decoration: const InputDecoration(
+            labelText: '默认阅读模式',
+            helperText: '每本书可在 AI 阅读工作台中单独覆盖',
+          ),
+          items: ReadingAiMode.values
+              .map((mode) => DropdownMenuItem(
+                    value: mode,
+                    child: Text(_readingModeLabel(mode)),
+                  ))
+              .toList(growable: false),
+          onChanged: (mode) {
+            if (mode == null) return;
+            Prefs().defaultReadingAiMode = mode;
+            setState(() {});
+          },
+        ),
+      ),
+    );
+  }
+
+  AbstractSettingsTile _deepReadingTile() {
+    return CustomSettingsTile(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<ReadingAnalysisDepth>(
+              initialValue: Prefs().defaultReadingAnalysisDepth,
+              decoration: const InputDecoration(
+                labelText: '默认分析深度',
+                helperText: '快读不调用专家；精读 1 个；深读与研究最多 2 个',
+              ),
+              items: ReadingAnalysisDepth.values
+                  .map((depth) => DropdownMenuItem(
+                        value: depth,
+                        child: Text(_analysisDepthLabel(depth)),
+                      ))
+                  .toList(growable: false),
+              onChanged: (depth) {
+                if (depth == null) return;
+                Prefs().defaultReadingAnalysisDepth = depth;
+                setState(() {});
+              },
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<ReadingOutputTemplate>(
+              initialValue: Prefs().defaultReadingOutputTemplate,
+              decoration: const InputDecoration(labelText: '默认输出形式'),
+              items: ReadingOutputTemplate.values
+                  .map((output) => DropdownMenuItem(
+                        value: output,
+                        child: Text(_analysisOutputLabel(output)),
+                      ))
+                  .toList(growable: false),
+              onChanged: (output) {
+                if (output == null) return;
+                Prefs().defaultReadingOutputTemplate = output;
+                setState(() {});
+              },
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: Prefs().readingAnalysisAutoRecommend,
+              title: const Text('本地自动推荐框架'),
+              subtitle: const Text('根据深度、阅读模式和目标推荐，不调用 AI'),
+              onChanged: (value) {
+                Prefs().readingAnalysisAutoRecommend = value;
+                setState(() {});
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: Prefs().readingAnalysisConfirmBeforeSend,
+              title: const Text('发送前确认'),
+              subtitle: const Text('在划线动作卡中确认深度、框架和输出形式'),
+              onChanged: (value) {
+                Prefs().readingAnalysisConfirmBeforeSend = value;
+                setState(() {});
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: Prefs().readingResearchWebSearch,
+              title: const Text('研究档允许联网'),
+              subtitle: const Text('仅研究档生效，且仍需启用并配置下方网络检索'),
+              onChanged: (value) {
+                Prefs().readingResearchWebSearch = value;
+                setState(() {});
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('主要框架数量'),
+              subtitle: Slider(
+                value: Prefs().readingAnalysisMaxFrameworks.toDouble(),
+                min: 1,
+                max: 2,
+                divisions: 1,
+                label: '${Prefs().readingAnalysisMaxFrameworks}',
+                onChanged: (value) {
+                  Prefs().readingAnalysisMaxFrameworks = value.round();
+                  setState(() {});
+                },
+              ),
+              trailing: Text('${Prefs().readingAnalysisMaxFrameworks}'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  AbstractSettingsTile _webSearchTile() {
+    final config = Prefs().readingWebSearchConfig;
+    return CustomSettingsTile(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: config.enabled,
+              title: const Text('允许联网核查'),
+              subtitle: const Text('默认关闭；失败时自动退化到本书、笔记和内置词典'),
+              onChanged: (enabled) {
+                Prefs().readingWebSearchConfig = _copySearchConfig(
+                  config,
+                  enabled: enabled,
+                );
+                setState(() {});
+              },
+            ),
+            DropdownButtonFormField<WebSearchProvider>(
+              initialValue: config.provider,
+              decoration: const InputDecoration(labelText: '搜索供应商'),
+              items: WebSearchProvider.values
+                  .map((provider) => DropdownMenuItem(
+                        value: provider,
+                        child: Text(switch (provider) {
+                          WebSearchProvider.tavily => 'Tavily',
+                          WebSearchProvider.brave => 'Brave Search',
+                          WebSearchProvider.custom => '自定义兼容接口',
+                        }),
+                      ))
+                  .toList(growable: false),
+              onChanged: (provider) {
+                if (provider == null) return;
+                Prefs().readingWebSearchConfig = switch (provider) {
+                  WebSearchProvider.tavily => WebSearchProviderConfig.tavily(
+                      enabled: config.enabled,
+                      apiKey: config.apiKey,
+                      trustedSources: config.trustedSources,
+                    ),
+                  WebSearchProvider.brave => WebSearchProviderConfig.brave(
+                      enabled: config.enabled,
+                      apiKey: config.apiKey,
+                      trustedSources: config.trustedSources,
+                    ),
+                  WebSearchProvider.custom => WebSearchProviderConfig.custom(
+                      enabled: config.enabled,
+                      apiKey: config.apiKey,
+                      endpoint: config.provider == WebSearchProvider.custom
+                          ? config.endpoint
+                          : null,
+                      trustedSources: config.trustedSources,
+                    ),
+                };
+                setState(() {});
+              },
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Key 与接口'),
+              subtitle: Text(config.apiKey?.isNotEmpty == true
+                  ? '${config.endpoint ?? config.effectiveEndpoint} · Key 已配置'
+                  : '${config.endpoint ?? config.effectiveEndpoint} · 未配置 Key'),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: () => _editSearchCredentials(config),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  WebSearchProviderConfig _copySearchConfig(
+    WebSearchProviderConfig config, {
+    WebSearchProvider? provider,
+    bool? enabled,
+    String? apiKey,
+    Uri? endpoint,
+  }) {
+    return WebSearchProviderConfig(
+      provider: provider ?? config.provider,
+      enabled: enabled ?? config.enabled,
+      apiKey: apiKey ?? config.apiKey,
+      endpoint: endpoint ?? config.endpoint,
+      headers: config.headers,
+      queryParameter: config.queryParameter,
+      maxResults: config.maxResults,
+      timeout: config.timeout,
+      trustedSources: config.trustedSources,
+    );
+  }
+
+  Future<void> _editSearchCredentials(WebSearchProviderConfig config) async {
+    final keyController = TextEditingController(text: config.apiKey ?? '');
+    final endpointController = TextEditingController(
+      text: config.endpoint?.toString() ?? '',
+    );
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('网络检索配置'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: keyController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'API Key'),
+            ),
+            if (config.provider == WebSearchProvider.custom)
+              TextField(
+                controller: endpointController,
+                decoration: const InputDecoration(labelText: 'HTTPS 接口地址'),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(L10n.of(context).commonCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(L10n.of(context).commonSave),
+          ),
+        ],
+      ),
+    );
+    if (saved == true) {
+      final endpointText = endpointController.text.trim();
+      Prefs().readingWebSearchConfig = WebSearchProviderConfig(
+        provider: config.provider,
+        enabled: config.enabled,
+        apiKey: keyController.text.trim(),
+        endpoint: endpointText.isEmpty ? null : Uri.tryParse(endpointText),
+        headers: config.headers,
+        queryParameter: config.queryParameter,
+        maxResults: config.maxResults,
+        timeout: config.timeout,
+        trustedSources: config.trustedSources,
+      );
+      if (mounted) setState(() {});
+    }
+    keyController.dispose();
+    endpointController.dispose();
+  }
+
+  Future<void> _showTrustedSources() async {
+    var selectedMode = ReadingAiMode.general;
+    final domains = {
+      for (final mode in ReadingAiMode.values)
+        mode: List<String>.from(Prefs().readingTrustedSourcePack(mode).domains),
+    };
+    final domainController = TextEditingController();
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('可信来源包'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<ReadingAiMode>(
+                  initialValue: selectedMode,
+                  items: ReadingAiMode.values
+                      .map((mode) => DropdownMenuItem(
+                            value: mode,
+                            child: Text(_readingModeLabel(mode)),
+                          ))
+                      .toList(growable: false),
+                  onChanged: (mode) {
+                    if (mode != null) {
+                      setDialogState(() => selectedMode = mode);
+                    }
+                  },
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: domainController,
+                        decoration: const InputDecoration(
+                          labelText: '域名，例如 who.int',
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add),
+                      onPressed: () {
+                        final value = _normalizeTrustedDomain(
+                          domainController.text,
+                        );
+                        if (value == null ||
+                            domains[selectedMode]!.contains(value)) {
+                          return;
+                        }
+                        setDialogState(() {
+                          domains[selectedMode]!.add(value);
+                          domainController.clear();
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                SizedBox(
+                  height: 300,
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: domains[selectedMode]!
+                        .map((domain) => ListTile(
+                              dense: true,
+                              title: Text(domain),
+                              trailing: IconButton(
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => setDialogState(
+                                  () => domains[selectedMode]!.remove(domain),
+                                ),
+                              ),
+                            ))
+                        .toList(growable: false),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(L10n.of(context).commonCancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(L10n.of(context).commonSave),
+            ),
+          ],
+        ),
+      ),
+    );
+    domainController.dispose();
+    if (saved == true) {
+      for (final mode in ReadingAiMode.values) {
+        Prefs().setReadingTrustedSourceDomains(mode, domains[mode]!);
+      }
+      if (mounted) setState(() {});
+    }
+  }
+
+  String? _normalizeTrustedDomain(String input) {
+    final trimmed = input.trim().toLowerCase();
+    if (trimmed.isEmpty) return null;
+    final uri = Uri.tryParse(
+      trimmed.contains('://') ? trimmed : 'https://$trimmed',
+    );
+    if (uri == null || uri.host.isEmpty) return null;
+    return uri.host.replaceFirst(RegExp(r'^www\.'), '');
+  }
+
+  String _readingModeLabel(ReadingAiMode mode) => switch (mode) {
+        ReadingAiMode.general => '通用',
+        ReadingAiMode.history => '历史',
+        ReadingAiMode.psychology => '心理',
+        ReadingAiMode.finance => '理财',
+      };
+
+  String _analysisDepthLabel(ReadingAnalysisDepth depth) => switch (depth) {
+        ReadingAnalysisDepth.quick => '快读',
+        ReadingAnalysisDepth.standard => '精读',
+        ReadingAnalysisDepth.deep => '深读',
+        ReadingAnalysisDepth.research => '研究',
+      };
+
+  String _analysisOutputLabel(ReadingOutputTemplate output) => switch (output) {
+        ReadingOutputTemplate.learningNote => '学习笔记',
+        ReadingOutputTemplate.argumentAnalysis => '论证分析',
+        ReadingOutputTemplate.conceptMap => '概念图',
+        ReadingOutputTemplate.practicePlan => '实践计划',
+      };
 
   // Build description showing current selected provider
   Widget? _buildProviderDescription() {

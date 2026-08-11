@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 9;
+const int currentDbVersion = 11;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -137,6 +137,32 @@ CREATE INDEX IF NOT EXISTS idx_vocabulary_next_review_at
 ON tb_vocabulary(next_review_at, is_mastered)
 ''';
 
+const createAiSessionsSQL = '''
+CREATE TABLE IF NOT EXISTS tb_ai_sessions (
+  id TEXT PRIMARY KEY,
+  title TEXT,
+  service TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  bookId INTEGER,
+  bookTitle TEXT,
+  chapterTitle TEXT,
+  chapterHref TEXT,
+  readingMode TEXT,
+  analysisDepth TEXT,
+  frameworks TEXT NOT NULL DEFAULT '[]',
+  outputTemplate TEXT,
+  readingGoal TEXT,
+  analysisResult TEXT,
+  contextSnapshot TEXT,
+  agentTraces TEXT NOT NULL DEFAULT '[]',
+  citations TEXT NOT NULL DEFAULT '[]',
+  messages TEXT NOT NULL DEFAULT '[]',
+  completed INTEGER NOT NULL DEFAULT 0,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+)
+''';
+
 class DBHelper {
   static final DBHelper _instance = DBHelper._internal();
   static Database? _database;
@@ -166,7 +192,7 @@ class DBHelper {
           path,
           version: dbVersion,
           onCreate: (db, version) async {
-            onUpgradeDatabase(db, 0, version);
+            await onUpgradeDatabase(db, 0, version);
           },
           onUpgrade: onUpgradeDatabase,
         );
@@ -184,7 +210,7 @@ class DBHelper {
           options: OpenDatabaseOptions(
             version: dbVersion,
             onCreate: (db, version) async {
-              onUpgradeDatabase(db, 0, version);
+              await onUpgradeDatabase(db, 0, version);
             },
             onUpgrade: onUpgradeDatabase,
           ),
@@ -495,6 +521,43 @@ class DBHelper {
           db,
           'tb_vocabulary',
           'example_translation',
+          'TEXT',
+        );
+        continue case9Migration;
+      case9Migration:
+      case 9:
+        await db.execute(createAiSessionsSQL);
+        continue case10Migration;
+      case10Migration:
+      case 10:
+        await _addColumnIfMissing(
+          db,
+          'tb_ai_sessions',
+          'analysisDepth',
+          'TEXT',
+        );
+        await _addColumnIfMissing(
+          db,
+          'tb_ai_sessions',
+          'frameworks',
+          "TEXT NOT NULL DEFAULT '[]'",
+        );
+        await _addColumnIfMissing(
+          db,
+          'tb_ai_sessions',
+          'outputTemplate',
+          'TEXT',
+        );
+        await _addColumnIfMissing(
+          db,
+          'tb_ai_sessions',
+          'readingGoal',
+          'TEXT',
+        );
+        await _addColumnIfMissing(
+          db,
+          'tb_ai_sessions',
+          'analysisResult',
           'TEXT',
         );
     }

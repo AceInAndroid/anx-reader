@@ -36,6 +36,8 @@ import 'package:anx_reader/models/user_prompt.dart';
 import 'package:anx_reader/widgets/statistic/dashboard_tiles/dashboard_tile_registry.dart';
 import 'package:anx_reader/models/window_info.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
+import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/web_search.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/utils/get_current_language_code.dart';
 import 'package:anx_reader/utils/log/common.dart';
@@ -1749,6 +1751,236 @@ class Prefs extends ChangeNotifier {
 
   set aiChatDisplayMode(AiChatDisplayMode mode) {
     prefs.setString('aiChatDisplayMode', mode.code);
+    notifyListeners();
+  }
+
+  ReadingAiMode get defaultReadingAiMode => ReadingAiMode.fromJson(
+        prefs.getString('defaultReadingAiMode'),
+      );
+
+  set defaultReadingAiMode(ReadingAiMode mode) {
+    prefs.setString('defaultReadingAiMode', mode.name);
+    notifyListeners();
+  }
+
+  ReadingAiMode readingAiModeForBook(int bookId) {
+    final raw = prefs.getString('readingAiModesByBook');
+    if (raw == null || raw.isEmpty) return defaultReadingAiMode;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      return ReadingAiMode.fromJson(values['$bookId']?.toString());
+    } catch (_) {
+      return defaultReadingAiMode;
+    }
+  }
+
+  bool hasReadingAiModeForBook(int bookId) {
+    final raw = prefs.getString('readingAiModesByBook');
+    if (raw == null || raw.isEmpty) return false;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      return values.containsKey('$bookId');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void setReadingAiModeForBook(int bookId, ReadingAiMode mode) {
+    final raw = prefs.getString('readingAiModesByBook');
+    Map<String, dynamic> values = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      } catch (_) {}
+    }
+    values['$bookId'] = mode.name;
+    prefs.setString('readingAiModesByBook', jsonEncode(values));
+    notifyListeners();
+  }
+
+  ReadingAnalysisDepth get defaultReadingAnalysisDepth =>
+      ReadingAnalysisDepth.fromJson(
+        prefs.getString('defaultReadingAnalysisDepth'),
+      );
+
+  set defaultReadingAnalysisDepth(ReadingAnalysisDepth depth) {
+    prefs.setString('defaultReadingAnalysisDepth', depth.name);
+    notifyListeners();
+  }
+
+  ReadingOutputTemplate get defaultReadingOutputTemplate =>
+      ReadingOutputTemplate.fromJson(
+        prefs.getString('defaultReadingOutputTemplate'),
+      );
+
+  set defaultReadingOutputTemplate(ReadingOutputTemplate template) {
+    prefs.setString('defaultReadingOutputTemplate', template.name);
+    notifyListeners();
+  }
+
+  bool get readingAnalysisAutoRecommend =>
+      prefs.getBool('readingAnalysisAutoRecommend') ?? true;
+
+  set readingAnalysisAutoRecommend(bool value) {
+    prefs.setBool('readingAnalysisAutoRecommend', value);
+    notifyListeners();
+  }
+
+  bool get readingAnalysisConfirmBeforeSend =>
+      prefs.getBool('readingAnalysisConfirmBeforeSend') ?? true;
+
+  set readingAnalysisConfirmBeforeSend(bool value) {
+    prefs.setBool('readingAnalysisConfirmBeforeSend', value);
+    notifyListeners();
+  }
+
+  bool get readingResearchWebSearch =>
+      prefs.getBool('readingResearchWebSearch') ?? false;
+
+  set readingResearchWebSearch(bool value) {
+    prefs.setBool('readingResearchWebSearch', value);
+    notifyListeners();
+  }
+
+  int get readingAnalysisMaxFrameworks =>
+      (prefs.getInt('readingAnalysisMaxFrameworks') ?? 2).clamp(1, 2).toInt();
+
+  set readingAnalysisMaxFrameworks(int value) {
+    prefs.setInt(
+      'readingAnalysisMaxFrameworks',
+      value.clamp(1, 2).toInt(),
+    );
+    notifyListeners();
+  }
+
+  ReadingAnalysisDepth readingAnalysisDepthForBook(int bookId) {
+    final value = _readingAnalysisBookValue(bookId, 'depth');
+    return value == null
+        ? defaultReadingAnalysisDepth
+        : ReadingAnalysisDepth.fromJson(value);
+  }
+
+  ReadingOutputTemplate readingOutputTemplateForBook(int bookId) {
+    final value = _readingAnalysisBookValue(bookId, 'outputTemplate');
+    return value == null
+        ? defaultReadingOutputTemplate
+        : ReadingOutputTemplate.fromJson(value);
+  }
+
+  bool hasReadingAnalysisConfigForBook(int bookId) {
+    final raw = prefs.getString('readingAnalysisByBook');
+    if (raw == null || raw.isEmpty) return false;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      return values['$bookId'] is Map;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void setReadingAnalysisConfigForBook(
+    int bookId, {
+    required ReadingAnalysisDepth depth,
+    required ReadingOutputTemplate outputTemplate,
+  }) {
+    final values = _readingAnalysisBookValues();
+    values['$bookId'] = <String, dynamic>{
+      'depth': depth.name,
+      'outputTemplate': outputTemplate.name,
+    };
+    prefs.setString('readingAnalysisByBook', jsonEncode(values));
+    notifyListeners();
+  }
+
+  void clearReadingAnalysisConfigForBook(int bookId) {
+    final values = _readingAnalysisBookValues();
+    if (values.remove('$bookId') == null) return;
+    prefs.setString('readingAnalysisByBook', jsonEncode(values));
+    notifyListeners();
+  }
+
+  Object? _readingAnalysisBookValue(int bookId, String key) {
+    final values = _readingAnalysisBookValues();
+    final config = values['$bookId'];
+    return config is Map ? config[key] : null;
+  }
+
+  Map<String, dynamic> _readingAnalysisBookValues() {
+    final raw = prefs.getString('readingAnalysisByBook');
+    if (raw == null || raw.isEmpty) return <String, dynamic>{};
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  WebSearchProviderConfig get readingWebSearchConfig {
+    final raw = prefs.getString('readingWebSearchConfig');
+    if (raw == null || raw.isEmpty) {
+      return const WebSearchProviderConfig.tavily();
+    }
+    try {
+      return WebSearchProviderConfig.fromJson(
+        Map<String, dynamic>.from(jsonDecode(raw) as Map),
+      );
+    } catch (_) {
+      return const WebSearchProviderConfig.tavily();
+    }
+  }
+
+  set readingWebSearchConfig(WebSearchProviderConfig config) {
+    prefs.setString('readingWebSearchConfig', jsonEncode(config.toJson()));
+    notifyListeners();
+  }
+
+  bool get readingMultiAgentEnabled =>
+      prefs.getBool('readingMultiAgentEnabled') ?? true;
+
+  set readingMultiAgentEnabled(bool value) {
+    prefs.setBool('readingMultiAgentEnabled', value);
+    notifyListeners();
+  }
+
+  TrustedSourcePack readingTrustedSourcePack(ReadingAiMode mode) {
+    final builtin = TrustedSourcePack.forMode(mode);
+    final raw = prefs.getString('readingTrustedSourceDomains');
+    if (raw == null || raw.isEmpty) return builtin;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      final domains = (values[mode.name] as List?)
+          ?.map((value) => value.toString().trim().toLowerCase())
+          .where((value) => value.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+      if (domains == null) return builtin;
+      return TrustedSourcePack(
+        id: builtin.id,
+        mode: mode,
+        domains: domains,
+      );
+    } catch (_) {
+      return builtin;
+    }
+  }
+
+  void setReadingTrustedSourceDomains(
+    ReadingAiMode mode,
+    List<String> domains,
+  ) {
+    final raw = prefs.getString('readingTrustedSourceDomains');
+    Map<String, dynamic> values = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      } catch (_) {}
+    }
+    values[mode.name] = domains
+        .map((value) => value.trim().toLowerCase())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    prefs.setString('readingTrustedSourceDomains', jsonEncode(values));
     notifyListeners();
   }
 

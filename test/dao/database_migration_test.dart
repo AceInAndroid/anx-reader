@@ -35,7 +35,8 @@ void main() {
     return dbFactory.openDatabase(p.join(tempDir.path, name));
   }
 
-  test('upgrade from version 7 succeeds when vocabulary table already exists', () async {
+  test('upgrade from version 7 succeeds when vocabulary table already exists',
+      () async {
     final db = await openTempDb('existing_vocabulary.db');
     addTearDown(db.close);
 
@@ -63,7 +64,8 @@ void main() {
     expect(indexes, isNotEmpty);
   });
 
-  test('upgrade from version 7 creates vocabulary artifacts when missing', () async {
+  test('upgrade from version 7 creates vocabulary artifacts when missing',
+      () async {
     final db = await openTempDb('missing_vocabulary.db');
     addTearDown(db.close);
 
@@ -86,5 +88,81 @@ void main() {
     expect(columnNames, contains('contextual_definition'));
     expect(columnNames, contains('example_sentence'));
     expect(columnNames, contains('example_translation'));
+  });
+
+  test('version 11 migration creates AI sessions table with all columns',
+      () async {
+    final db = await openTempDb('ai_sessions.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 9, currentDbVersion);
+
+    expect(currentDbVersion, 11);
+    final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
+    expect(
+      columns.map((row) => row['name']).toSet(),
+      containsAll({
+        'id',
+        'title',
+        'service',
+        'model',
+        'bookId',
+        'bookTitle',
+        'chapterTitle',
+        'chapterHref',
+        'readingMode',
+        'analysisDepth',
+        'frameworks',
+        'outputTemplate',
+        'readingGoal',
+        'analysisResult',
+        'contextSnapshot',
+        'agentTraces',
+        'citations',
+        'messages',
+        'completed',
+        'createdAt',
+        'updatedAt',
+      }),
+    );
+  });
+
+  test('upgrade from version 10 adds deep-reading session columns', () async {
+    final db = await openTempDb('ai_sessions_v10.db');
+    addTearDown(db.close);
+    await db.execute('''
+      CREATE TABLE tb_ai_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        service TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        bookId INTEGER,
+        bookTitle TEXT,
+        chapterTitle TEXT,
+        chapterHref TEXT,
+        readingMode TEXT,
+        contextSnapshot TEXT,
+        agentTraces TEXT NOT NULL DEFAULT '[]',
+        citations TEXT NOT NULL DEFAULT '[]',
+        messages TEXT NOT NULL DEFAULT '[]',
+        completed INTEGER NOT NULL DEFAULT 0,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+      )
+    ''');
+
+    await helper.onUpgradeDatabase(db, 10, currentDbVersion);
+
+    final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
+    expect(
+      columns.map((row) => row['name']).toSet(),
+      containsAll({
+        'analysisDepth',
+        'frameworks',
+        'outputTemplate',
+        'readingGoal',
+        'analysisResult',
+      }),
+    );
   });
 }

@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/page/reading_page.dart';
+import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
+import 'package:anx_reader/service/dictionary/english_dictionary.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
 import 'package:anx_reader/widgets/context_menu/excerpt_menu.dart';
@@ -32,6 +34,9 @@ Future<void> showContextMenu(
   final secondaryContainerColor =
       Theme.of(context).colorScheme.secondaryContainer;
   bool isNewNote = false;
+  final isDictionaryLookup =
+      EnglishDictionaryService.isEnglishWord(annoContent) ||
+          ChineseDictionaryService.isLookupCandidate(annoContent);
 
   if (Prefs().autoMarkSelection && annoId == null) {
     // Auto-highlight logic
@@ -155,9 +160,10 @@ Future<void> showContextMenu(
       onClose: onClose,
       menuConstraints: menuConstraints,
       initialPlacement: initialPlacement,
-      showTranslationDefault: !isNewNote &&
-          Prefs().autoTranslateSelection &&
-          !AnxPlatform.isAndroid,
+      showTranslationDefault: isDictionaryLookup ||
+          (!isNewNote &&
+              Prefs().autoTranslateSelection &&
+              !AnxPlatform.isAndroid),
       horizontalMargin: horizontalMargin,
       verticalMargin: verticalMargin,
       gap: gap,
@@ -426,9 +432,10 @@ class _ContextMenuOverlayState extends State<_ContextMenuOverlay>
     }
   }
 
-  void _toggleTranslationMenu() {
+  void _showTranslationMenuPanel() {
+    if (_showTranslationMenu) return;
     setState(() {
-      _showTranslationMenu = !_showTranslationMenu;
+      _showTranslationMenu = true;
     });
     _scheduleRecalculate();
   }
@@ -518,10 +525,12 @@ class _ContextMenuOverlayState extends State<_ContextMenuOverlay>
                                   onClose: widget.onClose,
                                   footnote: widget.footnote,
                                   decoration: widget.decoration,
-                                  toggleTranslationMenu: _toggleTranslationMenu,
+                                  showTranslationMenu:
+                                      _showTranslationMenuPanel,
                                   toggleReaderNoteMenu: _toggleReaderNoteMenu,
                                   openReaderNoteMenu: _openReaderNoteMenu,
                                   onNoteCreated: _handleNoteCreated,
+                                  onLayoutChanged: _scheduleRecalculate,
                                   axis: widget.axis,
                                   reverse: _reverse,
                                   contextText: widget.contextText,

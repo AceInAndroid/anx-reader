@@ -4,6 +4,7 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/timeout_http_client.dart';
+import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -17,8 +18,9 @@ import 'langchain_ai_config.dart';
 
 /// Factory responsible for building chat models based on user preferences.
 class LangchainAiRegistry {
-  const LangchainAiRegistry(this.ref);
+  const LangchainAiRegistry(this.ref, {this.readingModeOverride});
   final WidgetRef? ref;
+  final ReadingAiMode? readingModeOverride;
 
   LangchainPipeline resolve(
     LangchainAiConfig config, {
@@ -137,6 +139,12 @@ class LangchainAiRegistry {
       systemMessage = _buildAgentSystemMessage(
         isReading: isReading,
         enabledTools: enabledDefs,
+        readingMode: readingModeOverride ??
+            (isReading
+                ? Prefs().readingAiModeForBook(
+                    ref!.read(currentReadingProvider).book!.id,
+                  )
+                : ReadingAiMode.general),
       );
     }
 
@@ -150,6 +158,7 @@ class LangchainAiRegistry {
   ChatMessage _buildAgentSystemMessage({
     required bool isReading,
     required List<AiToolDefinition> enabledTools,
+    required ReadingAiMode readingMode,
   }) {
     final currentLanguageCode =
         Prefs().locale?.languageCode ?? Platform.localeName;
@@ -180,6 +189,7 @@ class LangchainAiRegistry {
         ? '📖 User is currently reading - You are a focused reading companion, providing instant comprehension help, translation, and note-taking assistance.'
         : '📚 User is browsing the library - You are a wise librarian, helping organize books and plan reading strategies.';
 
+    final profile = readingMode.agentProfile;
     final guidance =
         '''You are "Anx Reader AI", an intelligent reading assistant integrated into the Anx Reader app.
 
@@ -188,6 +198,11 @@ A knowledgeable reading companion who helps users understand, organize, and enjo
 
 ## Current Context
 $readingStateContext
+Reading mode: ${readingMode.name}
+Mode guidance: ${profile.systemPrompt}
+Safety boundary: ${profile.safetyPrompt}
+
+Use layered context. Start from the selection, adjacent paragraphs, chapter and book metadata. Read chapter text, table of contents, notes or other chapters only when needed through tools; never imply that the entire book or all notes were uploaded.
 
 ## Tool Usage Principles
 1. **Gather context first** - Use tools to understand the situation before responding

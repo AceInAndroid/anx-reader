@@ -125,7 +125,10 @@
   "readingPageShareTemplateModern": "Modern",
   "contextMenuAddNoteTips": "Add your note",
   "contextMenuCopy": "Copy",
-  "contextMenuSearch": "Search",
+  "contextMenuSearch": "Web Search",
+  "contextMenuLookup": "Look Up",
+  "contextMenuWebSearch": "Web Search",
+  "contextMenuMore": "More",
   "contextMenuTranslate": "Translate",
   "contextMenuAddToVocabulary": "Vocabulary",
   "contextMenuParagraphTranslate": "Paragraph",
@@ -996,5 +999,12 @@
   "aiChatFontSize": "Font Size",
   "aiModelSwitchTitle": "Switch Model",
   "aiModelEnterManually": "Enter model name",
-  "aiModelOrSelectBelow": "Or select from list:"
+  "aiModelOrSelectBelow": "Or select from list:",
+  "settingsDictionary": "Dictionary",
+  "dictionaryImport": "Import local dictionary",
+  "dictionaryImportHint": "Supports MDict .mdx; the latest import has priority",
+  "dictionaryEmpty": "No imported dictionaries",
+  "dictionaryImportSuccess": "Dictionary imported",
+  "dictionaryImportFailed": "Dictionary import failed",
+  "dictionaryAiContext": "AI context explanation"
 }

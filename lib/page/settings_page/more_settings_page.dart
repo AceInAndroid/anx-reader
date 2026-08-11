@@ -3,6 +3,7 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/page/settings_page/ai.dart';
 import 'package:anx_reader/page/settings_page/advanced.dart';
 import 'package:anx_reader/page/settings_page/appearance.dart';
+import 'package:anx_reader/page/settings_page/dictionary.dart';
 import 'package:anx_reader/page/settings_page/developer/developer_options_page.dart';
 import 'package:anx_reader/page/settings_page/narrate.dart';
 import 'package:anx_reader/page/settings_page/reading.dart';
@@ -128,6 +129,12 @@ class _SubMoreSettingsState extends State<SubMoreSettings> {
                 "subtitles": [
                   L10n.of(context).settingsTranslate,
                 ],
+              },
+              {
+                "title": L10n.of(context).settingsDictionary,
+                "icon": Icons.auto_stories_outlined,
+                "sections": const DictionarySettings(),
+                "subtitles": [L10n.of(context).dictionaryImportHint],
               },
               if (Prefs().bottomNavigatorShowVocabulary)
                 {

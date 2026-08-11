@@ -3,13 +3,17 @@ import 'package:anx_reader/dao/vocabulary.dart';
 import 'package:anx_reader/enums/lang_list.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/page/reading_page.dart';
+import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/dictionary/english_dictionary.dart';
+import 'package:anx_reader/service/dictionary/local_dictionary.dart';
 import 'package:anx_reader/service/dictionary/pronunciation_player.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/service/vocabulary_capture_service.dart';
+import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_html/flutter_html.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 
 class TranslationMenu extends StatefulWidget {
@@ -90,18 +94,28 @@ class _TranslationMenuState extends State<TranslationMenu> {
     final word = widget.content.trim();
     final preferredService = Prefs().translateService;
 
-    _translationWidget = preferredService.isWebView &&
-            EnglishDictionaryService.isEnglishWord(word)
-        ? _FastSingleWordTranslation(
+    final fallback = ChineseDictionaryService.isLookupCandidate(word)
+        ? _ChineseDictionaryTranslation(
             word: word,
             contextText: effectiveContextText,
             preferredService: preferredService,
-            fastService: resolveFastTextTranslateService(preferredService),
           )
-        : translateText(
-            widget.content,
-            contextText: effectiveContextText,
-          );
+        : preferredService.isWebView &&
+                EnglishDictionaryService.isEnglishWord(word)
+            ? _FastSingleWordTranslation(
+                word: word,
+                contextText: effectiveContextText,
+                preferredService: preferredService,
+                fastService: resolveFastTextTranslateService(preferredService),
+              )
+            : translateText(
+                widget.content,
+                contextText: effectiveContextText,
+              );
+    _translationWidget = _LocalDictionaryFirst(
+      word: word,
+      fallback: fallback,
+    );
   }
 
   Future<void> _loadVocabularyState() async {
@@ -215,6 +229,18 @@ class _TranslationMenuState extends State<TranslationMenu> {
     }
   }
 
+  void _explainWithAi() {
+    final contextText = _effectiveContextText;
+    final prompt = StringBuffer()
+      ..writeln('请解释“${widget.content.trim()}”在下面阅读语境中的准确含义。')
+      ..writeln('说明词形原形、词性、本语境中的义项和简短用法，不要展开无关义项。');
+    if (contextText != null) prompt.writeln('阅读语境：$contextText');
+    readingPageKey.currentState?.showAiChat(
+      content: prompt.toString().trim(),
+      sendImmediate: true,
+    );
+  }
+
   Widget _pronunciationLine(BuildContext context) {
     final entry = _dictionaryEntry;
     if (!_isLoadingPronunciation &&
@@ -314,11 +340,13 @@ class _TranslationMenuState extends State<TranslationMenu> {
     final isVocabularyEnabled = _isVocabularyEnabled;
     return Expanded(
       child: AnimatedSize(
-        duration: const Duration(milliseconds: 300),
+        duration: Prefs().reduceMotion
+            ? Duration.zero
+            : const Duration(milliseconds: 300),
         curve: Curves.easeOut,
         child: Container(
-          height: widget.axis == Axis.vertical ? double.infinity : 150,
-          width: widget.axis == Axis.vertical ? 100 : double.infinity,
+          height: widget.axis == Axis.vertical ? double.infinity : 260,
+          width: widget.axis == Axis.vertical ? 180 : double.infinity,
           decoration: widget.decoration,
           padding: const EdgeInsets.all(8),
           child: SingleChildScrollView(
@@ -345,6 +373,12 @@ class _TranslationMenuState extends State<TranslationMenu> {
                           height: 20,
                           child: Center(child: Text('...')),
                         ),
+                    if (EnvVar.enableAIFeature)
+                      OutlinedButton.icon(
+                        onPressed: _explainWithAi,
+                        icon: const Icon(Icons.auto_awesome, size: 18),
+                        label: Text(L10n.of(context).dictionaryAiContext),
+                      ),
                     const Divider(),
                     AxisFlex(
                       mainAxisSize: MainAxisSize.min,
@@ -384,6 +418,58 @@ class _TranslationMenuState extends State<TranslationMenu> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _LocalDictionaryFirst extends StatefulWidget {
+  const _LocalDictionaryFirst({required this.word, required this.fallback});
+
+  final String word;
+  final Widget fallback;
+
+  @override
+  State<_LocalDictionaryFirst> createState() => _LocalDictionaryFirstState();
+}
+
+class _LocalDictionaryFirstState extends State<_LocalDictionaryFirst> {
+  late Future<LocalDictionaryMatch?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = LocalDictionaryService.lookup(widget.word);
+  }
+
+  @override
+  void didUpdateWidget(covariant _LocalDictionaryFirst oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.word != widget.word) {
+      _future = LocalDictionaryService.lookup(widget.word);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LocalDictionaryMatch?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final match = snapshot.data;
+        if (match == null) return widget.fallback;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${match.word} · ${match.dictionaryName}',
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            Html(data: match.html),
+          ],
+        );
+      },
     );
   }
 }
@@ -461,16 +547,49 @@ class _FastSingleWordTranslationState
         final dictionaryEntry = data?.dictionaryEntry;
         final definitionEn = dictionaryEntry?.definitionEn?.trim();
         final partOfSpeech = dictionaryEntry?.partOfSpeech?.trim();
+        final exampleSentence = dictionaryEntry?.exampleSentence?.trim();
 
-        if (translatedText != null && translatedText.isNotEmpty) {
-          return Text(translatedText);
-        }
-
-        if (definitionEn != null && definitionEn.isNotEmpty) {
-          final prefix = (partOfSpeech != null && partOfSpeech.isNotEmpty)
-              ? '$partOfSpeech '
-              : '';
-          return Text('$prefix$definitionEn');
+        final hasTranslation =
+            translatedText != null && translatedText.isNotEmpty;
+        final hasDefinition = definitionEn != null && definitionEn.isNotEmpty;
+        if (hasTranslation || hasDefinition) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (hasDefinition) ...[
+                if (partOfSpeech != null && partOfSpeech.isNotEmpty)
+                  Text(
+                    partOfSpeech,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                Text(definitionEn),
+              ],
+              if (hasDefinition && hasTranslation) const SizedBox(height: 8),
+              if (hasTranslation) ...[
+                Text(
+                  L10n.of(context).vocabularyContextMeaning,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                Text(
+                  translatedText,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ],
+              if (exampleSentence != null && exampleSentence.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  exampleSentence,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(fontStyle: FontStyle.italic),
+                ),
+              ],
+            ],
+          );
         }
 
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -498,4 +617,113 @@ class _FastSingleWordData {
 
   final EnglishDictionaryEntry? dictionaryEntry;
   final String? translatedText;
+}
+
+class _ChineseDictionaryTranslation extends StatefulWidget {
+  const _ChineseDictionaryTranslation({
+    required this.word,
+    required this.contextText,
+    required this.preferredService,
+  });
+
+  final String word;
+  final String? contextText;
+  final TranslateService preferredService;
+
+  @override
+  State<_ChineseDictionaryTranslation> createState() =>
+      _ChineseDictionaryTranslationState();
+}
+
+class _ChineseDictionaryTranslationState
+    extends State<_ChineseDictionaryTranslation> {
+  late Future<ChineseDictionaryEntry?> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _lookup();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChineseDictionaryTranslation oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.word != widget.word ||
+        oldWidget.contextText != widget.contextText) {
+      _future = _lookup();
+    }
+  }
+
+  Future<ChineseDictionaryEntry?> _lookup() {
+    return ChineseDictionaryService.lookup(
+      widget.word,
+      contextText: widget.contextText,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<ChineseDictionaryEntry?>(
+      future: _future,
+      builder: (context, snapshot) {
+        final entry = snapshot.data;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (snapshot.connectionState == ConnectionState.waiting)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (entry != null) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Flexible(
+                    child: Text(
+                      entry.word,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ),
+                  if (entry.pinyin?.trim().isNotEmpty ?? false) ...[
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        entry.pinyin!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 6),
+              for (var index = 0; index < entry.senses.length; index++) ...[
+                Text('${index + 1}. ${entry.senses[index].definition}'),
+                if (entry.senses[index].example?.trim().isNotEmpty ?? false)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3, left: 14),
+                    child: Text(
+                      entry.senses[index].example!,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(fontStyle: FontStyle.italic),
+                    ),
+                  ),
+                if (index != entry.senses.length - 1) const SizedBox(height: 5),
+              ],
+              const Divider(),
+            ],
+            translateText(
+              entry?.word ?? widget.word,
+              service: widget.preferredService,
+              contextText: widget.contextText,
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

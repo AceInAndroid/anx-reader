@@ -1,14 +1,21 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/constants/note_annotations.dart';
 import 'package:anx_reader/dao/book_note.dart';
+import 'package:anx_reader/dao/vocabulary.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/page/reading_page.dart';
+import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
+import 'package:anx_reader/service/dictionary/english_dictionary.dart';
+import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/tts/tts_handler.dart';
+import 'package:anx_reader/service/vocabulary_capture_service.dart';
+import 'package:anx_reader/service/web_search.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/widgets/book_share/excerpt_share_service.dart';
+import 'package:anx_reader/widgets/context_menu/selection_action_policy.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
 import 'package:anx_reader/widgets/icon_and_text.dart';
 import 'package:flutter/material.dart';
@@ -24,10 +31,11 @@ class ExcerptMenu extends StatefulWidget {
   final Function() onClose;
   final bool footnote;
   final BoxDecoration decoration;
-  final Function() toggleTranslationMenu;
+  final VoidCallback showTranslationMenu;
   final void Function({bool? show}) toggleReaderNoteMenu;
   final Future<void> Function(int noteId) openReaderNoteMenu;
   final void Function(int noteId) onNoteCreated;
+  final VoidCallback onLayoutChanged;
   final Axis axis;
   final bool reverse;
 
@@ -40,10 +48,11 @@ class ExcerptMenu extends StatefulWidget {
     required this.onClose,
     required this.footnote,
     required this.decoration,
-    required this.toggleTranslationMenu,
+    required this.showTranslationMenu,
     required this.toggleReaderNoteMenu,
     required this.openReaderNoteMenu,
     required this.onNoteCreated,
+    required this.onLayoutChanged,
     required this.axis,
     required this.reverse,
   });
@@ -56,6 +65,9 @@ class ExcerptMenuState extends State<ExcerptMenu> {
   bool deleteConfirm = false;
   int? noteId;
   BookNote? _currentNote;
+  bool _showMoreActions = false;
+  bool _isAddingVocabulary = false;
+  bool _isVocabularyAdded = false;
   late String annoType;
   late String annoColor;
 
@@ -65,6 +77,125 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     annoType = Prefs().annotationType;
     annoColor = Prefs().annotationColor;
     _initializeExistingNote();
+    if (_isDictionaryLookup && _isVocabularyEnabled) {
+      _loadVocabularyState();
+    }
+  }
+
+  bool get _isDictionaryLookup =>
+      EnglishDictionaryService.isEnglishWord(widget.annoContent) ||
+      ChineseDictionaryService.isLookupCandidate(widget.annoContent);
+
+  bool get _isVocabularyEnabled => Prefs().bottomNavigatorShowVocabulary;
+
+  SelectionActionPolicy get _actionPolicy => SelectionActionPolicy.forSelection(
+        widget.annoContent,
+        aiEnabled: EnvVar.enableAIFeature,
+        vocabularyEnabled: _isVocabularyEnabled,
+        footnote: widget.footnote,
+      );
+
+  Future<void> _loadVocabularyState() async {
+    final existing = await vocabularyDao.selectByWord(widget.annoContent);
+    if (!mounted) return;
+    setState(() {
+      _isVocabularyAdded = existing != null;
+    });
+  }
+
+  Future<void> _addToVocabulary() async {
+    if (_isAddingVocabulary || _isVocabularyAdded) return;
+    final player = epubPlayerKey.currentState;
+    if (player == null) return;
+
+    setState(() {
+      _isAddingVocabulary = true;
+    });
+
+    try {
+      final result = await VocabularyCaptureService.captureQuick(
+        word: widget.annoContent,
+        bookId: player.book.id.toString(),
+        bookTitle: player.book.title,
+        chapterId: player.chapterHref,
+        chapterTitle: player.chapterTitle,
+        contextText: widget.contextText,
+        position: widget.annoCfi,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isVocabularyAdded = true;
+        _isAddingVocabulary = false;
+      });
+      AnxToast.show(result.created
+          ? L10n.of(context).vocabularyAddedToast
+          : L10n.of(context).vocabularyAlreadyExists);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isAddingVocabulary = false;
+      });
+      AnxToast.show(L10n.of(context).commonFailed);
+    }
+  }
+
+  Future<void> _showWebSearchEngines() async {
+    final selectedEngine = WebSearchEngine.fromCode(
+      Prefs().prefs.getString('webSearchEngine'),
+    );
+    final engine = await showDialog<WebSearchEngine>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text(L10n.of(context).contextMenuWebSearch),
+        children: WebSearchEngine.values
+            .map(
+              (item) => SimpleDialogOption(
+                onPressed: () => Navigator.of(dialogContext).pop(item),
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    item == selectedEngine
+                        ? Icons.check_circle
+                        : Icons.language,
+                  ),
+                  title: Text(item.label),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (engine == null || !mounted) return;
+
+    await Prefs().prefs.setString('webSearchEngine', engine.code);
+    widget.onClose();
+    await launchUrl(
+      engine.buildSearchUri(widget.annoContent),
+      mode: LaunchMode.externalApplication,
+    );
+  }
+
+  void _openAiWorkspace() {
+    final player = epubPlayerKey.currentState;
+    final readingPage = readingPageKey.currentState;
+    if (player == null || readingPage == null) {
+      AnxToast.show(L10n.of(context).commonFailed);
+      return;
+    }
+
+    final snapshot = ReadingContextSnapshot(
+      bookId: player.book.id.toString(),
+      bookTitle: player.book.title,
+      author: player.book.author,
+      chapterTitle: player.chapterTitle,
+      chapterHref: player.chapterHref,
+      selectedText: widget.annoContent.trim(),
+      surroundingText: widget.contextText?.trim(),
+      capturedAt: DateTime.now().millisecondsSinceEpoch,
+      metadata: {'cfi': widget.annoCfi},
+    );
+    widget.onClose();
+    readingPage.showAiChat(sendImmediate: false, selection: snapshot);
   }
 
   Future<void> _initializeExistingNote() async {
@@ -240,8 +371,155 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     );
   }
 
+  IconAndText _copyAction() => IconAndText(
+        compact: true,
+        onTap: () {
+          Clipboard.setData(ClipboardData(text: widget.annoContent));
+          AnxToast.show(L10n.of(context).notesPageCopied);
+          widget.onClose();
+        },
+        icon: const Icon(EvaIcons.copy),
+        text: L10n.of(context).contextMenuCopy,
+      );
+
+  IconAndText _lookupOrTranslateAction() => IconAndText(
+        compact: true,
+        onTap: widget.showTranslationMenu,
+        icon: Icon(
+            _isDictionaryLookup ? Icons.menu_book_outlined : Icons.translate),
+        text: _isDictionaryLookup
+            ? L10n.of(context).contextMenuLookup
+            : L10n.of(context).contextMenuTranslate,
+      );
+
+  IconAndText _vocabularyAction() => IconAndText(
+        compact: true,
+        onTap: _isAddingVocabulary ? null : _addToVocabulary,
+        icon: _isAddingVocabulary
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Icon(_isVocabularyAdded
+                ? Icons.check_circle_outline
+                : Icons.library_add_outlined),
+        text: _isVocabularyAdded
+            ? L10n.of(context).vocabularyAdded
+            : L10n.of(context).contextMenuAddToVocabulary,
+      );
+
+  IconAndText _aiAction() => IconAndText(
+        compact: true,
+        onTap: _openAiWorkspace,
+        icon: const Icon(EvaIcons.message_circle_outline),
+        text: L10n.of(context).navBarAI,
+      );
+
+  IconAndText _moreAction() => IconAndText(
+        compact: true,
+        onTap: () {
+          setState(() {
+            _showMoreActions = !_showMoreActions;
+          });
+          widget.onLayoutChanged();
+        },
+        icon: Icon(_showMoreActions ? Icons.expand_less : Icons.more_horiz),
+        text: L10n.of(context).contextMenuMore,
+      );
+
+  IconAndText _buildSelectionAction(SelectionMenuAction action) {
+    return switch (action) {
+      SelectionMenuAction.lookupOrTranslate => _lookupOrTranslateAction(),
+      SelectionMenuAction.addToVocabulary => _vocabularyAction(),
+      SelectionMenuAction.ai => _aiAction(),
+      SelectionMenuAction.copy => _copyAction(),
+      SelectionMenuAction.more => _moreAction(),
+      SelectionMenuAction.webSearch => IconAndText(
+          compact: true,
+          onTap: _showWebSearchEngines,
+          icon: const Icon(EvaIcons.globe),
+          text: L10n.of(context).contextMenuWebSearch,
+        ),
+      SelectionMenuAction.paragraphTranslate => IconAndText(
+          compact: true,
+          onTap: () {
+            final player = epubPlayerKey.currentState;
+            if (player == null) {
+              AnxToast.show(L10n.of(context).commonFailed);
+              return;
+            }
+            widget.onClose();
+            player.translateSelectedParagraph(cfi: widget.annoCfi);
+          },
+          icon: const Icon(Icons.text_fields),
+          text: L10n.of(context).contextMenuParagraphTranslate,
+        ),
+      SelectionMenuAction.narrate => IconAndText(
+          compact: true,
+          onTap: () async {
+            final player = epubPlayerKey.currentState;
+            if (player == null) {
+              AnxToast.show(L10n.of(context).commonFailed);
+              return;
+            }
+            final failureMessage = L10n.of(context).commonFailed;
+            widget.onClose();
+            try {
+              await audioHandler.stop();
+              await TtsHandler().init(
+                () => player.initTts(fromCfi: widget.annoCfi),
+                player.ttsNext,
+                player.ttsPrev,
+              );
+              await audioHandler.play();
+            } catch (_) {
+              AnxToast.show(failureMessage);
+            }
+          },
+          icon: const Icon(Icons.headphones),
+          text: L10n.of(context).contextMenuNarrate,
+        ),
+      SelectionMenuAction.note => IconAndText(
+          compact: true,
+          onTap: () async {
+            epubPlayerKey.currentState?.setSelectionClearLocked(true);
+            await onColorSelected(annoColor, close: false);
+            final targetId = noteId ?? widget.id;
+            if (targetId != null) {
+              await widget.openReaderNoteMenu(targetId);
+            } else {
+              widget.toggleReaderNoteMenu(show: true);
+            }
+          },
+          icon: const Icon(EvaIcons.edit_2_outline),
+          text: L10n.of(context).contextMenuWriteIdea,
+        ),
+      SelectionMenuAction.share => IconAndText(
+          compact: true,
+          onTap: () {
+            final player = epubPlayerKey.currentState;
+            if (player == null) {
+              AnxToast.show(L10n.of(context).commonFailed);
+              return;
+            }
+            widget.onClose();
+            ExcerptShareService.showShareExcerpt(
+              context: context,
+              bookTitle: player.book.title,
+              author: player.book.author,
+              excerpt: widget.annoContent,
+              chapter: player.chapterTitle,
+            );
+          },
+          icon: const Icon(EvaIcons.share_outline),
+          text: L10n.of(context).contextMenuShare,
+        ),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
+    final actionPolicy = _actionPolicy;
     Widget annotationMenu = Container(
       padding: const EdgeInsets.all(6),
       decoration: widget.decoration,
@@ -266,125 +544,12 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         axis: widget.axis,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // copy
-          IconAndText(
-            compact: true,
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: widget.annoContent));
-              AnxToast.show(L10n.of(context).notesPageCopied);
-              widget.onClose();
-            },
-            icon: const Icon(EvaIcons.copy),
-            text: L10n.of(context).contextMenuCopy,
-          ),
-          // Web search
-          IconAndText(
-            compact: true,
-            onTap: () {
-              widget.onClose();
-              launchUrl(
-                Uri.parse(
-                    'https://www.bing.com/search?q=${widget.annoContent}'),
-                mode: LaunchMode.externalApplication,
-              );
-            },
-            icon: const Icon(EvaIcons.globe),
-            text: L10n.of(context).contextMenuSearch,
-          ),
-          // toggle translation menu (word/text translation overlay)
-          IconAndText(
-            compact: true,
-            onTap: widget.toggleTranslationMenu,
-            icon: const Icon(Icons.translate),
-            text: L10n.of(context).contextMenuTranslate,
-          ),
-          // paragraph translation (inline insert below original)
-          IconAndText(
-            compact: true,
-            onTap: () {
-              widget.onClose();
-              epubPlayerKey.currentState
-                  ?.translateSelectedParagraph(cfi: widget.annoCfi);
-            },
-            icon: const Icon(Icons.text_fields),
-            text: L10n.of(context).contextMenuParagraphTranslate,
-          ),
-          // narrate
-          IconAndText(
-            compact: true,
-            onTap: () async {
-              widget.onClose();
-              final playerState = epubPlayerKey.currentState;
-              if (playerState == null) return;
-
-              // Stop existing TTS playback if any
-              await audioHandler.stop();
-
-              // Now initialize TTS - it will use the current (updated) position
-              await TtsHandler().init(
-                () => playerState.initTts(fromCfi: widget.annoCfi),
-                playerState.ttsNext,
-                playerState.ttsPrev,
-              );
-
-              // Start TTS - audioHandler.play() will call TTS speak
-              await audioHandler.play();
-            },
-            icon: const Icon(Icons.headphones),
-            text: L10n.of(context).contextMenuNarrate,
-          ),
-          // edit note
-          if (!widget.footnote)
-            IconAndText(
-              compact: true,
-              onTap: () async {
-                epubPlayerKey.currentState?.setSelectionClearLocked(true);
-                await onColorSelected(annoColor, close: false);
-                final targetId = noteId ?? widget.id;
-                if (targetId != null) {
-                  await widget.openReaderNoteMenu(targetId);
-                } else {
-                  widget.toggleReaderNoteMenu(show: true);
-                }
-              },
-              icon: const Icon(EvaIcons.edit_2_outline),
-              text: L10n.of(context).contextMenuWriteIdea,
-            ),
-          // AI chat
-          if (EnvVar.enableAIFeature)
-            IconAndText(
-              compact: true,
-              onTap: () {
-                widget.onClose();
-                final key = readingPageKey.currentState;
-                if (key != null) {
-                  key.showAiChat(
-                    content: widget.annoContent,
-                    sendImmediate: false,
-                  );
-                  key.aiChatKey.currentState?.inputController.text =
-                      widget.annoContent;
-                }
-              },
-              icon: const Icon(EvaIcons.message_circle_outline),
-              text: L10n.of(context).navBarAI,
-            ),
-          // share
-          IconAndText(
-            compact: true,
-            onTap: () {
-              widget.onClose();
-              ExcerptShareService.showShareExcerpt(
-                context: context,
-                bookTitle: epubPlayerKey.currentState!.book.title,
-                author: epubPlayerKey.currentState!.book.author,
-                excerpt: widget.annoContent,
-                chapter: epubPlayerKey.currentState!.chapterTitle,
-              );
-            },
-            icon: const Icon(EvaIcons.share_outline),
-            text: L10n.of(context).contextMenuShare,
-          ),
+          for (final action in actionPolicy.primaryActions)
+            _buildSelectionAction(action),
+          if (_showMoreActions) ...[
+            for (final action in actionPolicy.moreActions)
+              _buildSelectionAction(action),
+          ],
         ],
       ),
     );

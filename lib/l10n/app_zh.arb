@@ -87,7 +87,10 @@
   "readingPageShareTemplateModern": "翰墨长卷",
   "contextMenuAddNoteTips": "写下你的想法！",
   "contextMenuCopy": "复制",
-  "contextMenuSearch": "搜索",
+  "contextMenuSearch": "网页搜索",
+  "contextMenuLookup": "查词",
+  "contextMenuWebSearch": "网页搜索",
+  "contextMenuMore": "更多",
   "contextMenuTranslate": "翻译",
   "contextMenuParagraphTranslate": "段落翻译",
   "contextMenuWriteIdea": "批注",
@@ -922,5 +925,12 @@
     "aiModelSwitchTitle": "切换模型",
     "aiModelEnterManually": "输入模型名称",
     "aiModelOrSelectBelow": "或从列表中选择：",
-    "aiChatFontSize": "字体大小"
+    "aiChatFontSize": "字体大小",
+    "settingsDictionary": "词典",
+    "dictionaryImport": "导入本地词典",
+    "dictionaryImportHint": "支持 MDict .mdx，后导入的词典优先查询",
+    "dictionaryEmpty": "暂无已导入词典",
+    "dictionaryImportSuccess": "词典导入成功",
+    "dictionaryImportFailed": "词典导入失败",
+    "dictionaryAiContext": "AI 语境解释"
 }

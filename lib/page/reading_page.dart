@@ -5,7 +5,6 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/reading_time.dart';
 import 'package:anx_reader/dao/theme.dart';
 import 'package:anx_reader/enums/ai_panel_position.dart';
-import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/sync_direction.dart';
 import 'package:anx_reader/enums/sync_trigger.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
@@ -13,15 +12,19 @@ import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/read_theme.dart';
+import 'package:anx_reader/providers/ai_workspace.dart';
 import 'package:anx_reader/page/book_detail.dart';
 import 'package:anx_reader/page/book_player/epub_player.dart';
 import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/service/ai/index.dart';
+import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
+import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ui/status_bar.dart';
 import 'package:anx_reader/widgets/ai/ai_chat_stream.dart';
+import 'package:anx_reader/widgets/ai/ai_reading_workspace.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:anx_reader/widgets/reading_page/notes_widget.dart';
 import 'package:anx_reader/models/reading_time.dart';
@@ -75,8 +78,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   Timer? _awakeTimer;
   bool bottomBarOffstage = true;
   late String heroTag;
-  Widget? _aiChat;
   final aiChatKey = GlobalKey<AiChatStreamState>();
+  late final AiWorkspaceController aiWorkspaceController;
   static const double _aiChatMinWidth = 240;
   late double _aiChatWidth;
   static const double _aiChatMinHeight = 200;
@@ -111,6 +114,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     setAwakeTimer(Prefs().awakeTime);
 
     _book = widget.book;
+    aiWorkspaceController = AiWorkspaceController(bookId: _book.id);
+    aiWorkspaceController.addListener(_onAiWorkspaceChanged);
     heroTag = widget.heroTag ?? 'preventHeroWhenStart';
     // _volumeKeyBoard = VolumeKeyBoard.instance;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -153,6 +158,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     //   unawaited(_volumeKeyBoard.removeListener());
     // }
     _readerFocusNode.dispose();
+    aiWorkspaceController.removeListener(_onAiWorkspaceChanged);
+    aiWorkspaceController.dispose();
     super.dispose();
   }
 
@@ -475,8 +482,6 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                 Prefs().aiPanelPosition == AiPanelPositionEnum.right
                     ? AiPanelPositionEnum.bottom
                     : AiPanelPositionEnum.right;
-            // Rebuild the _aiChat widget to update the button
-            _rebuildAiChat();
           });
         },
         icon: Icon(
@@ -490,34 +495,32 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       ),
       IconButton(
         onPressed: () {
-          setState(() {
-            _aiChat = null;
-          });
+          aiWorkspaceController.hide();
         },
         icon: const Icon(Icons.close),
       ),
     ];
   }
 
-  void _rebuildAiChat() {
-    if (_aiChat == null) return;
+  void _onAiWorkspaceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildAiWorkspace({List<Widget>? trailing}) {
     final maxWidth = _aiChatMaxWidth(context);
     final maxHeight = _aiChatMaxHeight(context);
     _aiChatWidth = _aiChatWidth.clamp(_aiChatMinWidth, maxWidth);
     _aiChatHeight = _aiChatHeight.clamp(_aiChatMinHeight, maxHeight);
-    _aiChat = Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: AiChatStream(
-            key: aiChatKey,
-            initialMessage: null,
-            sendImmediate: false,
-            quickPromptChips: _getAiQuickPromptChips(),
-            trailing: _buildAiChatTrailing(context),
-          ),
-        ),
-      ],
+    return AiReadingWorkspace(
+      key: const ValueKey('ai-reading-workspace'),
+      controller: aiWorkspaceController,
+      chatKey: aiChatKey,
+      quickPromptChips: _getAiQuickPromptChips(),
+      bookTitle: _book.title,
+      bookAuthor: _book.author,
+      bookDescription: _book.description,
+      onRestoreReadingContext: _restoreAiReadingContext,
+      trailing: trailing ?? _buildAiChatTrailing(context),
     );
   }
 
@@ -553,73 +556,43 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   Future<void> showAiChat({
     String? content,
     bool sendImmediate = false,
+    ReadingContextSnapshot? selection,
   }) async {
-    List<AiQuickPromptChip> quickPrompts = _getAiQuickPromptChips();
-
-    // Determine display mode
-    final displayMode = Prefs().aiChatDisplayMode;
     final screenWidth = MediaQuery.of(navigatorKey.currentContext!).size.width;
+    final shouldShowFullscreen = screenWidth < 600;
 
-    bool shouldShowAsPopup = false;
-
-    switch (displayMode) {
-      case AiChatDisplayMode.adaptive:
-        // Show as popup if width < 600
-        shouldShowAsPopup = screenWidth < 600;
-        break;
-      case AiChatDisplayMode.popup:
-        // Always show as popup
-        shouldShowAsPopup = true;
-        break;
-      case AiChatDisplayMode.split:
-        // Always show as split screen
-        shouldShowAsPopup = false;
-        break;
+    final snapshot = selection;
+    if (snapshot != null) {
+      aiWorkspaceController.setPendingSelection(snapshot);
+    }
+    if (content != null && snapshot == null) {
+      aiWorkspaceController.setDraft(content);
+      aiChatKey.currentState?.setDraft(content);
     }
 
-    if (shouldShowAsPopup) {
-      showModalBottomSheet(
-          context: navigatorKey.currentContext!,
-          isScrollControlled: true,
-          showDragHandle: false,
-          clipBehavior: Clip.hardEdge,
-          builder: (context) => PointerInterceptor(
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.8,
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 8.0),
-                    child: AiChatStream(
-                      key: aiChatKey,
-                      initialMessage: content,
-                      sendImmediate: sendImmediate,
-                      quickPromptChips: quickPrompts,
-                    ),
-                  ),
-                ),
-              ));
-    } else {
-      setState(() {
-        final maxWidth = _aiChatMaxWidth(navigatorKey.currentContext!);
-        final maxHeight = _aiChatMaxHeight(navigatorKey.currentContext!);
-        _aiChatWidth = _aiChatWidth.clamp(_aiChatMinWidth, maxWidth);
-        _aiChatHeight = _aiChatHeight.clamp(_aiChatMinHeight, maxHeight);
-        _aiChat = Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: AiChatStream(
-                key: aiChatKey,
-                initialMessage: content,
-                sendImmediate: sendImmediate,
-                quickPromptChips: quickPrompts,
-                trailing: _buildAiChatTrailing(navigatorKey.currentContext!),
-              ),
-            ),
-          ],
-        );
+    if (!shouldShowFullscreen) {
+      final maxWidth = _aiChatMaxWidth(navigatorKey.currentContext!);
+      final maxHeight = _aiChatMaxHeight(navigatorKey.currentContext!);
+      _aiChatWidth = _aiChatWidth.clamp(_aiChatMinWidth, maxWidth);
+      _aiChatHeight = _aiChatHeight.clamp(_aiChatMinHeight, maxHeight);
+    }
+    aiWorkspaceController.show(fullscreen: shouldShowFullscreen);
+    if (sendImmediate && content != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        aiChatKey.currentState?.sendPrompt(content);
       });
+    }
+  }
+
+  Future<void> _restoreAiReadingContext(AiChatHistoryEntry entry) async {
+    if (entry.bookId != _book.id) return;
+    final cfi = entry.contextSnapshot?['metadata'] is Map
+        ? (entry.contextSnapshot!['metadata'] as Map)['cfi']?.toString()
+        : null;
+    if (cfi != null && cfi.isNotEmpty) {
+      epubPlayerKey.currentState?.goToCfi(cfi);
+    } else if (entry.chapterHref?.isNotEmpty == true) {
+      epubPlayerKey.currentState?.goToHref(entry.chapterHref!);
     }
   }
 
@@ -637,27 +610,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       tooltip: L10n.of(context).aiChat,
       icon: const Icon(Icons.auto_awesome),
       onPressed: () async {
-        // Determine if should show as split based on display mode
-        final displayMode = Prefs().aiChatDisplayMode;
         final screenWidth = MediaQuery.of(context).size.width;
+        final shouldShowAsSplit = screenWidth >= 600;
 
-        bool shouldShowAsSplit = false;
-        switch (displayMode) {
-          case AiChatDisplayMode.adaptive:
-            shouldShowAsSplit = screenWidth >= 600;
-            break;
-          case AiChatDisplayMode.split:
-            shouldShowAsSplit = true;
-            break;
-          case AiChatDisplayMode.popup:
-            shouldShowAsSplit = false;
-            break;
-        }
-
-        if (shouldShowAsSplit && _aiChat != null) {
-          setState(() {
-            _aiChat = null;
-          });
+        if (shouldShowAsSplit && aiWorkspaceController.visible) {
+          aiWorkspaceController.hide();
           return;
         }
 
@@ -707,9 +664,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                             await Clipboard.setData(
                                 ClipboardData(text: content!));
                           }
+                          if (!context.mounted) return;
                           AnxToast.show(L10n.of(context)
                               .readingPageCopiedCharacters(len));
                         } catch (e) {
+                          if (!context.mounted) return;
                           AnxToast.show(
                               L10n.of(context).readingPageErrorCopyingContent);
                         }
@@ -805,184 +764,213 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       ),
     );
 
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: Hero(
-        tag: widget.heroTag ??
-            (Prefs().openBookAnimation ? _book.coverFullPath : heroTag),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height,
-            width: MediaQuery.of(context).size.width,
-            child: Scaffold(
-              key: _scaffoldKey,
-              resizeToAvoidBottomInset: false,
-              drawer: PointerInterceptor(
-                child: Drawer(
-                  width: math.min(
-                    MediaQuery.of(context).size.width * 0.8,
-                    420,
-                  ),
-                  child: SafeArea(
-                    child: TocWidget(
-                      epubPlayerKey: epubPlayerKey,
-                      hideAppBarAndBottomBar: showOrHideAppBarAndBottomBar,
-                      closeDrawer: () {
-                        _scaffoldKey.currentState?.closeDrawer();
-                      },
+    final isMobileAiVisible = MediaQuery.of(context).size.width < 600 &&
+        aiWorkspaceController.visible;
+    return PopScope<void>(
+      canPop: !isMobileAiVisible,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && isMobileAiVisible) aiWorkspaceController.hide();
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: false,
+        body: Hero(
+          tag: widget.heroTag ??
+              (Prefs().openBookAnimation ? _book.coverFullPath : heroTag),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: SizedBox(
+              height: MediaQuery.of(context).size.height,
+              width: MediaQuery.of(context).size.width,
+              child: Scaffold(
+                key: _scaffoldKey,
+                resizeToAvoidBottomInset: false,
+                drawer: PointerInterceptor(
+                  child: Drawer(
+                    width: math.min(
+                      MediaQuery.of(context).size.width * 0.8,
+                      420,
+                    ),
+                    child: SafeArea(
+                      child: TocWidget(
+                        epubPlayerKey: epubPlayerKey,
+                        hideAppBarAndBottomBar: showOrHideAppBarAndBottomBar,
+                        closeDrawer: () {
+                          _scaffoldKey.currentState?.closeDrawer();
+                        },
+                      ),
                     ),
                   ),
                 ),
-              ),
-              body: Stack(
-                children: [
-                  AxisFlex(
-                    axis: Prefs().aiPanelPosition == AiPanelPositionEnum.right
-                        ? Axis.horizontal
-                        : Axis.vertical,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(
-                        child: MouseRegion(
-                          onHover: (PointerHoverEvent detail) {
-                            if (!Prefs().showMenuOnHover) return;
-                            var y = detail.position.dy;
-                            if (y < 30 ||
-                                y > MediaQuery.of(context).size.height - 30) {
-                              showOrHideAppBarAndBottomBar(true);
-                            }
-                          },
-                          child: Focus(
-                            focusNode: _readerFocusNode,
-                            onKeyEvent: _handleReaderKeyEvent,
-                            child: Stack(
-                              children: [
-                                EpubPlayer(
-                                  key: epubPlayerKey,
-                                  book: _book,
-                                  cfi: widget.cfi,
-                                  showOrHideAppBarAndBottomBar:
-                                      showOrHideAppBarAndBottomBar,
-                                  onLoadEnd: onLoadEnd,
-                                  initialThemes: widget.initialThemes,
-                                  updateParent: updateState,
-                                ),
-                                if (_isResizingAiChat)
-                                  SizedBox.expand(
-                                    child: Container(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .surface
-                                          .withAlpha(1),
-                                    ),
+                body: Stack(
+                  children: [
+                    AxisFlex(
+                      axis: Prefs().aiPanelPosition == AiPanelPositionEnum.right
+                          ? Axis.horizontal
+                          : Axis.vertical,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(
+                          child: MouseRegion(
+                            onHover: (PointerHoverEvent detail) {
+                              if (!Prefs().showMenuOnHover) return;
+                              var y = detail.position.dy;
+                              if (y < 30 ||
+                                  y > MediaQuery.of(context).size.height - 30) {
+                                showOrHideAppBarAndBottomBar(true);
+                              }
+                            },
+                            child: Focus(
+                              focusNode: _readerFocusNode,
+                              onKeyEvent: _handleReaderKeyEvent,
+                              child: Stack(
+                                children: [
+                                  EpubPlayer(
+                                    key: epubPlayerKey,
+                                    book: _book,
+                                    cfi: widget.cfi,
+                                    showOrHideAppBarAndBottomBar:
+                                        showOrHideAppBarAndBottomBar,
+                                    onLoadEnd: onLoadEnd,
+                                    initialThemes: widget.initialThemes,
+                                    updateParent: updateState,
                                   ),
+                                  if (_isResizingAiChat)
+                                    SizedBox.expand(
+                                      child: Container(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .surface
+                                            .withAlpha(1),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (MediaQuery.of(context).size.width >= 600 &&
+                            aiWorkspaceController.visible)
+                          GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onHorizontalDragStart: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.right
+                                ? (details) {
+                                    _beginAiChatResize(
+                                        details.globalPosition.dx);
+                                  }
+                                : null,
+                            onHorizontalDragUpdate: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.right
+                                ? (details) {
+                                    _applyAiChatResizeDelta(
+                                      details.delta.dx,
+                                      context,
+                                    );
+                                  }
+                                : null,
+                            onHorizontalDragEnd: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.right
+                                ? (_) {
+                                    _endAiChatResize();
+                                  }
+                                : null,
+                            onHorizontalDragCancel: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.right
+                                ? () {
+                                    _endAiChatResize();
+                                  }
+                                : null,
+                            onVerticalDragStart: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.bottom
+                                ? (details) {
+                                    _beginAiChatResizeVertical(
+                                        details.globalPosition.dy);
+                                  }
+                                : null,
+                            onVerticalDragUpdate: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.bottom
+                                ? (details) {
+                                    _applyAiChatResizeDeltaVertical(
+                                      details.delta.dy,
+                                      context,
+                                    );
+                                  }
+                                : null,
+                            onVerticalDragEnd: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.bottom
+                                ? (_) {
+                                    _endAiChatResize();
+                                  }
+                                : null,
+                            onVerticalDragCancel: Prefs().aiPanelPosition ==
+                                    AiPanelPositionEnum.bottom
+                                ? () {
+                                    _endAiChatResize();
+                                  }
+                                : null,
+                            child: MouseRegion(
+                              cursor: Prefs().aiPanelPosition ==
+                                      AiPanelPositionEnum.right
+                                  ? SystemMouseCursors.resizeColumn
+                                  : SystemMouseCursors.resizeRow,
+                              child: Prefs().aiPanelPosition ==
+                                      AiPanelPositionEnum.right
+                                  ? VerticalDivider(
+                                      width: 2,
+                                      thickness: 1,
+                                    )
+                                  : Divider(
+                                      height: 2,
+                                      thickness: 1,
+                                    ),
+                            ),
+                          ),
+                        if (MediaQuery.of(context).size.width >= 600)
+                          Offstage(
+                            offstage: !aiWorkspaceController.visible,
+                            child: SizedBox(
+                              key: const ValueKey('ai-chat-panel'),
+                              width: Prefs().aiPanelPosition ==
+                                      AiPanelPositionEnum.right
+                                  ? _aiChatWidth
+                                  : null,
+                              height: Prefs().aiPanelPosition ==
+                                      AiPanelPositionEnum.bottom
+                                  ? _aiChatHeight
+                                  : null,
+                              child: _buildAiWorkspace(),
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (MediaQuery.of(context).size.width < 600)
+                      Positioned.fill(
+                        child: Offstage(
+                          offstage: !aiWorkspaceController.visible,
+                          child: PointerInterceptor(
+                            child: _buildAiWorkspace(
+                              trailing: [
+                                IconButton(
+                                  onPressed: aiWorkspaceController.hide,
+                                  icon: const Icon(Icons.close),
+                                ),
                               ],
                             ),
                           ),
                         ),
                       ),
-                      if (_aiChat != null)
-                        GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onHorizontalDragStart: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.right
-                              ? (details) {
-                                  _beginAiChatResize(details.globalPosition.dx);
-                                }
-                              : null,
-                          onHorizontalDragUpdate: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.right
-                              ? (details) {
-                                  _applyAiChatResizeDelta(
-                                    details.delta.dx,
-                                    context,
-                                  );
-                                }
-                              : null,
-                          onHorizontalDragEnd: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.right
-                              ? (_) {
-                                  _endAiChatResize();
-                                }
-                              : null,
-                          onHorizontalDragCancel: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.right
-                              ? () {
-                                  _endAiChatResize();
-                                }
-                              : null,
-                          onVerticalDragStart: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.bottom
-                              ? (details) {
-                                  _beginAiChatResizeVertical(
-                                      details.globalPosition.dy);
-                                }
-                              : null,
-                          onVerticalDragUpdate: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.bottom
-                              ? (details) {
-                                  _applyAiChatResizeDeltaVertical(
-                                    details.delta.dy,
-                                    context,
-                                  );
-                                }
-                              : null,
-                          onVerticalDragEnd: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.bottom
-                              ? (_) {
-                                  _endAiChatResize();
-                                }
-                              : null,
-                          onVerticalDragCancel: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.bottom
-                              ? () {
-                                  _endAiChatResize();
-                                }
-                              : null,
-                          child: MouseRegion(
-                            cursor: Prefs().aiPanelPosition ==
-                                    AiPanelPositionEnum.right
-                                ? SystemMouseCursors.resizeColumn
-                                : SystemMouseCursors.resizeRow,
-                            child: Prefs().aiPanelPosition ==
-                                    AiPanelPositionEnum.right
-                                ? VerticalDivider(
-                                    width: 2,
-                                    thickness: 1,
-                                  )
-                                : Divider(
-                                    height: 2,
-                                    thickness: 1,
-                                  ),
-                          ),
-                        ),
-                      if (_aiChat != null)
-                        SizedBox(
-                          key: const ValueKey('ai-chat-panel'),
-                          width: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.right
-                              ? _aiChatWidth
-                              : null,
-                          height: Prefs().aiPanelPosition ==
-                                  AiPanelPositionEnum.bottom
-                              ? _aiChatHeight
-                              : null,
-                          child: _aiChat,
-                        )
-                    ],
-                  ),
-                  controller,
-                  // TTS floating action button: always in the tree when toolbar
-                  // is hidden; TtsFab handles its own show/hide internally so
-                  // its State (expanded flag) is never destroyed mid-session.
-                  if (bottomBarOffstage)
-                    const Positioned(
-                      right: 16,
-                      bottom: 24,
-                      child: TtsFab(),
-                    ),
-                ],
+                    controller,
+                    // TTS floating action button: always in the tree when toolbar
+                    // is hidden; TtsFab handles its own show/hide internally so
+                    // its State (expanded flag) is never destroyed mid-session.
+                    if (bottomBarOffstage)
+                      const Positioned(
+                        right: 16,
+                        bottom: 24,
+                        child: TtsFab(),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),

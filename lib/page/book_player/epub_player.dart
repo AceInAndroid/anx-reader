@@ -875,29 +875,49 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         handlerName: 'onSelectionEnd',
         callback: (args) {
           removeOverlay();
-          Map<String, dynamic> location = args[0];
-          String cfi = location['cfi'];
-          String text = location['text'];
-          bool footnote = location['footnote'];
+          if (args.isEmpty || args.first is! Map) {
+            AnxLog.warning('Selection menu ignored: invalid WebView payload');
+            return;
+          }
+          final location = Map<String, dynamic>.from(args.first as Map);
+          final cfi = location['cfi']?.toString() ?? '';
+          final text = location['text']?.toString().trim() ?? '';
+          final footnote = location['footnote'] == true;
+          final rawPosition = location['pos'];
+          if (cfi.isEmpty || text.isEmpty || rawPosition is! Map) {
+            AnxLog.warning(
+              'Selection menu ignored: missing text, CFI, or position',
+            );
+            return;
+          }
+          final position = Map<String, dynamic>.from(rawPosition);
+          final left = (position['left'] as num?)?.toDouble();
+          final top = (position['top'] as num?)?.toDouble();
+          final right = (position['right'] as num?)?.toDouble();
+          final bottom = (position['bottom'] as num?)?.toDouble();
+          if (left == null || top == null || right == null || bottom == null) {
+            AnxLog.warning('Selection menu ignored: invalid position');
+            return;
+          }
           final rawContextText = location['contextText']?.toString();
           _lastSelectionContextText =
               (rawContextText?.trim().isEmpty ?? true) ? null : rawContextText;
-          double left = (location['pos']['left'] as num).toDouble();
-          double top = (location['pos']['top'] as num).toDouble();
-          double right = (location['pos']['right'] as num).toDouble();
-          double bottom = (location['pos']['bottom'] as num).toDouble();
-          showContextMenu(
-            context,
-            left,
-            top,
-            right,
-            bottom,
-            text,
-            cfi,
-            null,
-            footnote,
-            writingMode.isVertical ? Axis.vertical : Axis.horizontal,
-            contextText: _lastSelectionContextText,
+          unawaited(
+            showContextMenu(
+              context,
+              left,
+              top,
+              right,
+              bottom,
+              text,
+              cfi,
+              null,
+              footnote,
+              writingMode.isVertical ? Axis.vertical : Axis.horizontal,
+              contextText: _lastSelectionContextText,
+            ).catchError((Object error, StackTrace stack) {
+              AnxLog.warning('Failed to show selection menu: $error\n$stack');
+            }),
           );
         });
     controller.addJavaScriptHandler(
@@ -925,8 +945,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
               } else {
                 audioHandler.play();
               }
-              return;
             }
+            return;
           }
 
           int id = annotation['annotation']['id'];
