@@ -1,10 +1,12 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/enums/selection_menu_action.dart';
 import 'package:anx_reader/constants/note_annotations.dart';
 import 'package:anx_reader/dao/book_note.dart';
 import 'package:anx_reader/dao/vocabulary.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book_note.dart';
+import 'package:anx_reader/models/selection_snapshot.dart';
 import 'package:anx_reader/service/reading_note/reading_note_capture_service.dart';
 import 'package:anx_reader/page/reading_page.dart';
 import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
@@ -40,6 +42,7 @@ class ExcerptMenu extends StatefulWidget {
   final VoidCallback onLayoutChanged;
   final Axis axis;
   final bool reverse;
+  final SelectionSnapshot? selectionSnapshot;
 
   const ExcerptMenu({
     super.key,
@@ -57,6 +60,7 @@ class ExcerptMenu extends StatefulWidget {
     required this.onLayoutChanged,
     required this.axis,
     required this.reverse,
+    this.selectionSnapshot,
   });
 
   @override
@@ -95,6 +99,8 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         aiEnabled: EnvVar.enableAIFeature,
         vocabularyEnabled: _isVocabularyEnabled,
         footnote: widget.footnote,
+        actionOrder: Prefs().selectionMenuActionOrder,
+        enabledActions: Prefs().enabledSelectionMenuActions,
       );
 
   Future<void> _loadVocabularyState() async {
@@ -407,6 +413,43 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     );
   }
 
+  Widget _rangeButton(SelectionRangeType type, String label) {
+    final selected = widget.selectionSnapshot?.rangeType == type;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: OutlinedButton.icon(
+        onPressed: () => epubPlayerKey.currentState?.changeSelectionRange(type),
+        icon: Icon(selected ? Icons.check : Icons.text_fields, size: 18),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size(48, 48),
+          foregroundColor: Prefs().eInkMode ? Colors.black : null,
+          side: BorderSide(
+            color: selected
+                ? Theme.of(context).colorScheme.onSurface
+                : Theme.of(context).colorScheme.outline,
+            width: selected ? 2 : 1,
+          ),
+          textStyle: TextStyle(fontWeight: selected ? FontWeight.bold : null),
+        ),
+      ),
+    );
+  }
+
+  Widget _sentenceButton(int direction, String label, bool enabled) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: OutlinedButton.icon(
+        onPressed: enabled
+            ? () => epubPlayerKey.currentState?.moveSelectionSentence(direction)
+            : null,
+        icon: Icon(direction < 0 ? Icons.chevron_left : Icons.chevron_right),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
+      ),
+    );
+  }
+
   IconAndText _copyAction() => IconAndText(
         compact: true,
         onTap: () {
@@ -469,7 +512,6 @@ class ExcerptMenuState extends State<ExcerptMenu> {
       SelectionMenuAction.addToVocabulary => _vocabularyAction(),
       SelectionMenuAction.ai => _aiAction(),
       SelectionMenuAction.copy => _copyAction(),
-      SelectionMenuAction.more => _moreAction(),
       SelectionMenuAction.webSearch => IconAndText(
           compact: true,
           onTap: _showWebSearchEngines,
@@ -573,6 +615,9 @@ class ExcerptMenuState extends State<ExcerptMenu> {
   @override
   Widget build(BuildContext context) {
     final actionPolicy = _actionPolicy;
+    final snapshot = widget.selectionSnapshot;
+    final showRangeControls =
+        snapshot != null && snapshot.supportsRangeSelection;
     Widget annotationMenu = Container(
       padding: const EdgeInsets.all(6),
       decoration: widget.decoration,
@@ -599,10 +644,39 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         children: [
           for (final action in actionPolicy.primaryActions)
             _buildSelectionAction(action),
+          if (actionPolicy.moreActions.isNotEmpty) _moreAction(),
           if (_showMoreActions) ...[
             for (final action in actionPolicy.moreActions)
               _buildSelectionAction(action),
           ],
+        ],
+      ),
+    );
+
+    final rangeMenu = Container(
+      decoration: widget.decoration,
+      padding: const EdgeInsets.all(4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Wrap(
+            children: [
+              _rangeButton(
+                  SelectionRangeType.word, L10n.of(context).selectionRangeWord),
+              _rangeButton(SelectionRangeType.sentence,
+                  L10n.of(context).selectionRangeSentence),
+              _rangeButton(SelectionRangeType.paragraph,
+                  L10n.of(context).selectionRangeParagraph),
+            ],
+          ),
+          Wrap(
+            children: [
+              _sentenceButton(-1, L10n.of(context).selectionPreviousSentence,
+                  snapshot?.canMovePrevious ?? false),
+              _sentenceButton(1, L10n.of(context).selectionNextSentence,
+                  snapshot?.canMoveNext ?? false),
+            ],
+          ),
         ],
       ),
     );
@@ -615,6 +689,13 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         mainAxisAlignment: MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (showRangeControls) ...[
+            SingleChildScrollView(
+              scrollDirection: widget.axis,
+              child: rangeMenu,
+            ),
+            const SizedBox.square(dimension: 8),
+          ],
           AxisFlex(
             axis: flipAxis(widget.axis),
             reverse: widget.reverse,

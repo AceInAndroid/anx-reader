@@ -32,6 +32,9 @@ import 'package:langchain_core/chat_models.dart';
 
 import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 
+// Keep the coach implementation available while its public entry is paused.
+const bool _showReadingCoachEntry = false;
+
 class AiChatStream extends ConsumerStatefulWidget {
   const AiChatStream({
     super.key,
@@ -869,7 +872,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
               () => _scaffoldKey.currentState?.openDrawer(),
         ),
         actions: [
-          if (widget.onOpenCoach != null)
+          if (_showReadingCoachEntry && widget.onOpenCoach != null)
             IconButton(
               key: const ValueKey('ai-reading-coach'),
               icon: const Icon(Icons.school_outlined),

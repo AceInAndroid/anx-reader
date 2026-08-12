@@ -19,6 +19,7 @@ import 'package:anx_reader/models/font_model.dart';
 import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/models/reading_rules.dart';
 import 'package:anx_reader/models/search_result_model.dart';
+import 'package:anx_reader/models/selection_snapshot.dart';
 import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/page/book_player/image_viewer.dart';
 import 'package:anx_reader/page/home_page.dart';
@@ -30,6 +31,7 @@ import 'package:anx_reader/providers/chapter_content_bridge.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
+import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/service/translate/translation_ai_provider_resolver.dart';
 import 'package:anx_reader/providers/toc_search.dart';
@@ -115,6 +117,9 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   bool bookmarkExists = false;
   WritingModeEnum writingMode = WritingModeEnum.horizontalTb;
   String? _lastSelectionContextText;
+  BookNote? _selectionAutoMarkNote;
+  int? _selectionAutoMarkSessionId;
+  Future<void> _selectionAutoMarkMutation = Future<void>.value();
   bool _selectionClearLocked = false;
   bool _selectionClearPending = false;
   late TranslationModeEnum _activeTranslationMode;
@@ -131,6 +136,78 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   bool _translationProgressActive = false;
   Timer? _currentPageTranslationTimer;
   bool _webViewReady = false;
+
+  Future<void> configureSelection() async {
+    if (!_webViewReady) return;
+    await webViewController.evaluateJavascript(source: '''
+      window.configureSelection && window.configureSelection({
+        longPressMode: ${jsonEncode(Prefs().longPressSelectionMode.name)},
+        eInkMode: ${Prefs().eInkMode},
+        platform: ${jsonEncode(AnxPlatform.type.name)}
+      });
+    ''');
+  }
+
+  Future<void> changeSelectionRange(SelectionRangeType type) async {
+    await webViewController.evaluateJavascript(
+      source:
+          'window.changeSelectionRange && window.changeSelectionRange(${jsonEncode(type.name)});',
+    );
+  }
+
+  Future<void> moveSelectionSentence(int direction) async {
+    await webViewController.evaluateJavascript(
+      source:
+          'window.moveSelectionSentence && window.moveSelectionSentence(${direction < 0 ? -1 : 1});',
+    );
+  }
+
+  Future<int?> upsertSelectionAutoMark(SelectionSnapshot snapshot) async {
+    if (!Prefs().autoMarkSelection || !snapshot.supportsRangeSelection) {
+      return null;
+    }
+    int? result;
+    _selectionAutoMarkMutation = _selectionAutoMarkMutation.then((_) async {
+      if (_selectionAutoMarkSessionId != snapshot.sessionId) {
+        _selectionAutoMarkNote = null;
+        _selectionAutoMarkSessionId = snapshot.sessionId;
+      }
+      final previous = _selectionAutoMarkNote;
+      final note = BookNote(
+        id: previous?.id,
+        bookId: widget.book.id,
+        content: snapshot.text,
+        cfi: snapshot.cfi,
+        chapter: chapterTitle,
+        type: previous?.type ?? Prefs().annotationType,
+        color: previous?.color ?? Prefs().annotationColor,
+        createTime: previous?.createTime ?? DateTime.now(),
+        updateTime: DateTime.now(),
+      );
+      try {
+        if (previous != null && previous.cfi != note.cfi) {
+          removeAnnotation(previous.cfi);
+        }
+        final id = await bookNoteDao.save(note);
+        note.setId(id);
+        _selectionAutoMarkNote = note;
+        addAnnotation(note);
+        result = id;
+      } catch (error, stack) {
+        AnxLog.warning('Failed to update temporary auto mark: $error\n$stack');
+        if (previous != null) addAnnotation(previous);
+        result = previous?.id;
+      }
+    });
+    await _selectionAutoMarkMutation;
+    return result;
+  }
+
+  void finalizeSelectionAutoMark() {
+    _selectionAutoMarkNote = null;
+    _selectionAutoMarkSessionId = null;
+  }
+
   late bool _lastEInkMode;
 
   // Scroll wheel debounce
@@ -939,14 +1016,15 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     controller.addJavaScriptHandler(
         handlerName: 'onSelectionEnd',
         callback: (args) {
-          removeOverlay();
+          removeOverlay(preserveAutoMarkSession: true);
           if (args.isEmpty || args.first is! Map) {
             AnxLog.warning('Selection menu ignored: invalid WebView payload');
             return;
           }
           final location = Map<String, dynamic>.from(args.first as Map);
-          final cfi = location['cfi']?.toString() ?? '';
-          final text = location['text']?.toString().trim() ?? '';
+          final snapshot = SelectionSnapshot.fromJson(location);
+          final cfi = snapshot.cfi;
+          final text = snapshot.text;
           final footnote = location['footnote'] == true;
           final rawPosition = location['pos'];
           if (cfi.isEmpty || text.isEmpty || rawPosition is! Map) {
@@ -964,9 +1042,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             AnxLog.warning('Selection menu ignored: invalid position');
             return;
           }
-          final rawContextText = location['contextText']?.toString();
-          _lastSelectionContextText =
-              (rawContextText?.trim().isEmpty ?? true) ? null : rawContextText;
+          _lastSelectionContextText = snapshot.contextText;
           unawaited(
             showContextMenu(
               context,
@@ -980,11 +1056,36 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
               footnote,
               writingMode.isVertical ? Axis.vertical : Axis.horizontal,
               contextText: _lastSelectionContextText,
+              selectionSnapshot: snapshot,
             ).catchError((Object error, StackTrace stack) {
               AnxLog.warning('Failed to show selection menu: $error\n$stack');
             }),
           );
         });
+    controller.addJavaScriptHandler(
+      handlerName: 'onWordBoundaryRequest',
+      callback: (args) async {
+        if (args.isEmpty || args.first is! Map) return false;
+        final request = Map<String, dynamic>.from(args.first as Map);
+        final sessionId = (request['sessionId'] as num?)?.toInt();
+        final text = request['text']?.toString() ?? '';
+        final offset = (request['offset'] as num?)?.toInt();
+        if (sessionId == null || text.isEmpty || offset == null) return false;
+        final boundary = await ChineseDictionaryService.resolveBoundary(
+          text,
+          offset,
+        );
+        if (!_webViewReady) return false;
+        await webViewController.evaluateJavascript(source: '''
+          window.applyResolvedWord && window.applyResolvedWord({
+            sessionId: $sessionId,
+            startOffset: ${boundary.startOffset},
+            endOffset: ${boundary.endOffset}
+          });
+        ''');
+        return true;
+      },
+    );
     controller.addJavaScriptHandler(
         handlerName: 'onSelectionCleared',
         callback: (args) {
@@ -1465,12 +1566,14 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         restoreProgress: false,
       );
       _activeTranslationDomCacheNamespace = _translationDomCacheStorageKey();
+      await configureSelection();
     });
   }
 
-  void removeOverlay() {
+  void removeOverlay({bool preserveAutoMarkSession = false}) {
     _selectionClearLocked = false;
     _selectionClearPending = false;
+    if (!preserveAutoMarkSession) finalizeSelectionAutoMark();
     if (contextMenuEntry == null || contextMenuEntry?.mounted == false) return;
     contextMenuEntry?.remove();
     contextMenuEntry = null;

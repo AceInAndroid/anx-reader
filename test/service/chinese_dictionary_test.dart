@@ -40,5 +40,28 @@ void main() {
 
       expect(entry, isNull);
     });
+
+    test('resolves the longest dictionary word around the clicked offset',
+        () async {
+      final boundary = await ChineseDictionaryService.resolveBoundary(
+        '他是一位著名作家。',
+        7,
+      );
+
+      expect(boundary.word, '作家');
+      expect(boundary.startOffset, 6);
+      expect(boundary.endOffset, 8);
+    });
+
+    test('falls back to the clicked Chinese character', () async {
+      final boundary = await ChineseDictionaryService.resolveBoundary(
+        '甲龘乙',
+        1,
+      );
+
+      expect(boundary.word, '龘');
+      expect(boundary.startOffset, 1);
+      expect(boundary.endOffset, 2);
+    });
   });
 }

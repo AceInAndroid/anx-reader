@@ -44,6 +44,18 @@ class ChineseDictionaryEntry {
   }
 }
 
+class ChineseWordBoundary {
+  const ChineseWordBoundary({
+    required this.word,
+    required this.startOffset,
+    required this.endOffset,
+  });
+
+  final String word;
+  final int startOffset;
+  final int endOffset;
+}
+
 class ChineseDictionaryService {
   ChineseDictionaryService._();
 
@@ -83,6 +95,44 @@ class ChineseDictionaryService {
       if (entry != null) return entry;
     }
     return exact;
+  }
+
+  static Future<ChineseWordBoundary> resolveBoundary(
+    String text,
+    int offset,
+  ) async {
+    if (text.isEmpty) {
+      return const ChineseWordBoundary(word: '', startOffset: 0, endOffset: 0);
+    }
+    final safeOffset = offset.clamp(0, text.length - 1);
+    final candidates = <ChineseWordBoundary>[];
+    final maxLength =
+        text.length < _maxBoundaryLength ? text.length : _maxBoundaryLength;
+    for (var length = maxLength; length >= 1; length--) {
+      final minStart = (safeOffset - length + 1).clamp(0, text.length);
+      final maxStart = safeOffset.clamp(0, text.length - length);
+      for (var start = minStart; start <= maxStart; start++) {
+        final end = start + length;
+        if (end > text.length || safeOffset >= end) continue;
+        final word = text.substring(start, end);
+        if (isChineseText(word)) {
+          candidates.add(ChineseWordBoundary(
+            word: word,
+            startOffset: start,
+            endOffset: end,
+          ));
+        }
+      }
+    }
+    for (final candidate in candidates) {
+      if (await _lookupExact(candidate.word) != null) return candidate;
+    }
+    final fallback = text.substring(safeOffset, safeOffset + 1);
+    return ChineseWordBoundary(
+      word: fallback,
+      startOffset: safeOffset,
+      endOffset: safeOffset + 1,
+    );
   }
 
   static Future<ChineseDictionaryEntry?> _lookupExact(String word) async {

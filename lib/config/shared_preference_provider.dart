@@ -22,6 +22,8 @@ import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/bgimg_fit.dart';
 import 'package:anx_reader/enums/code_highlight_theme.dart';
 import 'package:anx_reader/enums/app_theme_mode.dart';
+import 'package:anx_reader/enums/long_press_selection_mode.dart';
+import 'package:anx_reader/enums/selection_menu_action.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/bgimg.dart';
@@ -636,6 +638,56 @@ class Prefs extends ChangeNotifier {
 
   bool get autoMarkSelection {
     return prefs.getBool('autoMarkSelection') ?? false;
+  }
+
+  set longPressSelectionMode(LongPressSelectionMode mode) {
+    prefs.setString('longPressSelectionMode', mode.name);
+    notifyListeners();
+  }
+
+  LongPressSelectionMode get longPressSelectionMode {
+    return LongPressSelectionMode.fromCode(
+      prefs.getString('longPressSelectionMode'),
+    );
+  }
+
+  set selectionMenuActionOrder(List<SelectionMenuAction> actions) {
+    prefs.setStringList(
+      'selectionMenuActionOrder',
+      actions.map((action) => action.name).toList(growable: false),
+    );
+    notifyListeners();
+  }
+
+  List<SelectionMenuAction> get selectionMenuActionOrder {
+    return SelectionMenuAction.decodeOrder(
+      prefs.getStringList('selectionMenuActionOrder'),
+    );
+  }
+
+  set enabledSelectionMenuActions(Set<SelectionMenuAction> actions) {
+    prefs.setStringList(
+      'enabledSelectionMenuActions',
+      SelectionMenuAction.values
+          .where(actions.contains)
+          .map((action) => action.name)
+          .toList(growable: false),
+    );
+    notifyListeners();
+  }
+
+  Set<SelectionMenuAction> get enabledSelectionMenuActions {
+    final stored = prefs.getStringList('enabledSelectionMenuActions');
+    if (stored == null) return SelectionMenuAction.values.toSet();
+    return SelectionMenuAction.values
+        .where((action) => stored.contains(action.name))
+        .toSet();
+  }
+
+  void resetSelectionMenuActions() {
+    prefs.remove('selectionMenuActionOrder');
+    prefs.remove('enabledSelectionMenuActions');
+    notifyListeners();
   }
 
   set fullTextTranslateService(TranslateService service) {

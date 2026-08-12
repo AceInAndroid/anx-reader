@@ -1,19 +1,6 @@
+import 'package:anx_reader/enums/selection_menu_action.dart';
 import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/dictionary/english_dictionary.dart';
-
-enum SelectionMenuAction {
-  lookupOrTranslate,
-  addToVocabulary,
-  ai,
-  copy,
-  more,
-  webSearch,
-  paragraphTranslate,
-  narrate,
-  saveDifficulty,
-  note,
-  share,
-}
 
 class SelectionActionPolicy {
   const SelectionActionPolicy._({
@@ -31,26 +18,28 @@ class SelectionActionPolicy {
     required bool aiEnabled,
     required bool vocabularyEnabled,
     required bool footnote,
+    List<SelectionMenuAction>? actionOrder,
+    Set<SelectionMenuAction>? enabledActions,
   }) {
     final isDictionaryLookup = EnglishDictionaryService.isEnglishWord(text) ||
         ChineseDictionaryService.isLookupCandidate(text);
-    final primary = <SelectionMenuAction>[
-      SelectionMenuAction.lookupOrTranslate,
-      if (isDictionaryLookup && vocabularyEnabled)
-        SelectionMenuAction.addToVocabulary,
-      if (aiEnabled) SelectionMenuAction.ai,
-      if (!isDictionaryLookup) SelectionMenuAction.copy,
-      SelectionMenuAction.more,
-    ];
-    final more = <SelectionMenuAction>[
-      if (isDictionaryLookup) SelectionMenuAction.copy,
-      SelectionMenuAction.webSearch,
-      SelectionMenuAction.paragraphTranslate,
-      SelectionMenuAction.narrate,
-      if (!footnote) SelectionMenuAction.saveDifficulty,
-      if (!footnote) SelectionMenuAction.note,
-      SelectionMenuAction.share,
-    ];
+    final enabled = enabledActions ?? SelectionMenuAction.values.toSet();
+    final ordered = actionOrder ?? SelectionMenuAction.values;
+    final eligible = ordered.where((action) {
+      if (!enabled.contains(action)) return false;
+      if (action == SelectionMenuAction.addToVocabulary) {
+        return isDictionaryLookup && vocabularyEnabled;
+      }
+      if (action == SelectionMenuAction.ai) return aiEnabled;
+      if (footnote &&
+          (action == SelectionMenuAction.saveDifficulty ||
+              action == SelectionMenuAction.note)) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false);
+    final primary = eligible.take(3).toList(growable: false);
+    final more = eligible.skip(3).toList(growable: false);
     return SelectionActionPolicy._(
       isDictionaryLookup: isDictionaryLookup,
       primaryActions: List.unmodifiable(primary),

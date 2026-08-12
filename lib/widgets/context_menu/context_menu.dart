@@ -12,8 +12,7 @@ import 'package:anx_reader/widgets/context_menu/translation_menu.dart';
 import 'package:flutter/material.dart';
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 
-import 'package:anx_reader/dao/book_note.dart';
-import 'package:anx_reader/models/book_note.dart';
+import 'package:anx_reader/models/selection_snapshot.dart';
 
 Future<void> showContextMenu(
     BuildContext context,
@@ -26,7 +25,8 @@ Future<void> showContextMenu(
     int? annoId,
     bool footnote,
     Axis axis,
-    {String? contextText}) async {
+    {String? contextText,
+    SelectionSnapshot? selectionSnapshot}) async {
   final playerKey = epubPlayerKey.currentState;
   if (playerKey == null) return;
   final mediaQuery = MediaQuery.of(context);
@@ -38,27 +38,9 @@ Future<void> showContextMenu(
       EnglishDictionaryService.isEnglishWord(annoContent) ||
           ChineseDictionaryService.isLookupCandidate(annoContent);
 
-  if (Prefs().autoMarkSelection && annoId == null) {
-    // Auto-highlight logic
-    final String type = Prefs().annotationType;
-    final String color = Prefs().annotationColor;
-
-    final BookNote bookNote = BookNote(
-      bookId: playerKey.book.id,
-      content: annoContent,
-      cfi: annoCfi,
-      chapter: playerKey.chapterTitle,
-      type: type,
-      color: color,
-      createTime: DateTime.now(),
-      updateTime: DateTime.now(),
-    );
-
-    final id = await bookNoteDao.save(bookNote);
-    bookNote.setId(id);
-    playerKey.addAnnotation(bookNote);
-    annoId = id;
-    isNewNote = true;
+  if (annoId == null && selectionSnapshot != null) {
+    annoId = await playerKey.upsertSelectionAutoMark(selectionSnapshot);
+    isNewNote = annoId != null;
   }
 
   final renderBox =
@@ -119,9 +101,10 @@ Future<void> showContextMenu(
     bottomInset: keyboardInset,
   );
 
-  playerKey.removeOverlay();
+  playerKey.removeOverlay(preserveAutoMarkSession: true);
 
   void onClose() {
+    playerKey.finalizeSelectionAutoMark();
     playerKey.webViewController.evaluateJavascript(source: 'clearSelection()');
     playerKey.removeOverlay();
   }
@@ -156,6 +139,7 @@ Future<void> showContextMenu(
       annoId: annoId,
       footnote: footnote,
       contextText: contextText,
+      selectionSnapshot: selectionSnapshot,
       decoration: decoration,
       onClose: onClose,
       menuConstraints: menuConstraints,
@@ -261,6 +245,7 @@ class _ContextMenuOverlay extends StatefulWidget {
     required this.annoId,
     required this.footnote,
     this.contextText,
+    this.selectionSnapshot,
     required this.decoration,
     required this.onClose,
     required this.menuConstraints,
@@ -280,6 +265,7 @@ class _ContextMenuOverlay extends StatefulWidget {
   final int? annoId;
   final bool footnote;
   final String? contextText;
+  final SelectionSnapshot? selectionSnapshot;
   final BoxDecoration decoration;
   final VoidCallback onClose;
   final BoxConstraints menuConstraints;
@@ -534,6 +520,7 @@ class _ContextMenuOverlayState extends State<_ContextMenuOverlay>
                                   axis: widget.axis,
                                   reverse: _reverse,
                                   contextText: widget.contextText,
+                                  selectionSnapshot: widget.selectionSnapshot,
                                 ),
                               ],
                             ),

@@ -5,6 +5,7 @@ import './view.js'
 import { FootnoteHandler } from './footnotes.js'
 import { Overlayer } from './overlayer.js'
 import { collapse, compare, fromRange, toRange } from './epubcfi.js'
+import { SelectionRangeController } from './selection-range.js'
 const { configure, ZipReader, BlobReader, TextWriter, BlobWriter } =
   await import('./vendor/zip.js')
 const { EPUB } = await import('./epub.js')
@@ -140,7 +141,15 @@ const buildRangeContextText = (range) => {
   return contextText;
 };
 
-const handleSelection = (view, doc, index) => {
+const selectionControllers = new Map()
+let activeSelectionController = null
+let selectionConfiguration = {
+  longPressMode: 'sentence',
+  eInkMode: false,
+  platform: 'android',
+}
+
+const handleSelection = (view, doc, index, controller = selectionControllers.get(doc)) => {
   const selection = doc.getSelection();
   const range = getSelectionRange(selection);
 
@@ -160,6 +169,16 @@ const handleSelection = (view, doc, index) => {
 
   const contextText = buildRangeContextText(range);
 
+  const selectionMeta = controller ? controller.snapshot() : {
+    sessionId: 0,
+    rangeType: 'custom',
+    trigger: 'manual',
+    canMovePrevious: false,
+    canMoveNext: false,
+    supportsRangeSelection: false,
+  }
+  activeSelectionController = controller || null
+
   onSelectionEnd({
     index,
     range,
@@ -167,7 +186,9 @@ const handleSelection = (view, doc, index) => {
     cfi,
     pos: position,
     text,
-    contextText
+    contextText,
+    ...selectionMeta,
+    supportsRangeSelection: selectionMeta.supportsRangeSelection && !doc.__isFootNote,
   });
   return true;
 };
@@ -244,10 +265,38 @@ const setSelectionHandler = (view, doc, index) => {
   doc.__anxSelectionClearedAt = 0;
   doc.__anxSuppressClick = false;
 
+  const rangeController = new SelectionRangeController({
+    doc,
+    index,
+    longPressMode: selectionConfiguration.longPressMode,
+    emitSelection: () => handleSelection(view, doc, index, rangeController),
+    requestWordBoundary: payload => {
+      activeSelectionController = rangeController
+      callFlutter('onWordBoundaryRequest', payload)
+    },
+  })
+  selectionControllers.set(doc, rangeController)
+  rangeController.install()
+
+  const isDesktop = navigator.platform.includes('Mac') || navigator.platform.includes('Win')
+  if (isDesktop) {
+    doc.addEventListener('contextmenu', event => {
+      event.preventDefault()
+      const selection = doc.getSelection()
+      if (selection && !selection.isCollapsed && selection.toString().trim()) {
+        rangeController.markManual()
+        handleSelection(view, doc, index, rangeController)
+        return
+      }
+      rangeController.selectAtPoint(event.clientX, event.clientY, 'sentence', 'contextMenu')
+    }, true)
+  }
+
   // Notify Flutter when the selection collapses so it can hide the context menu.
   const handleSelectionStateChange = () => {
     const selectionRange = getSelectionRange(doc.getSelection());
     if (selectionRange) {
+      rangeController.markManual()
       hasActiveSelection = true;
       doc.__anxSelectionClearedAt = 0;
       doc.__anxSuppressClick = false;
@@ -290,9 +339,10 @@ const setSelectionHandler = (view, doc, index) => {
     || navigator.platform.includes('iPhone')
     || navigator.platform.includes('iPad')
   ) {
-    doc.addEventListener('pointerup', () => {
+    doc.addEventListener('pointerup', event => {
       if (shouldSkipPointerUp()) return;
-      handleSelection(view, doc, index);
+      if (event.pointerType === 'touch' && rangeController.expandLongPressSelection()) return;
+      handleSelection(view, doc, index, rangeController);
     });
   }
   else if (navigator.platform.includes('Win')) {
@@ -317,7 +367,7 @@ const setSelectionHandler = (view, doc, index) => {
       doc.addEventListener('pointerup', (e) => {
         if (e.pointerType === 'touch') return;
         if (shouldSkipPointerUp()) return;
-        handleSelection(view, doc, index);
+        handleSelection(view, doc, index, rangeController);
       });
 
       // filter out selectionchange event cause by mouse
@@ -341,14 +391,14 @@ const setSelectionHandler = (view, doc, index) => {
         clearTimeout(debounceTimerId);
         let delay = 500;
         debounceTimerId = setTimeout(() => {
-          handleSelection(view, doc, index);
+          handleSelection(view, doc, index, rangeController);
         }, delay);
       });
 
     } else {
       doc.addEventListener('pointerup', () => {
         if (shouldSkipPointerUp()) return;
-        handleSelection(view, doc, index);
+        handleSelection(view, doc, index, rangeController);
       });
     }
   }
@@ -367,7 +417,7 @@ const setSelectionHandler = (view, doc, index) => {
       // Wait for selection to settle (e.g. 600ms after last change)
       // This handles the case where pointerup/touchend is swallowed by native handles
       debounceTimerId = setTimeout(() => {
-        handleSelection(view, doc, index);
+        handleSelection(view, doc, index, rangeController);
       }, 600);
     });
   } else { // Android
@@ -382,7 +432,11 @@ const setSelectionHandler = (view, doc, index) => {
       androidDebounceTimerId = setTimeout(() => {
         const currentRange = getSelectionRange(doc.getSelection());
         if (currentRange && currentRange.toString().trim().length > 0) {
-          handleSelection(view, doc, index);
+          if (hasNativeSelectionStarted && rangeController.expandLongPressSelection()) {
+            hasNativeSelectionStarted = false;
+            return;
+          }
+          handleSelection(view, doc, index, rangeController);
         }
       }, delay);
     };
@@ -401,7 +455,7 @@ const setSelectionHandler = (view, doc, index) => {
     doc.addEventListener('pointerup', (e) => {
       if (e.pointerType === 'mouse') {
         if (shouldSkipPointerUp()) return;
-        handleSelection(view, doc, index);
+        handleSelection(view, doc, index, rangeController)
         return;
       }
 
@@ -411,7 +465,7 @@ const setSelectionHandler = (view, doc, index) => {
     doc.addEventListener('contextmenu', e => {
       // Allow mouse context menu (if any)
       if (e.pointerType === 'mouse') {
-        handleSelection(view, doc, index);
+        handleSelection(view, doc, index, rangeController);
         return;
       }
 
@@ -1993,7 +2047,7 @@ window.setNoAnimation = () => {
 }
 
 const onSelectionEnd = (selection) => {
-  if (window.isFootNoteOpen() || isPdf) {
+  if (window.isFootNoteOpen()) {
     callFlutter('onSelectionEnd', { ...selection, footnote: true })
   } else {
     callFlutter('onSelectionEnd', { ...selection, footnote: false })
@@ -2011,6 +2065,37 @@ window.showContextMenu = () => {
 window.getSelection = () => reader.getSelection()
 
 window.clearSelection = () => reader.view.deselect()
+
+window.configureSelection = config => {
+  selectionConfiguration = { ...selectionConfiguration, ...(config || {}) }
+  selectionControllers.forEach(controller => controller.configure(selectionConfiguration))
+  return true
+}
+
+window.selectAtPoint = config => {
+  if (!activeSelectionController || !config) return false
+  return activeSelectionController.selectAtPoint(
+    Number(config.x),
+    Number(config.y),
+    config.rangeType,
+    config.trigger || 'api',
+  )
+}
+
+window.changeSelectionRange = rangeType => {
+  if (!activeSelectionController) return false
+  return activeSelectionController.changeRange(rangeType)
+}
+
+window.moveSelectionSentence = direction => {
+  if (!activeSelectionController) return false
+  return activeSelectionController.moveSentence(Number(direction) < 0 ? -1 : 1)
+}
+
+window.applyResolvedWord = result => {
+  if (!activeSelectionController || !result) return false
+  return activeSelectionController.applyResolvedWord(result)
+}
 
 window.addAnnotation = (annotation) => reader.addAnnotation(annotation)
 
