@@ -479,6 +479,32 @@ class ExcerptMenuState extends State<ExcerptMenu> {
           icon: const Icon(Icons.headphones),
           text: L10n.of(context).contextMenuNarrate,
         ),
+      SelectionMenuAction.saveDifficulty => IconAndText(
+          compact: true,
+          onTap: () async {
+            final player = epubPlayerKey.currentState;
+            final readingPage = readingPageKey.currentState;
+            if (player == null || readingPage == null) {
+              AnxToast.show(L10n.of(context).commonFailed);
+              return;
+            }
+            final snapshot = ReadingContextSnapshot(
+              bookId: player.book.id.toString(),
+              bookTitle: player.book.title,
+              author: player.book.author,
+              chapterTitle: player.chapterTitle,
+              chapterHref: player.chapterHref,
+              selectedText: widget.annoContent.trim(),
+              surroundingText: widget.contextText?.trim(),
+              capturedAt: DateTime.now().millisecondsSinceEpoch,
+              metadata: {'cfi': widget.annoCfi},
+            );
+            widget.onClose();
+            await readingPage.saveReadingDifficulty(snapshot);
+          },
+          icon: const Icon(Icons.inventory_2_outlined),
+          text: '暂存难点',
+        ),
       SelectionMenuAction.note => IconAndText(
           compact: true,
           onTap: () async {

@@ -338,6 +338,7 @@ export class View extends HTMLElement {
   }
   async addAnnotation(annotation, remove) {
     const { value } = annotation
+    const annotationKey = annotation.annotationKey ?? value
     if (value.startsWith(SEARCH_PREFIX)) {
       const cfi = value.replace(SEARCH_PREFIX, '')
       const { index, anchor } = await this.resolveNavigation(cfi)
@@ -345,11 +346,11 @@ export class View extends HTMLElement {
       if (obj) {
         const { overlayer, doc } = obj
         if (remove) {
-          overlayer.remove(value)
+          overlayer.remove(annotationKey)
           return
         }
         const range = doc ? anchor(doc) : anchor
-        overlayer.add(value, range, Overlayer.outline, { color: '#39c5bbaa' });
+        overlayer.add(annotationKey, range, Overlayer.outline, { color: '#39c5bbaa' });
       }
       return
     }
@@ -357,10 +358,10 @@ export class View extends HTMLElement {
     const obj = this.#getOverlayer(index)
     if (obj) {
       const { overlayer, doc } = obj
-      overlayer.remove(value)
+      overlayer.remove(annotationKey)
       if (!remove) {
         const range = doc ? anchor(doc) : anchor
-        const draw = (func, opts) => overlayer.add(value, range, func, opts)
+        const draw = (func, opts) => overlayer.add(annotationKey, range, func, opts)
         this.#emit('draw-annotation', { draw, annotation, doc, range })
       }
     }
@@ -377,11 +378,11 @@ export class View extends HTMLElement {
   #createOverlayer({ doc, index }) {
     const overlayer = new Overlayer(doc)
     doc.addEventListener('click', e => {
-      const [value, range] = overlayer.hitTest(e)
-      if (value && !value.startsWith(SEARCH_PREFIX)) {
+      const [annotationKey, range] = overlayer.hitTest(e)
+      if (annotationKey && !annotationKey.startsWith(SEARCH_PREFIX)) {
         e.preventDefault()
         e.stopPropagation()
-        this.#emit('show-annotation', { value, index, range })
+        this.#emit('show-annotation', { value: annotationKey, index, range })
       }
     }, true)
 
@@ -392,13 +393,13 @@ export class View extends HTMLElement {
     return overlayer
   }
   async showAnnotation(annotation) {
-    const { value } = annotation
+    const { value, annotationKey } = annotation
     const resolved = await this.goTo(value)
     if (resolved) {
       const { index, anchor } = resolved
       const { doc } = this.#getOverlayer(index)
       const range = anchor(doc)
-      this.#emit('show-annotation', { value, index, range })
+      this.#emit('show-annotation', { value: annotationKey ?? value, index, range })
     }
   }
   getCFI(index, range) {

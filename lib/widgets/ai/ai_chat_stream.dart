@@ -41,6 +41,7 @@ class AiChatStream extends ConsumerStatefulWidget {
     this.trailing,
     this.onOpenHistory,
     this.onOpenAgents,
+    this.onOpenCoach,
     this.title,
     this.onDraftChanged,
     this.initialScrollOffset = 0,
@@ -54,6 +55,7 @@ class AiChatStream extends ConsumerStatefulWidget {
   final List<Widget>? trailing;
   final VoidCallback? onOpenHistory;
   final VoidCallback? onOpenAgents;
+  final VoidCallback? onOpenCoach;
   final String? title;
   final ValueChanged<String>? onDraftChanged;
   final double initialScrollOffset;
@@ -867,6 +869,13 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
               () => _scaffoldKey.currentState?.openDrawer(),
         ),
         actions: [
+          if (widget.onOpenCoach != null)
+            IconButton(
+              key: const ValueKey('ai-reading-coach'),
+              icon: const Icon(Icons.school_outlined),
+              tooltip: '阅读教练',
+              onPressed: widget.onOpenCoach,
+            ),
           IconButton(
             key: const ValueKey('ai-reading-settings'),
             icon: const Icon(Icons.settings_outlined),

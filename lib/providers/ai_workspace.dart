@@ -4,7 +4,7 @@ import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_frameworks.dart';
 import 'package:flutter/foundation.dart';
 
-enum AiWorkspaceView { chat, history, sessionDetail, agentsAndSources }
+enum AiWorkspaceView { chat, coach, history, sessionDetail, agentsAndSources }
 
 class AiWorkspaceController extends ChangeNotifier {
   AiWorkspaceController({required this.bookId})
@@ -41,6 +41,7 @@ class AiWorkspaceController extends ChangeNotifier {
   }
 
   void showChat() => _setView(AiWorkspaceView.chat);
+  void showCoach() => _setView(AiWorkspaceView.coach);
   void showHistory() => _setView(AiWorkspaceView.history);
   void showAgentsAndSources() => _setView(AiWorkspaceView.agentsAndSources);
 

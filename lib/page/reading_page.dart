@@ -13,6 +13,9 @@ import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/providers/ai_workspace.dart';
+import 'package:anx_reader/providers/reading_coach.dart';
+import 'package:anx_reader/service/ai/reading_coach_policy.dart';
+import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/page/book_detail.dart';
 import 'package:anx_reader/page/book_player/epub_player.dart';
 import 'package:anx_reader/providers/sync.dart';
@@ -85,6 +88,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   static const double _aiChatMinHeight = 200;
   late double _aiChatHeight;
   bool _isResizingAiChat = false;
+  bool _inspectionReminderShown = false;
   bool bookmarkExists = false;
 
   bool _usesAiSplitLayout(BuildContext context) {
@@ -463,6 +467,65 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   }
 
   Future<void> onLoadEnd() async {
+    final coach = await ref.read(readingCoachProvider(_book.id).future);
+    for (final difficulty in coach.difficulties.where(
+      (item) => item.status == ReadingDifficultyStatus.unresolved,
+    )) {
+      epubPlayerKey.currentState?.addDifficultyAnnotation(
+        id: difficulty.id,
+        cfi: difficulty.cfi,
+      );
+    }
+    if (!_inspectionReminderShown &&
+        coach.guide.status == InspectionGuideStatus.notStarted) {
+      _inspectionReminderShown = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final messenger = ScaffoldMessenger.of(context);
+        messenger
+          ..clearMaterialBanners()
+          ..showMaterialBanner(
+            MaterialBanner(
+              content: const Text('先用检视阅读快速判断本书主题和阅读目标？全程可只点选项。'),
+              actions: [
+                TextButton(
+                  onPressed: messenger.hideCurrentMaterialBanner,
+                  child: const Text('稍后'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    messenger.hideCurrentMaterialBanner();
+                    await ref
+                        .read(readingCoachProvider(_book.id).notifier)
+                        .saveGuide(
+                          coach.guide.copyWith(
+                            status: InspectionGuideStatus.dismissed,
+                            updatedAt: DateTime.now().millisecondsSinceEpoch,
+                          ),
+                        );
+                  },
+                  child: const Text('不再提醒'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    messenger.hideCurrentMaterialBanner();
+                    await ref
+                        .read(readingCoachProvider(_book.id).notifier)
+                        .saveGuide(
+                          coach.guide.copyWith(
+                            status: InspectionGuideStatus.inProgress,
+                            updatedAt: DateTime.now().millisecondsSinceEpoch,
+                          ),
+                        );
+                    await showReadingCoach();
+                  },
+                  child: const Text('开始检视'),
+                ),
+              ],
+            ),
+          );
+      });
+    }
     if (Prefs().autoSummaryPreviousContent) {
       final previousContent =
           await epubPlayerKey.currentState!.previousContent(2000);
@@ -528,8 +591,53 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       bookAuthor: _book.author,
       bookDescription: _book.description,
       onRestoreReadingContext: _restoreAiReadingContext,
+      onFetchChapter: (href) =>
+          epubPlayerKey.currentState
+              ?.chapterContentByHref(href, maxCharacters: 6000) ??
+          Future.value(''),
+      onFetchChapterSample: (href) =>
+          epubPlayerKey.currentState?.chapterContentByHref(href) ??
+          Future.value(''),
+      onNavigateChapter: (target) {
+        if (target.startsWith('epubcfi(')) {
+          epubPlayerKey.currentState?.goToCfi(target);
+        } else {
+          epubPlayerKey.currentState?.goToHref(target);
+        }
+      },
+      onDifficultySaved: (item) => epubPlayerKey.currentState
+          ?.addDifficultyAnnotation(id: item.id, cfi: item.cfi),
+      onDifficultyResolved: (item) =>
+          epubPlayerKey.currentState?.removeAnnotation('difficulty:${item.id}'),
       trailing: trailing ?? _buildAiChatTrailing(context),
     );
+  }
+
+  Future<void> _onChapterChanged({
+    required String previousHref,
+    required String previousTitle,
+    required double highestProgress,
+    required String currentHref,
+  }) async {
+    final state = await ref.read(readingCoachProvider(_book.id).future);
+    if (!shouldCreateChapterQuiz(
+      previousHref: previousHref,
+      currentHref: currentHref,
+      highestProgress: highestProgress,
+      existingChapterHrefs: state.quizzes.map((quiz) => quiz.chapterHref),
+    )) {
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await ref.read(readingCoachProvider(_book.id).notifier).saveQuiz(
+          ChapterQuiz(
+            id: '${_book.id}-${previousHref.hashCode}-$now',
+            bookId: _book.id,
+            chapterHref: previousHref,
+            chapterTitle: previousTitle,
+            updatedAt: now,
+          ),
+        );
   }
 
   List<AiQuickPromptChip> _getAiQuickPromptChips() {
@@ -590,6 +698,40 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         aiChatKey.currentState?.sendPrompt(content);
       });
     }
+  }
+
+  Future<void> showReadingCoach() async {
+    aiWorkspaceController.showCoach();
+    await showAiChat();
+  }
+
+  Future<void> saveReadingDifficulty(ReadingContextSnapshot snapshot) async {
+    final text = snapshot.selectedText?.trim() ?? '';
+    final cfi = snapshot.metadata['cfi']?.toString() ?? '';
+    if (text.isEmpty || cfi.isEmpty) {
+      AnxToast.show('无法读取选区位置');
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final difficulty = ReadingDifficulty(
+      id: '${_book.id}-$now',
+      bookId: _book.id,
+      cfi: cfi,
+      text: text,
+      chapterHref: snapshot.chapterHref,
+      chapterTitle: snapshot.chapterTitle,
+      context: snapshot.surroundingText,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final saved = await ref
+        .read(readingCoachProvider(_book.id).notifier)
+        .saveDifficulty(difficulty);
+    epubPlayerKey.currentState?.addDifficultyAnnotation(
+      id: saved.id,
+      cfi: saved.cfi,
+    );
+    AnxToast.show(saved.id == difficulty.id ? '已暂存难点' : '该难点已存在');
   }
 
   Future<void> _restoreAiReadingContext(AiChatHistoryEntry entry) async {
@@ -771,8 +913,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       ),
     );
 
-    final isMobileAiVisible = !_usesAiSplitLayout(context) &&
-        aiWorkspaceController.visible;
+    final isMobileAiVisible =
+        !_usesAiSplitLayout(context) && aiWorkspaceController.visible;
     return PopScope<void>(
       canPop: !isMobileAiVisible,
       onPopInvokedWithResult: (didPop, _) {
@@ -840,6 +982,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                     onLoadEnd: onLoadEnd,
                                     initialThemes: widget.initialThemes,
                                     updateParent: updateState,
+                                    onChapterChanged: _onChapterChanged,
                                   ),
                                   if (_isResizingAiChat)
                                     SizedBox.expand(

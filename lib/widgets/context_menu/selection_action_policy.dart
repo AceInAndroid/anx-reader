@@ -10,6 +10,7 @@ enum SelectionMenuAction {
   webSearch,
   paragraphTranslate,
   narrate,
+  saveDifficulty,
   note,
   share,
 }
@@ -46,6 +47,7 @@ class SelectionActionPolicy {
       SelectionMenuAction.webSearch,
       SelectionMenuAction.paragraphTranslate,
       SelectionMenuAction.narrate,
+      if (!footnote) SelectionMenuAction.saveDifficulty,
       if (!footnote) SelectionMenuAction.note,
       SelectionMenuAction.share,
     ];

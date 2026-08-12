@@ -18,6 +18,7 @@ void main() {
       SelectionMenuAction.more,
     ]);
     expect(policy.moreActions, contains(SelectionMenuAction.copy));
+    expect(policy.moreActions, contains(SelectionMenuAction.saveDifficulty));
   });
 
   test('passage selection prioritizes translation, AI, and copy', () {
@@ -51,5 +52,9 @@ void main() {
       isNot(contains(SelectionMenuAction.addToVocabulary)),
     );
     expect(policy.moreActions, isNot(contains(SelectionMenuAction.note)));
+    expect(
+      policy.moreActions,
+      isNot(contains(SelectionMenuAction.saveDifficulty)),
+    );
   });
 }

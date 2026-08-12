@@ -90,14 +90,14 @@ void main() {
     expect(columnNames, contains('example_translation'));
   });
 
-  test('version 11 migration creates AI sessions table with all columns',
+  test('version 12 migration creates AI sessions table with all columns',
       () async {
     final db = await openTempDb('ai_sessions.db');
     addTearDown(db.close);
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 11);
+    expect(currentDbVersion, 13);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -125,6 +125,36 @@ void main() {
         'updatedAt',
       }),
     );
+  });
+
+  test('version 12 migration creates active reading coach tables', () async {
+    final db = await openTempDb('reading_coach.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 11, currentDbVersion);
+
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'tb_reading_guides',
+        'tb_reading_quizzes',
+        'tb_reading_difficulties'
+      )
+    ''');
+    expect(tables.map((row) => row['name']).toSet(), {
+      'tb_reading_guides',
+      'tb_reading_quizzes',
+      'tb_reading_difficulties',
+    });
+
+    final indexes = await db.rawQuery('''
+      SELECT name FROM sqlite_master
+      WHERE type = 'index' AND name IN (
+        'idx_reading_quizzes_book_chapter',
+        'idx_reading_difficulties_book_status'
+      )
+    ''');
+    expect(indexes, hasLength(2));
   });
 
   test('upgrade from version 10 adds deep-reading session columns', () async {
@@ -164,5 +194,29 @@ void main() {
         'analysisResult',
       }),
     );
+  });
+
+  test('version 13 migration creates reading memory tables and indexes',
+      () async {
+    final db = await openTempDb('reading_memory.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 12, currentDbVersion);
+
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+        'tb_reading_memory_sources', 'tb_reading_memory_topics',
+        'tb_reading_topic_sources', 'tb_reading_knowledge_cards',
+        'tb_reading_card_sources', 'tb_reading_card_reviews'
+      )
+    ''');
+    expect(tables, hasLength(6));
+    final indexes = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
+        'idx_memory_sources_book', 'idx_memory_topics_book_status',
+        'idx_memory_cards_book_due', 'idx_memory_reviews_book_time'
+      )
+    ''');
+    expect(indexes, hasLength(4));
   });
 }

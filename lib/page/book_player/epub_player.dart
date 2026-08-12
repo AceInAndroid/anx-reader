@@ -67,6 +67,12 @@ class EpubPlayer extends ConsumerStatefulWidget {
   final Function onLoadEnd;
   final List<ReadTheme> initialThemes;
   final Function updateParent;
+  final void Function({
+    required String previousHref,
+    required String previousTitle,
+    required double highestProgress,
+    required String currentHref,
+  })? onChapterChanged;
 
   const EpubPlayer(
       {super.key,
@@ -75,7 +81,8 @@ class EpubPlayer extends ConsumerStatefulWidget {
       this.cfi,
       required this.onLoadEnd,
       required this.initialThemes,
-      required this.updateParent});
+      required this.updateParent,
+      this.onChapterChanged});
 
   @override
   ConsumerState<EpubPlayer> createState() => EpubPlayerState();
@@ -89,6 +96,9 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   double percentage = 0.0;
   String chapterTitle = '';
   String chapterHref = '';
+  String _trackedChapterHref = '';
+  String _trackedChapterTitle = '';
+  double _trackedChapterProgress = 0;
   int chapterCurrentPage = 0;
   int chapterTotalPages = 0;
   OverlayEntry? contextMenuEntry;
@@ -464,8 +474,27 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
       ''');
   }
 
-  void removeAnnotation(String cfi) =>
-      webViewController.evaluateJavascript(source: "removeAnnotation('$cfi')");
+  void removeAnnotation(String annotationKey) => webViewController
+      .evaluateJavascript(source: "removeAnnotation('$annotationKey')");
+
+  void addDifficultyAnnotation({
+    required String id,
+    required String cfi,
+  }) {
+    final encodedId = jsonEncode(id);
+    final encodedKey = jsonEncode('difficulty:$id');
+    final encodedCfi = jsonEncode(cfi);
+    webViewController.evaluateJavascript(source: '''
+      addAnnotation({
+        id: $encodedId,
+        annotationKey: $encodedKey,
+        type: 'underline',
+        value: $encodedCfi,
+        color: '#000000',
+        note: 'reading-difficulty',
+      })
+    ''');
+  }
 
   void clearSearch() {
     ref.read(tocSearchProvider.notifier).clear();
@@ -622,6 +651,12 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     }
     return '';
   }
+
+  Future<String> chapterContentByHref(
+    String href, {
+    int? maxCharacters,
+  }) =>
+      _getChapterContentByHref(href, maxCharacters: maxCharacters);
 
   String _normalizeChapterContent(String? content, int? maxCharacters) {
     if (content == null || content.isEmpty) {
@@ -816,18 +851,48 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         handlerName: 'onRelocated',
         callback: (args) {
           Map<String, dynamic> location = args[0];
-          if (cfi == location['cfi']) return;
+          final nextHref = location['chapterHref']?.toString() ?? '';
+          final nextTitle = location['chapterTitle']?.toString() ?? '';
+          final nextCfi = location['cfi']?.toString() ?? '';
+          if (nextCfi.isNotEmpty && cfi == nextCfi && chapterHref == nextHref) {
+            return;
+          }
+          final nextCurrentPage =
+              (location['chapterCurrentPage'] as num?)?.toInt() ?? 0;
+          final nextTotalPages =
+              (location['chapterTotalPages'] as num?)?.toInt() ?? 0;
+          final nextProgress = nextTotalPages <= 0
+              ? 0.0
+              : (nextCurrentPage / nextTotalPages).clamp(0.0, 1.0);
+          if (_trackedChapterHref.isNotEmpty &&
+              nextHref.isNotEmpty &&
+              nextHref != _trackedChapterHref) {
+            widget.onChapterChanged?.call(
+              previousHref: _trackedChapterHref,
+              previousTitle: _trackedChapterTitle,
+              highestProgress: _trackedChapterProgress,
+              currentHref: nextHref,
+            );
+            _trackedChapterProgress = 0;
+          }
+          if (nextHref.isNotEmpty) {
+            _trackedChapterHref = nextHref;
+            _trackedChapterTitle = nextTitle;
+            if (nextProgress > _trackedChapterProgress) {
+              _trackedChapterProgress = nextProgress;
+            }
+          }
           // if (chapterHref != location['chapterHref']) {
           //   refreshToc();
           // }
           setState(() {
-            cfi = location['cfi'] ?? '';
+            cfi = nextCfi;
             percentage =
                 double.tryParse(location['percentage'].toString()) ?? 0.0;
             chapterTitle = location['chapterTitle'] ?? '';
             chapterHref = location['chapterHref'] ?? '';
-            chapterCurrentPage = location['chapterCurrentPage'] ?? 0;
-            chapterTotalPages = location['chapterTotalPages'] ?? 0;
+            chapterCurrentPage = nextCurrentPage;
+            chapterTotalPages = nextTotalPages;
             bookmarkExists = location['bookmark']['exists'] ?? false;
             bookmarkCfi = location['bookmark']['cfi'] ?? '';
             writingMode =
@@ -946,6 +1011,11 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
                 audioHandler.play();
               }
             }
+            return;
+          }
+
+          if (annotation['annotation']['note'] == 'reading-difficulty') {
+            readingPageKey.currentState?.showReadingCoach();
             return;
           }
 

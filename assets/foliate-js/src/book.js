@@ -1274,9 +1274,11 @@ class Reader {
 
     view.addEventListener('draw-annotation', e => {
       const { draw, annotation } = e.detail
-      const { color, type } = annotation
+      const { color, type, note } = annotation
       const opts = { color, writingMode: this.view.renderer.writingMode }
       if (type === 'highlight') draw(Overlayer.highlight, { ...opts })
+      else if (type === 'underline' && note === 'reading-difficulty')
+        draw(Overlayer.dashedUnderline, { ...opts })
       else if (type === 'underline') draw(Overlayer.underline, { ...opts })
     })
 
@@ -1321,13 +1323,14 @@ class Reader {
   renderAnnotation(annotations) {
     const annos = annotations ?? allAnnotations ?? []
     for (const anno of annos) {
-      const { value, type, color, note } = anno
+      const { value, type, color, note, annotationKey } = anno
       const annotation = {
         id: anno.id,
         value,
         type,
         color,
-        note
+        note,
+        annotationKey,
       }
 
       this.addAnnotation(annotation)
@@ -1341,13 +1344,19 @@ class Reader {
 
   addAnnotation(annotation) {
     const { value } = annotation
+    const annotationKey = annotation.annotationKey ?? value
     const spineCode = (value.split('/')[2].split('!')[0] - 2) / 2
 
     const list = this.annotations.get(spineCode)
-    if (list) list.push(annotation)
+    if (list) {
+      const existingIndex = list.findIndex(item =>
+        (item.annotationKey ?? item.value) === annotationKey)
+      if (existingIndex === -1) list.push(annotation)
+      else list[existingIndex] = annotation
+    }
     else this.annotations.set(spineCode, [annotation])
 
-    this.annotationsByValue.set(value, annotation)
+    this.annotationsByValue.set(annotationKey, annotation)
 
     if (annotation.type === 'bookmark') {
       if (this.#checkBookmark(annotation)) {
@@ -1406,19 +1415,20 @@ class Reader {
     }
   }
 
-  removeAnnotation(cfi) {
-    const annotation = this.annotationsByValue.get(cfi)
+  removeAnnotation(annotationKey) {
+    const annotation = this.annotationsByValue.get(annotationKey)
     if (!annotation) return
     const { value } = annotation
     const spineCode = (value.split('/')[2].split('!')[0] - 2) / 2
 
     const list = this.annotations.get(spineCode)
     if (list) {
-      const index = list.findIndex(a => a.id === annotation.id)
+      const index = list.findIndex(item =>
+        (item.annotationKey ?? item.value) === annotationKey)
       if (index !== -1) list.splice(index, 1)
     }
 
-    this.annotationsByValue.delete(value)
+    this.annotationsByValue.delete(annotation.annotationKey ?? value)
 
     this.view.addAnnotation(annotation, true)
 

@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 11;
+const int currentDbVersion = 13;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -161,6 +161,98 @@ CREATE TABLE IF NOT EXISTS tb_ai_sessions (
   createdAt INTEGER NOT NULL,
   updatedAt INTEGER NOT NULL
 )
+''';
+
+const createReadingGuidesSQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_guides (
+  book_id INTEGER PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'notStarted',
+  topic_choice TEXT,
+  goal_choice TEXT,
+  note TEXT,
+  report TEXT,
+  answers TEXT NOT NULL DEFAULT '{}',
+  updated_at INTEGER NOT NULL
+)
+''';
+
+const createReadingQuizzesSQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_quizzes (
+  id TEXT PRIMARY KEY,
+  book_id INTEGER NOT NULL,
+  chapter_href TEXT NOT NULL,
+  chapter_title TEXT,
+  questions TEXT NOT NULL DEFAULT '[]',
+  answers TEXT NOT NULL DEFAULT '{}',
+  mastery TEXT,
+  completed INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+)
+''';
+
+const createReadingDifficultiesSQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_difficulties (
+  id TEXT PRIMARY KEY,
+  book_id INTEGER NOT NULL,
+  cfi TEXT NOT NULL,
+  selected_text TEXT NOT NULL,
+  chapter_href TEXT,
+  chapter_title TEXT,
+  context TEXT,
+  difficulty_type TEXT NOT NULL DEFAULT 'later',
+  status TEXT NOT NULL DEFAULT 'unresolved',
+  note TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(book_id, cfi, selected_text)
+)
+''';
+
+const createReadingCoachIndexesSQL = '''
+CREATE INDEX IF NOT EXISTS idx_reading_quizzes_book_chapter
+ON tb_reading_quizzes(book_id, chapter_href);
+CREATE INDEX IF NOT EXISTS idx_reading_difficulties_book_status
+ON tb_reading_difficulties(book_id, status)
+''';
+
+const createReadingMemorySQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_memory_sources (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, source_type TEXT NOT NULL,
+  source_ref TEXT, chapter_href TEXT, chapter_title TEXT, cfi TEXT,
+  text_snapshot TEXT NOT NULL, content_hash TEXT NOT NULL, created_at INTEGER NOT NULL,
+  UNIQUE(book_id, source_type, content_hash)
+);
+CREATE TABLE IF NOT EXISTS tb_reading_memory_topics (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, title TEXT NOT NULL,
+  summary TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'suggested',
+  batch_id TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tb_reading_topic_sources (
+  topic_id TEXT NOT NULL, source_id TEXT NOT NULL,
+  PRIMARY KEY(topic_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS tb_reading_knowledge_cards (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, topic_id TEXT NOT NULL,
+  question TEXT NOT NULL, answer TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'suggested', review_stage INTEGER NOT NULL DEFAULT 1,
+  next_review_at INTEGER NOT NULL, hard_count INTEGER NOT NULL DEFAULT 0,
+  remembered_count INTEGER NOT NULL DEFAULT 0, mastered_count INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tb_reading_card_sources (
+  card_id TEXT NOT NULL, source_id TEXT NOT NULL,
+  PRIMARY KEY(card_id, source_id)
+);
+CREATE TABLE IF NOT EXISTS tb_reading_card_reviews (
+  id TEXT PRIMARY KEY, card_id TEXT NOT NULL, book_id INTEGER NOT NULL,
+  rating TEXT NOT NULL, previous_stage INTEGER NOT NULL, next_stage INTEGER NOT NULL,
+  previous_review_at INTEGER NOT NULL, next_review_at INTEGER NOT NULL,
+  reviewed_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_sources_book ON tb_reading_memory_sources(book_id);
+CREATE INDEX IF NOT EXISTS idx_memory_topics_book_status ON tb_reading_memory_topics(book_id, status);
+CREATE INDEX IF NOT EXISTS idx_memory_cards_book_due ON tb_reading_knowledge_cards(book_id, status, next_review_at);
+CREATE INDEX IF NOT EXISTS idx_memory_reviews_book_time ON tb_reading_card_reviews(book_id, reviewed_at DESC)
 ''';
 
 class DBHelper {
@@ -560,6 +652,21 @@ class DBHelper {
           'analysisResult',
           'TEXT',
         );
+        continue case11Migration;
+      case11Migration:
+      case 11:
+        await db.execute(createReadingGuidesSQL);
+        await db.execute(createReadingQuizzesSQL);
+        await db.execute(createReadingDifficultiesSQL);
+        for (final statement in createReadingCoachIndexesSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case12Migration;
+      case12Migration:
+      case 12:
+        for (final statement in createReadingMemorySQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
     }
 
     if (oldVersion != 0 && Prefs().webdavStatus) {
