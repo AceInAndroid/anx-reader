@@ -48,9 +48,10 @@ class ReadingMemoryController
         reviews: values[3] as List<ReadingCardReview>);
   }
 
-  Future<List<ReadingMemorySource>> collect({bool includeUsed = false}) async {
-    final sources =
-        await _repository.collectSources(arg, includeUsed: includeUsed);
+  Future<List<ReadingMemorySource>> collect(
+      {bool includeUsed = false, bool includeAiBlocks = true}) async {
+    final sources = await _repository.collectSources(arg,
+        includeUsed: includeUsed, includeAiBlocks: includeAiBlocks);
     ref.invalidateSelf();
     return sources;
   }

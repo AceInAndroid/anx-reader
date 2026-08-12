@@ -296,6 +296,51 @@ class ReadingNoteRepository {
   Future<List<Book>> books() => _books.selectAllBooks();
   Future<List<ReadingNoteRevision>> revisions(String noteId) =>
       _dao.revisions(noteId);
+
+  Future<ReadingNoteDocument> deleteAiBlock(
+      ReadingNoteDocument document, ReadingNoteBlock block) async {
+    if (block.type != ReadingNoteBlockType.ai ||
+        block.noteId != document.note.id) {
+      throw ArgumentError('Expected an AI block owned by this note');
+    }
+    await _dao.deleteBlock(block.id);
+    return this.document(document.note);
+  }
+
+  Future<ReadingNoteDocument> convertAiBlockToBody(
+      ReadingNoteDocument document, ReadingNoteBlock block) async {
+    if (block.type != ReadingNoteBlockType.ai ||
+        block.noteId != document.note.id) {
+      throw ArgumentError('Expected an AI block owned by this note');
+    }
+    final body = [document.body.trim(), block.content.trim()]
+        .where((value) => value.isNotEmpty)
+        .join('\n\n');
+    final saved = await save(
+      currentDocument: document,
+      title: document.note.title,
+      body: body,
+      status: document.note.status,
+      favorite: document.note.isFavorite,
+      tagNames: document.tags.map((tag) => tag.name).toList(),
+      recordRevision: true,
+    );
+    final batchId = block.metadata['batchId']?.toString();
+    if (batchId?.isNotEmpty == true) {
+      await _dao.saveSources([
+        ReadingNoteSource(
+          noteId: document.note.id,
+          type: ReadingNoteSourceType.aiSession,
+          sourceRef: 'note-ai:$batchId',
+          textSnapshot: block.content,
+          metadata: block.metadata,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+      ]);
+    }
+    await _dao.deleteBlock(block.id);
+    return this.document(saved.note);
+  }
 }
 
 extension _FirstOrNull<T> on Iterable<T> {

@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 14;
+const int currentDbVersion = 15;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -296,6 +296,32 @@ CREATE INDEX IF NOT EXISTS idx_reading_note_tags_note
 ON tb_reading_note_tags(note_id);
 CREATE INDEX IF NOT EXISTS idx_reading_note_revisions_note
 ON tb_reading_note_revisions(note_id, created_at DESC)
+''';
+
+const createReadingNoteAiOrganizerSQL = '''
+ALTER TABLE tb_reading_note_blocks ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';
+CREATE TABLE IF NOT EXISTS tb_reading_note_ai_batches (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, scope TEXT NOT NULL,
+  source_snapshot TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending',
+  provider_id TEXT, model TEXT, used_fallback INTEGER NOT NULL DEFAULT 0,
+  total_count INTEGER NOT NULL DEFAULT 0, remaining_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tb_reading_note_ai_suggestions (
+  id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, book_id INTEGER NOT NULL,
+  source_type TEXT NOT NULL, source_ref TEXT NOT NULL, content_hash TEXT NOT NULL,
+  suggested_title TEXT NOT NULL DEFAULT '', suggested_body TEXT NOT NULL DEFAULT '',
+  suggested_tags TEXT NOT NULL DEFAULT '[]', existing_topic_ids TEXT NOT NULL DEFAULT '[]',
+  new_topics TEXT NOT NULL DEFAULT '[]', selected_fields TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'pending', before_snapshot TEXT,
+  applied_hash TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_note_ai_batches_book_status
+ON tb_reading_note_ai_batches(book_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_note_ai_suggestions_batch_status
+ON tb_reading_note_ai_suggestions(batch_id, status);
+CREATE INDEX IF NOT EXISTS idx_note_ai_suggestions_source
+ON tb_reading_note_ai_suggestions(book_id, source_type, source_ref)
 ''';
 
 class DBHelper {
@@ -714,6 +740,12 @@ class DBHelper {
       case13Migration:
       case 13:
         for (final statement in createReadingNotesWorkspaceSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case14Migration;
+      case14Migration:
+      case 14:
+        for (final statement in createReadingNoteAiOrganizerSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
     }

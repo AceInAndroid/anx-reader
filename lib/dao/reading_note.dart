@@ -143,6 +143,26 @@ class ReadingNoteDao extends BaseDao {
         whereArgs: [note.id],
       );
 
+  Future<void> saveBlock(ReadingNoteBlock block) => insert(
+        'tb_reading_note_blocks',
+        block.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      ).then((_) {});
+
+  Future<void> deleteBlock(String blockId) => delete(
+        'tb_reading_note_blocks',
+        where: 'id = ?',
+        whereArgs: [blockId],
+      ).then((_) {});
+
+  Future<void> saveSources(List<ReadingNoteSource> items) =>
+      transaction((txn) async {
+        for (final item in items) {
+          await txn.insert('tb_reading_note_sources', item.toDb(),
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+        }
+      });
+
   Future<void> deletePermanently(String noteId) => transaction((txn) async {
         await txn.delete('tb_reading_note_tags',
             where: 'note_id = ?', whereArgs: [noteId]);
@@ -157,6 +177,10 @@ class ReadingNoteDao extends BaseDao {
       });
 
   Future<void> deleteBookNotes(int bookId) => transaction((txn) async {
+        await txn.delete('tb_reading_note_ai_suggestions',
+            where: 'book_id = ?', whereArgs: [bookId]);
+        await txn.delete('tb_reading_note_ai_batches',
+            where: 'book_id = ?', whereArgs: [bookId]);
         final rows = await txn.query('tb_reading_notes',
             columns: ['id'], where: 'book_id = ?', whereArgs: [bookId]);
         for (final row in rows) {

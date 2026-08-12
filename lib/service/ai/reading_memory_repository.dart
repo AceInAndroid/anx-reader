@@ -5,6 +5,7 @@ import 'package:anx_reader/dao/reading_coach.dart';
 import 'package:anx_reader/dao/reading_memory.dart';
 import 'package:anx_reader/dao/reading_note.dart';
 import 'package:anx_reader/models/reading_memory.dart';
+import 'package:anx_reader/models/reading_note.dart';
 import 'package:anx_reader/service/ai/reading_review_scheduler.dart';
 import 'package:crypto/crypto.dart';
 
@@ -23,7 +24,7 @@ class ReadingMemoryRepository {
   final BookNoteDao _noteDao;
   final ReadingNoteDao _formalNoteDao;
   Future<List<ReadingMemorySource>> collectSources(int bookId,
-      {bool includeUsed = false}) async {
+      {bool includeUsed = false, bool includeAiBlocks = true}) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final candidates = <ReadingMemorySource>[];
     for (final item in await _coachDao.selectDifficulties(bookId)) {
@@ -43,6 +44,8 @@ class ReadingMemoryRepository {
     for (final note in await _formalNoteDao.notes(bookId: bookId)) {
       final blocks = await _formalNoteDao.blocks(note.id);
       final text = blocks
+          .where((block) =>
+              includeAiBlocks || block.type != ReadingNoteBlockType.ai)
           .map((block) => block.content.trim())
           .where((value) => value.isNotEmpty)
           .join('\n');
@@ -128,9 +131,36 @@ class ReadingMemoryRepository {
   Future<void> saveCards(List<ReadingKnowledgeCard> items) =>
       _dao.saveCards(items);
   Future<void> setTopicStatus(
-          ReadingMemoryTopic item, ReadingMemoryItemStatus status) =>
-      _dao.updateTopic(item.copyWith(
-          status: status, updatedAt: DateTime.now().millisecondsSinceEpoch));
+      ReadingMemoryTopic item, ReadingMemoryItemStatus status) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _dao.updateTopic(item.copyWith(status: status, updatedAt: now));
+    if (status != ReadingMemoryItemStatus.kept) return;
+    final sourceMap = {
+      for (final source in await _dao.sources(item.bookId)) source.id: source
+    };
+    for (final sourceId in item.sourceIds) {
+      final source = sourceMap[sourceId];
+      if (source?.type != ReadingMemorySourceType.readingNote ||
+          source?.sourceRef == null) {
+        continue;
+      }
+      final note = await _formalNoteDao.note(source!.sourceRef!);
+      if (note == null) continue;
+      await _formalNoteDao.saveSources([
+        ReadingNoteSource(
+          noteId: note.id,
+          type: ReadingNoteSourceType.memoryTopic,
+          sourceRef: item.id,
+          chapterHref: source.chapterHref,
+          chapterTitle: source.chapterTitle,
+          cfi: source.cfi,
+          textSnapshot: source.text,
+          createdAt: now,
+        ),
+      ]);
+    }
+  }
+
   Future<void> setCardStatus(
           ReadingKnowledgeCard item, ReadingMemoryItemStatus status) =>
       _dao.updateCard(item.copyWith(

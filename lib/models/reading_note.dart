@@ -109,6 +109,7 @@ class ReadingNoteBlock {
     required this.origin,
     required this.createdAt,
     required this.updatedAt,
+    this.metadata = const {},
   });
 
   final String id;
@@ -119,6 +120,7 @@ class ReadingNoteBlock {
   final ReadingNoteBlockOrigin origin;
   final int createdAt;
   final int updatedAt;
+  final Map<String, dynamic> metadata;
 
   Map<String, Object?> toDb() => {
         'id': id,
@@ -129,6 +131,7 @@ class ReadingNoteBlock {
         'origin': origin.name,
         'created_at': createdAt,
         'updated_at': updatedAt,
+        'metadata': jsonEncode(metadata),
       };
 
   factory ReadingNoteBlock.fromDb(Map<String, dynamic> row) => ReadingNoteBlock(
@@ -140,6 +143,7 @@ class ReadingNoteBlock {
         origin: ReadingNoteBlockOrigin.values.byName(row['origin'].toString()),
         createdAt: row['created_at'] as int,
         updatedAt: row['updated_at'] as int,
+        metadata: _decodeMap(row['metadata']),
       );
 }
 

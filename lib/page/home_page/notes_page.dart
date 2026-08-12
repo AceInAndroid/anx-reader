@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/reading_note.dart';
+import 'package:anx_reader/models/reading_note_ai.dart';
 import 'package:anx_reader/models/reading_memory.dart';
 import 'package:anx_reader/providers/reading_coach.dart';
 import 'package:anx_reader/providers/reading_memory.dart';
 import 'package:anx_reader/providers/reading_note_workspace.dart';
+import 'package:anx_reader/providers/reading_note_ai_organizer.dart';
+import 'package:anx_reader/page/reading_note_ai_review_page.dart';
 import 'package:anx_reader/service/book.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:flutter/material.dart';
@@ -23,6 +26,8 @@ class NotesPage extends ConsumerStatefulWidget {
 
 class _NotesPageState extends ConsumerState<NotesPage> {
   Timer? _searchDebounce;
+  bool _selectionMode = false;
+  final Set<String> _selectedNotes = {};
 
   @override
   void dispose() {
@@ -233,6 +238,29 @@ class _NotesPageState extends ConsumerState<NotesPage> {
               .read(readingNoteWorkspaceProvider.notifier)
               .setBookView(values.first),
         ),
+      if (state.bookId != null &&
+          state.bookView != ReadingNoteBookView.topics &&
+          state.bookView != ReadingNoteBookView.outcomes)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+          child: Row(children: [
+            OutlinedButton.icon(
+              onPressed: () => setState(() {
+                _selectionMode = !_selectionMode;
+                if (!_selectionMode) _selectedNotes.clear();
+              }),
+              icon: Icon(_selectionMode ? Icons.close : Icons.checklist),
+              label: Text(
+                  _selectionMode ? '取消选择 (${_selectedNotes.length})' : '选择笔记'),
+            ),
+            const Spacer(),
+            FilledButton.icon(
+              onPressed: () => _openAiOrganizer(state),
+              icon: const Icon(Icons.auto_awesome, size: 18),
+              label: const Text('AI 整理'),
+            ),
+          ]),
+        ),
       const SizedBox(height: 6),
       Expanded(
         child: state.bookId != null &&
@@ -287,12 +315,31 @@ class _NotesPageState extends ConsumerState<NotesPage> {
         borderRadius: BorderRadius.circular(10),
       ),
       child: InkWell(
-        onTap: () => _openItem(item, mobile),
+        onTap: () {
+          if (_selectionMode) {
+            setState(() {
+              _selectedNotes.contains(item.identity)
+                  ? _selectedNotes.remove(item.identity)
+                  : _selectedNotes.add(item.identity);
+            });
+            return;
+          }
+          _openItem(item, mobile);
+        },
         child: Padding(
           padding: const EdgeInsets.all(12),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
+              if (_selectionMode)
+                Checkbox(
+                  value: _selectedNotes.contains(item.identity),
+                  onChanged: (checked) => setState(() {
+                    checked == true
+                        ? _selectedNotes.add(item.identity)
+                        : _selectedNotes.remove(item.identity);
+                  }),
+                ),
               Icon(_captureIcon(doc?.note.captureKind), size: 18),
               const SizedBox(width: 8),
               Expanded(
@@ -341,6 +388,71 @@ class _NotesPageState extends ConsumerState<NotesPage> {
       return;
     }
     ref.read(readingNoteWorkspaceProvider.notifier).select(item.identity);
+  }
+
+  Future<void> _openAiOrganizer(ReadingNoteWorkspaceState state) async {
+    final book = state.books.where((book) => book.id == state.bookId).first;
+    final organizer = ref.read(readingNoteAiOrganizerProvider(book.id));
+    final active = organizer.valueOrNull?.activeBatch;
+    if (active == null ||
+        !const {
+          ReadingNoteAiBatchStatus.reviewing,
+          ReadingNoteAiBatchStatus.failed,
+          ReadingNoteAiBatchStatus.running,
+          ReadingNoteAiBatchStatus.completed,
+        }.contains(active.status)) {
+      final scope = await showDialog<ReadingNoteAiScope>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: const Text('选择 AI 整理范围'),
+          children: [
+            SimpleDialogOption(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, ReadingNoteAiScope.inbox),
+              child: const ListTile(
+                leading: Icon(Icons.inbox_outlined),
+                title: Text('当前书未整理笔记'),
+                subtitle: Text('只处理未整理箱中的内容'),
+              ),
+            ),
+            SimpleDialogOption(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, ReadingNoteAiScope.filtered),
+              child: const ListTile(
+                leading: Icon(Icons.filter_alt_outlined),
+                title: Text('当前筛选结果'),
+                subtitle: Text('使用当前搜索、标签和章节范围'),
+              ),
+            ),
+            SimpleDialogOption(
+              onPressed: _selectedNotes.isEmpty
+                  ? null
+                  : () =>
+                      Navigator.pop(dialogContext, ReadingNoteAiScope.selected),
+              child: ListTile(
+                enabled: _selectedNotes.isNotEmpty,
+                leading: const Icon(Icons.checklist),
+                title: Text('已选择 ${_selectedNotes.length} 条'),
+                subtitle: const Text('仅处理手动勾选内容'),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (scope == null || !mounted) return;
+      unawaited(
+          ref.read(readingNoteAiOrganizerProvider(book.id).notifier).start(
+                book: book,
+                scope: scope,
+                visibleItems: state.items,
+                selectedIdentities: _selectedNotes,
+              ));
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ReadingNoteAiReviewPage(book: book),
+    ));
+    await ref.read(readingNoteWorkspaceProvider.notifier).refresh();
   }
 
   Widget _buildDetail(ReadingNoteListItem? item) => item == null
@@ -651,6 +763,13 @@ class _ReadingNoteDetailState extends ConsumerState<ReadingNoteDetail>
             label: const Text('保存版本'),
           ),
         ),
+        if ((_document?.blocks ?? const <ReadingNoteBlock>[])
+            .any((block) => block.type == ReadingNoteBlockType.ai)) ...[
+          _sectionTitle('AI 整理内容', Icons.auto_awesome),
+          for (final block in _document!.blocks
+              .where((block) => block.type == ReadingNoteBlockType.ai))
+            _aiBlock(block),
+        ],
         _sectionTitle('标签与状态', Icons.sell_outlined),
         TextField(
           controller: _tags,
@@ -746,6 +865,72 @@ class _ReadingNoteDetailState extends ConsumerState<ReadingNoteDetail>
           ),
       ],
     );
+  }
+
+  Widget _aiBlock(ReadingNoteBlock block) {
+    final provider = block.metadata['providerId']?.toString() ?? '';
+    final model = block.metadata['model']?.toString() ?? '';
+    final provenance =
+        [provider, model].where((value) => value.isNotEmpty).join(' · ');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(block.content),
+        if (provenance.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text('AI 整理 · $provenance',
+              style: Theme.of(context).textTheme.bodySmall),
+        ],
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          OutlinedButton.icon(
+            onPressed: () => _copyAiBlock(block),
+            icon: const Icon(Icons.copy_outlined),
+            label: const Text('复制编辑'),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => _convertAiBlock(block),
+            icon: const Icon(Icons.edit_note),
+            label: const Text('转为我的想法'),
+          ),
+          TextButton.icon(
+            onPressed: () => _deleteAiBlock(block),
+            icon: const Icon(Icons.delete_outline),
+            label: const Text('删除'),
+          ),
+        ]),
+      ]),
+    );
+  }
+
+  void _copyAiBlock(ReadingNoteBlock block) {
+    final current = _body.text.trim();
+    _body.text = [current, block.content.trim()]
+        .where((value) => value.isNotEmpty)
+        .join('\n\n');
+    _body.selection = TextSelection.collapsed(offset: _body.text.length);
+    _changed();
+  }
+
+  Future<void> _convertAiBlock(ReadingNoteBlock block) async {
+    await _ensureDocument();
+    final repository = ref.read(readingNoteRepositoryProvider);
+    _document = await repository.convertAiBlockToBody(_document!, block);
+    _body.text = _document!.body;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _deleteAiBlock(ReadingNoteBlock block) async {
+    await _ensureDocument();
+    _document = await ref
+        .read(readingNoteRepositoryProvider)
+        .deleteAiBlock(_document!, block);
+    if (mounted) setState(() {});
   }
 
   Widget _sectionTitle(String title, IconData icon) => Padding(

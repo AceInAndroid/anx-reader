@@ -85,6 +85,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
   bool _generatingGuide = false;
   bool _generatingSynthesis = false;
   bool _organizingMemory = false;
+  bool _includeAiBlocksInMemory = true;
   final Set<String> _revealedCards = {};
   String? _reviewedCardAwaitingAdvance;
 
@@ -740,6 +741,17 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
                 ],
               ),
             ]),
+            CheckboxListTile(
+              value: _includeAiBlocksInMemory,
+              onChanged: _organizingMemory
+                  ? null
+                  : (value) =>
+                      setState(() => _includeAiBlocksInMemory = value == true),
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: Text(l10n.readingMemoryIncludeAiBlocks),
+              subtitle: Text(l10n.readingMemoryIncludeAiBlocksHint),
+            ),
             if (state.topics.isEmpty)
               Padding(
                   padding: EdgeInsets.only(top: 10),
@@ -825,7 +837,8 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
     try {
       final notifier =
           ref.read(readingMemoryProvider(widget.controller.bookId).notifier);
-      final sources = await notifier.collect(includeUsed: includeUsed);
+      final sources = await notifier.collect(
+          includeUsed: includeUsed, includeAiBlocks: _includeAiBlocksInMemory);
       if (sources.length < 2) {
         AnxToast.show(l10n.readingMemoryNotEnoughSources);
         return;

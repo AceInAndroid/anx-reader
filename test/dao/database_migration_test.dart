@@ -97,7 +97,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 14);
+    expect(currentDbVersion, 15);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -243,5 +243,52 @@ void main() {
       )
     ''');
     expect(indexes, hasLength(5));
+  });
+
+  test('version 15 migration adds AI organizer tables and block metadata',
+      () async {
+    final db = await openTempDb('reading_note_ai.db');
+    addTearDown(db.close);
+    for (final statement in createReadingNotesWorkspaceSQL
+        .split(';')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)) {
+      await db.execute(statement);
+    }
+
+    await helper.onUpgradeDatabase(db, 14, currentDbVersion);
+
+    final columns =
+        await db.rawQuery('PRAGMA table_info(tb_reading_note_blocks)');
+    expect(columns.map((row) => row['name']), contains('metadata'));
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+        'tb_reading_note_ai_batches', 'tb_reading_note_ai_suggestions'
+      )
+    ''');
+    expect(tables, hasLength(2));
+    final indexes = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
+        'idx_note_ai_batches_book_status',
+        'idx_note_ai_suggestions_batch_status',
+        'idx_note_ai_suggestions_source'
+      )
+    ''');
+    expect(indexes, hasLength(3));
+  });
+
+  test('database migration from version 7 through version 15 succeeds',
+      () async {
+    final db = await openTempDb('upgrade_v7_to_v15.db');
+    addTearDown(db.close);
+
+    await expectLater(
+      helper.onUpgradeDatabase(db, 7, currentDbVersion),
+      completes,
+    );
+
+    final columns =
+        await db.rawQuery('PRAGMA table_info(tb_reading_note_blocks)');
+    expect(columns.map((row) => row['name']), contains('metadata'));
   });
 }

@@ -25,10 +25,12 @@ class _AiExecutionResult {
     required this.stream,
     required this.providerId,
     required this.isError,
+    required this.model,
   });
 
   final Stream<String> stream;
   final String? providerId;
+  final String? model;
   bool isError;
   void Function()? onSuccess;
 
@@ -36,6 +38,20 @@ class _AiExecutionResult {
     isError = false;
     onSuccess?.call();
   }
+}
+
+class AiGenerationResult<T> {
+  const AiGenerationResult({
+    required this.value,
+    this.providerId,
+    this.model,
+    this.usedFallback = false,
+  });
+
+  final T value;
+  final String? providerId;
+  final String? model;
+  final bool usedFallback;
 }
 
 const Duration defaultAiStreamTimeout = Duration(seconds: 60);
@@ -151,6 +167,59 @@ Future<String> aiGenerateText(
     lastResult = chunk;
   }
   return lastResult ?? '';
+}
+
+Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
+  List<ChatMessage> messages, {
+  String? identifier,
+  Map<String, String>? config,
+  bool regenerate = false,
+  WidgetRef? ref,
+}) async {
+  final registry = LangchainAiRegistry(ref);
+  var execution = await _generateStream(
+    messages: messages,
+    identifier: identifier,
+    overrideConfig: config,
+    regenerate: regenerate,
+    useAgent: false,
+    registry: registry,
+  );
+  var value = await _consumeExecution(execution);
+  var usedFallback = false;
+  if (execution.isError) {
+    final fallbackId = _resolveRunnableFallbackId(
+      registry: registry,
+      primaryIdentifier: execution.providerId ?? identifier,
+    );
+    if (fallbackId != null) {
+      usedFallback = true;
+      execution = await _generateStream(
+        messages: messages,
+        identifier: fallbackId,
+        overrideConfig: config,
+        regenerate: regenerate,
+        useAgent: false,
+        registry: registry,
+      );
+      value = await _consumeExecution(execution);
+    }
+  }
+  if (execution.isError) throw StateError(value);
+  return AiGenerationResult(
+    value: value,
+    providerId: execution.providerId,
+    model: execution.model,
+    usedFallback: usedFallback,
+  );
+}
+
+Future<String> _consumeExecution(_AiExecutionResult execution) async {
+  String? value;
+  await for (final chunk in execution.stream) {
+    value = chunk;
+  }
+  return value ?? '';
 }
 
 Future<String?> resolveRunnableAiFallbackProviderId({
@@ -377,12 +446,14 @@ Future<_AiExecutionResult> _generateStream({
         stream: Stream.value(L10n.of(context).aiServiceNotConfigured),
         providerId: resolvedProviderId ?? selectedIdentifier,
         isError: true,
+        model: null,
       );
     } else {
       return _AiExecutionResult(
         stream: Stream.value('AI service not configured'),
         providerId: null,
         isError: true,
+        model: null,
       );
     }
   }
@@ -486,6 +557,7 @@ Future<_AiExecutionResult> _executeStream({
     stream: generateOutput(),
     providerId: config.identifier,
     isError: false,
+    model: config.model,
   );
   return result;
 }
