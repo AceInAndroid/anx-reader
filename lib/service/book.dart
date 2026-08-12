@@ -26,6 +26,7 @@ import 'package:anx_reader/utils/get_path/get_base_path.dart';
 import 'package:anx_reader/page/reading_page.dart';
 import 'package:anx_reader/utils/import_book.dart';
 import 'package:anx_reader/utils/log/common.dart';
+import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/webView/gererate_url.dart';
 import 'package:anx_reader/utils/webView/webview_console_message.dart';
@@ -36,6 +37,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as path;
 
 import 'book_player/book_player_server.dart';
+import 'book_player/book_open_policy.dart';
 import 'book_player/reader_runtime.dart';
 
 AnxHeadlessWebView? headlessInAppWebView;
@@ -462,9 +464,45 @@ Future<void> pushToReadingPage(
     return;
   }
 
-  if (!File(book.fileFullPath).existsSync()) {
+  final bookFile = File(book.fileFullPath);
+  if (!bookFile.existsSync()) {
     ref.read(syncProvider.notifier).downloadBook(book);
     return;
+  }
+
+  final extension = path.extension(bookFile.path).replaceFirst('.', '');
+  final fileSize = await bookFile.length();
+  final isMobile =
+      AnxPlatform.isAndroid || AnxPlatform.isIOS || AnxPlatform.isOhos;
+  if (BookOpenPolicy.shouldWarn(
+    extension: extension,
+    fileSize: fileSize,
+    isMobile: isMobile,
+  )) {
+    if (!context.mounted) return;
+    final shouldContinue = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: Text(L10n.of(dialogContext).bookLargeFileTitle),
+            content: Text(
+              L10n.of(dialogContext).bookLargeFileMessage(
+                BookOpenPolicy.formatMiB(fileSize),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: Text(L10n.of(dialogContext).commonCancel),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(L10n.of(dialogContext).bookLargeFileContinue),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!shouldContinue || !context.mounted) return;
   }
 
   try {
@@ -612,11 +650,11 @@ Future<void> getBookMetadata(
 }) async {
   final metadataCompleter = Completer<void>();
   bool metadataHandled = false;
-  String serverFileName = Server().setTempFile(file);
+  final resource = await Server().registerBookResource(file);
 
   String cfi = '';
 
-  String bookUrl = "http://127.0.0.1:${Server().port}/$serverFileName";
+  final bookUrl = resource.url;
   final logPrefix = 'BookImport[${importId ?? 'metadata'}]';
   AnxLog.info('$logPrefix stage=metadata_webview_start');
 
@@ -710,6 +748,7 @@ Future<void> getBookMetadata(
     );
   } finally {
     await webview.dispose();
+    resource.revoke();
     AnxLog.info('$logPrefix stage=metadata_webview_disposed');
     if (identical(headlessInAppWebView, webview)) {
       headlessInAppWebView = null;

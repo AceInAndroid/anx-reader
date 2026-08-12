@@ -556,7 +556,7 @@ const renderPage = async (page, getImageBlob) => {
         ${container.outerHTML}
         ${div.outerHTML}
     `], { type: 'text/html' }))
-    return url
+    return { url, resources: [url, src] }
 }
 
 const makeTOCItem = item => ({
@@ -565,9 +565,11 @@ const makeTOCItem = item => ({
     subitems: item.items.length ? item.items.map(makeTOCItem) : null,
 })
 
-export const makePDF = async file => {
-    const data = new Uint8Array(await file.arrayBuffer())
-    const pdf = await pdfjsLib.getDocument({ data }).promise
+export const makePDF = async source => {
+    const loadingTask = typeof source === 'string'
+        ? pdfjsLib.getDocument({ url: source, disableRange: false, disableStream: false })
+        : pdfjsLib.getDocument({ data: new Uint8Array(await source.arrayBuffer()) })
+    const pdf = await loadingTask.promise
 
     const book = { rendition: { layout: 'pre-paginated' } }
 
@@ -581,15 +583,29 @@ export const makePDF = async file => {
     book.toc = outline?.map(makeTOCItem)
 
     const cache = new Map()
+    const touch = (index, value) => {
+        cache.delete(index)
+        cache.set(index, value)
+        while (cache.size > 8) {
+            const oldestIndex = cache.keys().next().value
+            const oldest = cache.get(oldestIndex)
+            oldest.resources.forEach(resource => URL.revokeObjectURL(resource))
+            cache.delete(oldestIndex)
+        }
+    }
     book.sections = Array.from({ length: pdf.numPages }).map((_, i) => ({
         id: i,
         load: async () => {
             const cached = cache.get(i)
-            if (cached) return cached
-            const url = await renderPage(await pdf.getPage(i + 1))
-            cache.set(i, url)
-            return url
+            if (cached) {
+                touch(i, cached)
+                return cached.url
+            }
+            const rendered = await renderPage(await pdf.getPage(i + 1))
+            touch(i, rendered)
+            return rendered.url
         },
+        unload: () => {},
         size: 1000,
     }))
     book.sections[0].pageSpread = 'right'
@@ -612,5 +628,11 @@ export const makePDF = async file => {
     }
     book.getTOCFragment = doc => doc.documentElement
     book.getCover = async () => renderPage(await pdf.getPage(1), true)
+    book.destroy = () => {
+        cache.forEach(value => value.resources.forEach(
+            resource => URL.revokeObjectURL(resource)))
+        cache.clear()
+        loadingTask.destroy()
+    }
     return book
 }

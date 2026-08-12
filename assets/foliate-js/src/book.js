@@ -798,6 +798,19 @@ const getView = async file => {
   return view
 }
 
+const getPdfView = async url => {
+  reportBookLoadStage('detect', { format: 'pdf' })
+  isPdf = true
+  const { makePDF } = await import('./pdf.js')
+  reportBookLoadStage('parse', { format: 'pdf' })
+  const book = await makePDF(url)
+  const view = document.createElement('foliate-view')
+  document.body.append(view)
+  await view.open(book)
+  reportBookLoadStage('render', { format: 'pdf' })
+  return view
+}
+
 const getCSS = ({ fontSize,
   fontName,
   fontPath,
@@ -1347,7 +1360,9 @@ class Reader {
     this.#originalContent = null
   }
   async open(file, cfi) {
-    this.view = await getView(file, cfi)
+    this.view = typeof file === 'string'
+      ? await getPdfView(file)
+      : await getView(file, cfi)
 
     if (importing) return
 
@@ -2679,7 +2694,17 @@ var i18n = JSON.parse(urlParams.get('i18n') || '{}')
 globalThis.i18n = i18n
 
 reportBookLoadStage('fetch')
-fetch(url)
+const isPdfUrl = (() => {
+  try {
+    return new URL(url, window.location.origin).pathname.toLowerCase().endsWith('.pdf')
+  } catch (_) {
+    return false
+  }
+})()
+
+const openPromise = isPdfUrl
+  ? open(url, initialCfi)
+  : fetch(url)
   .then(res => {
     if (!res.ok) {
       const error = new Error(`Book request failed with HTTP ${res.status}`)
@@ -2696,10 +2721,11 @@ fetch(url)
     }
     return open(new File([blob], new URL(url, window.location.origin).pathname), initialCfi)
   })
-  .catch(e => {
-    console.error(e)
-    reportBookLoadError(e)
-  })
+
+openPromise.catch(e => {
+  console.error(e)
+  reportBookLoadError(e)
+})
 
 window.disposeReader = () => {
   try {

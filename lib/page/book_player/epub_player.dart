@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:anx_reader/config/feature_flags.dart';
@@ -110,6 +111,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   Timer? _loadTimeoutTimer;
   int _webViewGeneration = 0;
   bool _hasMovedFromInitialTarget = false;
+  BookResourceHandle? _bookResource;
   int chapterCurrentPage = 0;
   int chapterTotalPages = 0;
   OverlayEntry? contextMenuEntry;
@@ -1592,7 +1594,24 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   Future<void> onWebViewCreated(InAppWebViewController controller) async {
-    final url = _readerUrl(context);
+    try {
+      _bookResource ??=
+          await Server().registerBookResource(File(widget.book.fileFullPath));
+    } catch (error, stackTrace) {
+      AnxLog.severe('Failed to register book resource', error, stackTrace);
+      _failBookLoad(BookLoadFailure(
+        code: 'resource_registration_failed',
+        message: error.toString(),
+        stage: BookLoadStage.bootstrap,
+      ));
+      return;
+    }
+    if (!mounted) {
+      _bookResource?.revoke();
+      _bookResource = null;
+      return;
+    }
+    final url = _readerUrl(context, _bookResource!);
     if (AnxPlatform.isAndroid &&
         (kDebugMode || Prefs().developerOptionsEnabled)) {
       await InAppWebViewController.setWebContentsDebuggingEnabled(true);
@@ -1780,6 +1799,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         source: 'window.disposeReader && window.disposeReader()',
       ));
     }
+    _bookResource?.revoke();
+    _bookResource = null;
     _animationController?.dispose();
     saveReadingProgress();
     removeOverlay();
@@ -1881,15 +1902,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     );
   }
 
-  String _readerUrl(BuildContext context) {
-    final encodedPath = Uri.encodeComponent(widget.book.fileFullPath);
-    final bookUrl = 'http://127.0.0.1:${Server().port}/book/$encodedPath';
+  String _readerUrl(BuildContext context, BookResourceHandle resource) {
     final initialMode = Prefs().getBookTranslationMode(widget.book.id);
     final initialCfi = widget.cfi ??
         _savedCfiForMode(initialMode) ??
         widget.book.lastReadPosition;
     return generateUrl(
-      bookUrl,
+      resource.url,
       initialCfi,
       backgroundColor: backgroundColor,
       textColor: textColor,

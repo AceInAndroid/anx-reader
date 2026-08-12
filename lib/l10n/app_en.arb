@@ -1091,5 +1091,9 @@
   "bookLoadCurrentStage": "Current stage: {stage}",
   "@bookLoadCurrentStage": {"placeholders": {"stage": {"type": "String"}}},
   "bookLoadBackToShelf": "Back to shelf",
-  "bookLoadExportLog": "Export logs"
+  "bookLoadExportLog": "Export logs",
+  "bookLargeFileTitle": "Large book file",
+  "bookLargeFileMessage": "This book is {sizeMiB} MiB and may require substantial memory while parsing. You can continue or return to the shelf.",
+  "@bookLargeFileMessage": {"placeholders": {"sizeMiB": {"type": "String"}}},
+  "bookLargeFileContinue": "Continue opening"
 }
