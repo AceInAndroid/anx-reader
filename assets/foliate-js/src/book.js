@@ -1,6 +1,51 @@
 console.log('book.js')
 console.log('AnxUA', navigator.userAgent)
 
+const bookLoadStartedAt = Date.now()
+const pendingFlutterEvents = []
+let currentBookLoadStage = 'bootstrap'
+
+const emitFlutter = (name, data) => {
+  const bridge = window.flutter_inappwebview
+  if (bridge && typeof bridge.callHandler === 'function') {
+    return bridge.callHandler(name, data)
+  }
+  pendingFlutterEvents.push([name, data])
+  return null
+}
+
+const flushFlutterEvents = () => {
+  const bridge = window.flutter_inappwebview
+  if (!bridge || typeof bridge.callHandler !== 'function') return false
+  while (pendingFlutterEvents.length) {
+    const [name, data] = pendingFlutterEvents.shift()
+    bridge.callHandler(name, data)
+  }
+  return true
+}
+
+const reportBookLoadStage = (stage, extra = {}) => {
+  currentBookLoadStage = stage
+  return emitFlutter('onBookLoadStage', {
+    stage,
+    elapsedMs: Date.now() - bookLoadStartedAt,
+    ...extra,
+  })
+}
+
+const reportBookLoadError = (error, stage) => {
+  const message = error && error.message ? error.message : String(error)
+  const failureStage = stage || currentBookLoadStage
+  emitFlutter('onBookLoadError', {
+    code: error && error.code ? error.code : `${failureStage}_failed`,
+    message,
+    details: error && error.stack ? error.stack : null,
+    stage: failureStage,
+  })
+}
+
+reportBookLoadStage('bootstrap')
+
 import './view.js'
 import { FootnoteHandler } from './footnotes.js'
 import { Overlayer } from './overlayer.js'
@@ -696,6 +741,8 @@ const isFBZ = ({ name, type }) =>
 
 const getView = async file => {
   let book
+  let format = null
+  reportBookLoadStage('detect')
   if (file.isDirectory) {
     const loader = await makeDirectoryLoader(file)
     const { EPUB } = await import('./epub.js')
@@ -705,19 +752,23 @@ const getView = async file => {
   else if (await isZip(file)) {
     const loader = await makeZipLoader(file)
     if (isCBZ(file)) {
+      format = 'cbz'
       const { makeComicBook } = await import('./comic-book.js')
       book = makeComicBook(loader, file)
     } else if (isFBZ(file)) {
+      format = 'fb2'
       const { makeFB2 } = await import('./fb2.js')
       const { entries } = loader
       const entry = entries.find(entry => entry.filename.endsWith('.fb2'))
       const blob = await loader.loadBlob((entry ?? entries[0]).filename)
       book = await makeFB2(blob)
     } else {
+      format = 'epub'
       book = await new EPUB(loader).init()
     }
   }
   else if (await isPDF(file)) {
+    format = 'pdf'
     isPdf = true;
     const { makePDF } = await import('./pdf.js')
     book = await makePDF(file)
@@ -725,17 +776,25 @@ const getView = async file => {
   else {
     const { isMOBI, MOBI } = await import('./mobi.js')
     if (await isMOBI(file)) {
+      format = 'mobi'
       const fflate = await import('./vendor/fflate.js')
       book = await new MOBI({ unzlib: fflate.unzlibSync }).open(file)
     } else if (isFB2(file)) {
+      format = 'fb2'
       const { makeFB2 } = await import('./fb2.js')
       book = await makeFB2(file)
     }
   }
-  if (!book) throw new Error('File type not supported')
+  if (!book) {
+    const error = new Error('File type not supported')
+    error.code = 'unsupported_format'
+    throw error
+  }
+  reportBookLoadStage('parse', { format })
   const view = document.createElement('foliate-view')
   document.body.append(view)
   await view.open(book)
+  reportBookLoadStage('render', { format })
   return view
 }
 
@@ -1851,6 +1910,7 @@ const open = async (file, cfi) => {
   }
   
   if (!importing) {
+    reportBookLoadStage('ready')
     callFlutter('onLoadEnd')
     onSetToc()
     callFlutter('renderAnnotations')
@@ -1860,9 +1920,21 @@ const open = async (file, cfi) => {
 
 
 const callFlutter = (name, data) => {
-  // console.log('callFlutter', name, data)
-  window.flutter_inappwebview.callHandler(name, data)
+  return emitFlutter(name, data)
 }
+
+let flutterEventFlushTimer = setInterval(() => {
+  if (flushFlutterEvents()) {
+    clearInterval(flutterEventFlushTimer)
+    flutterEventFlushTimer = null
+  }
+}, 50)
+window.addEventListener('flutterInAppWebViewPlatformReady', () => {
+  if (flushFlutterEvents() && flutterEventFlushTimer) {
+    clearInterval(flutterEventFlushTimer)
+    flutterEventFlushTimer = null
+  }
+})
 
 const setStyle = (oldStyle) => {
   const turn = {
@@ -2606,7 +2678,33 @@ var readingRules = JSON.parse(urlParams.get('readingRules'))
 var i18n = JSON.parse(urlParams.get('i18n') || '{}')
 globalThis.i18n = i18n
 
+reportBookLoadStage('fetch')
 fetch(url)
-  .then(res => res.blob())
-  .then(blob => open(new File([blob], new URL(url, window.location.origin).pathname), initialCfi))
-  .catch(e => console.error(e))
+  .then(res => {
+    if (!res.ok) {
+      const error = new Error(`Book request failed with HTTP ${res.status}`)
+      error.code = `http_${res.status}`
+      throw error
+    }
+    return res.blob()
+  })
+  .then(blob => {
+    if (!blob.size) {
+      const error = new Error('Book file is empty')
+      error.code = 'empty_file'
+      throw error
+    }
+    return open(new File([blob], new URL(url, window.location.origin).pathname), initialCfi)
+  })
+  .catch(e => {
+    console.error(e)
+    reportBookLoadError(e)
+  })
+
+window.disposeReader = () => {
+  try {
+    reader && reader.view && reader.view.close && reader.view.close()
+  } catch (error) {
+    console.warn('Failed to dispose reader', error)
+  }
+}

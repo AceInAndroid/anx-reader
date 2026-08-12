@@ -5,6 +5,7 @@ import 'package:anx_reader/enums/sync_direction.dart';
 import 'package:anx_reader/enums/sync_trigger.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/page/home_page/ai_page.dart';
+import 'package:anx_reader/service/book_player/reader_runtime.dart';
 import 'package:anx_reader/service/initialization_check.dart';
 import 'package:anx_reader/page/home_page/bookshelf_page.dart';
 import 'package:anx_reader/page/home_page/notes_page.dart';
@@ -15,7 +16,6 @@ import 'package:anx_reader/service/receive_file/receive_share.dart';
 import 'package:anx_reader/service/vibration_service.dart';
 import 'package:anx_reader/utils/check_update.dart';
 import 'package:anx_reader/utils/env_var.dart';
-import 'package:anx_reader/utils/get_path/get_temp_dir.dart';
 import 'package:anx_reader/utils/load_default_font.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
@@ -78,10 +78,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         ),
       );
     } else {
-      webViewEnvironment = await WebViewEnvironment.create(
-        settings: WebViewEnvironmentSettings(
-            userDataFolder: (await getAnxTempDir()).path),
-      );
+      await ReaderRuntime.ensureReady();
     }
   }
 

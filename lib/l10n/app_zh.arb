@@ -946,5 +946,13 @@
     "dictionaryEmpty": "暂无已导入词典",
     "dictionaryImportSuccess": "词典导入成功",
     "dictionaryImportFailed": "词典导入失败",
-    "dictionaryAiContext": "AI 语境解释"
+    "dictionaryAiContext": "AI 语境解释",
+    "bookLoadOpeningTitle": "正在打开书籍",
+    "bookLoadSlowTitle": "加载时间较长",
+    "bookLoadSlowMessage": "设备仍在解析内容，你可以继续等待或重试。",
+    "bookLoadFailedTitle": "无法打开这本书",
+    "bookLoadCurrentStage": "当前阶段：{stage}",
+    "@bookLoadCurrentStage": {"placeholders": {"stage": {"type": "String"}}},
+    "bookLoadBackToShelf": "返回书架",
+    "bookLoadExportLog": "导出日志"
 }

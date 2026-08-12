@@ -88,6 +88,22 @@
       document.head.appendChild(script);
     });
 
+    const reportBootstrapError = (error) => {
+      const payload = {
+        code: 'script_load_failed',
+        message: error && error.message ? error.message : String(error),
+        stage: 'bootstrap',
+      };
+      const bridge = window.flutter_inappwebview;
+      if (bridge && typeof bridge.callHandler === 'function') {
+        bridge.callHandler('onBookLoadError', payload);
+        return;
+      }
+      window.addEventListener('flutterInAppWebViewPlatformReady', () => {
+        window.flutter_inappwebview.callHandler('onBookLoadError', payload);
+      }, { once: true });
+    };
+
     (async () => {
       if (shouldUseModernBundle) {
         await loadScript('./src/vendor/pdfjs/pdf.js', { async: false, defer: false });
@@ -97,6 +113,6 @@
 
       await loadScript('./dist/bundle.js', { type: 'module' });
       await loadScript('./dist/pdf-legacy.js', { async: false, defer: false });
-    })();
+    })().catch(reportBootstrapError);
   })();
 </script>

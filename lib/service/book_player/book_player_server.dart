@@ -18,15 +18,18 @@ class Server {
   Server._internal();
 
   HttpServer? _server;
+  Future<void>? _startFuture;
 
-  Future start() async {
-    if (_server != null) {
-      AnxLog.info(
-        'Server: Existing instance detected on port ${_server?.port}, restarting',
-      );
-      await stop();
-    }
+  bool get isHealthy => _server != null;
 
+  Future<void> ensureStarted() {
+    if (_server != null) return Future.value();
+    return _startFuture ??= _start().whenComplete(() => _startFuture = null);
+  }
+
+  Future<void> start() => ensureStarted();
+
+  Future<void> _start() async {
     var handler = const shelf.Pipeline()
         .addMiddleware(shelf.logRequests())
         .addHandler(_handleRequests);
@@ -47,7 +50,11 @@ class Server {
   }
 
   int get port {
-    return _server!.port;
+    final server = _server;
+    if (server == null) {
+      throw StateError('Book player server is not started');
+    }
+    return server.port;
   }
 
   Future stop() async {
@@ -166,10 +173,23 @@ class Server {
       return shelf.Response.notFound('Book not found');
     }
     final headers = {
-      'Content-Type': 'application/epub+zip',
+      'Content-Type': _contentTypeForPath(bookPath),
+      'Content-Length': file.lengthSync().toString(),
+      'X-Content-Type-Options': 'nosniff',
       'Access-Control-Allow-Origin': '*',
     };
     return shelf.Response.ok(file.openRead(), headers: headers);
+  }
+
+  String _contentTypeForPath(String filePath) {
+    final extension = path.extension(filePath).toLowerCase();
+    return switch (extension) {
+      '.epub' => 'application/epub+zip',
+      '.mobi' || '.azw3' => 'application/x-mobipocket-ebook',
+      '.fb2' => 'application/x-fictionbook+xml',
+      '.pdf' => 'application/pdf',
+      _ => 'application/octet-stream',
+    };
   }
 
   Future<shelf.Response> _handleBgimgRequest(shelf.Request request) async {

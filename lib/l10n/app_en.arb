@@ -1083,5 +1083,13 @@
   "readingNoteAiStartNext": "Start next batch ({count})",
   "@readingNoteAiStartNext": {"placeholders": {"count": {"type": "int"}}},
   "readingNoteAiRemaining": "{count} items remain for the next batch",
-  "@readingNoteAiRemaining": {"placeholders": {"count": {"type": "int"}}}
+  "@readingNoteAiRemaining": {"placeholders": {"count": {"type": "int"}}},
+  "bookLoadOpeningTitle": "Opening book",
+  "bookLoadSlowTitle": "Loading is taking longer than expected",
+  "bookLoadSlowMessage": "The device is still processing the book. You can keep waiting or retry.",
+  "bookLoadFailedTitle": "Unable to open this book",
+  "bookLoadCurrentStage": "Current stage: {stage}",
+  "@bookLoadCurrentStage": {"placeholders": {"stage": {"type": "String"}}},
+  "bookLoadBackToShelf": "Back to shelf",
+  "bookLoadExportLog": "Export logs"
 }

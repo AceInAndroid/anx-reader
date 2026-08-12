@@ -14,6 +14,7 @@ import 'package:anx_reader/enums/writing_mode.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book.dart';
+import 'package:anx_reader/models/book_load_state.dart';
 import 'package:anx_reader/models/book_style.dart';
 import 'package:anx_reader/models/bookmark.dart';
 import 'package:anx_reader/models/font_model.dart';
@@ -44,6 +45,8 @@ import 'package:anx_reader/utils/js/convert_dart_color_to_js.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/utils/log/common.dart';
+import 'package:anx_reader/utils/get_path/log_file.dart';
+import 'package:anx_reader/utils/share_file.dart';
 import 'package:anx_reader/utils/webView/gererate_url.dart';
 import 'package:anx_reader/utils/webView/webview_console_message.dart';
 import 'package:anx_reader/widgets/bookshelf/book_cover.dart';
@@ -102,6 +105,11 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   String _trackedChapterHref = '';
   String _trackedChapterTitle = '';
   double _trackedChapterProgress = 0;
+  BookLoadState _bookLoadState = const BookLoadState();
+  Timer? _slowLoadTimer;
+  Timer? _loadTimeoutTimer;
+  int _webViewGeneration = 0;
+  bool _hasMovedFromInitialTarget = false;
   int chapterCurrentPage = 0;
   int chapterTotalPages = 0;
   OverlayEntry? contextMenuEntry;
@@ -918,6 +926,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     controller.addJavaScriptHandler(
         handlerName: 'onLoadEnd',
         callback: (args) async {
+          _completeBookLoad();
           widget.onLoadEnd();
           final savedMode = Prefs().getBookTranslationMode(widget.book.id);
           if (savedMode != TranslationModeEnum.off) {
@@ -926,12 +935,52 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         });
 
     controller.addJavaScriptHandler(
+      handlerName: 'onBookLoadStage',
+      callback: (args) {
+        if (args.isEmpty || args.first is! Map) return null;
+        final payload = Map<String, dynamic>.from(args.first as Map);
+        final stage = BookLoadStage.values.firstWhere(
+          (value) => value.name == payload['stage']?.toString(),
+          orElse: () => _bookLoadState.stage,
+        );
+        if (!mounted || _bookLoadState.hasFailed) return null;
+        setState(() {
+          _bookLoadState = _bookLoadState.copyWith(
+            stage: stage,
+            elapsedMs: (payload['elapsedMs'] as num?)?.toInt() ?? 0,
+            format: payload['format']?.toString(),
+          );
+        });
+        AnxLog.info(
+          'BookLoad[${widget.book.id}] stage=${stage.name} '
+          'elapsedMs=${payload['elapsedMs']} format=${payload['format']}',
+        );
+        return null;
+      },
+    );
+    controller.addJavaScriptHandler(
+      handlerName: 'onBookLoadError',
+      callback: (args) {
+        final payload = args.isNotEmpty && args.first is Map
+            ? Map<String, dynamic>.from(args.first as Map)
+            : <String, dynamic>{'message': 'Unknown reader error'};
+        _failBookLoad(BookLoadFailure.fromJson(payload));
+        return null;
+      },
+    );
+
+    controller.addJavaScriptHandler(
         handlerName: 'onRelocated',
         callback: (args) {
           Map<String, dynamic> location = args[0];
           final nextHref = location['chapterHref']?.toString() ?? '';
           final nextTitle = location['chapterTitle']?.toString() ?? '';
           final nextCfi = location['cfi']?.toString() ?? '';
+          if (widget.cfi != null &&
+              nextCfi.isNotEmpty &&
+              nextCfi != widget.cfi) {
+            _hasMovedFromInitialTarget = true;
+          }
           if (nextCfi.isNotEmpty && cfi == nextCfi && chapterHref == nextHref) {
             return;
           }
@@ -1543,13 +1592,18 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   Future<void> onWebViewCreated(InAppWebViewController controller) async {
-    if (AnxPlatform.isAndroid) {
+    final url = _readerUrl(context);
+    if (AnxPlatform.isAndroid &&
+        (kDebugMode || Prefs().developerOptionsEnabled)) {
       await InAppWebViewController.setWebContentsDebuggingEnabled(true);
     }
     webViewController = controller;
-    _webViewReady = true;
-    setHandler(controller);
+    await setHandler(controller);
     _registerChapterContentBridge();
+    _webViewReady = true;
+
+    _startBookLoadTimers();
+    await controller.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
 
     // Initialize translation mode based on book-specific settings
     Future.delayed(const Duration(milliseconds: 300), () async {
@@ -1663,7 +1717,9 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   }
 
   Future<void> saveReadingProgress() async {
-    if (cfi == '' || widget.cfi != null) return;
+    if (cfi == '' || (widget.cfi != null && !_hasMovedFromInitialTarget)) {
+      return;
+    }
 
     Prefs().setBookTranslationProgress(
       widget.book.id,
@@ -1717,6 +1773,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     _translationSettingsRefreshTimer?.cancel();
     _currentPageTranslationTimer?.cancel();
     _scrollDebounceTimer?.cancel();
+    _slowLoadTimer?.cancel();
+    _loadTimeoutTimer?.cancel();
+    if (_webViewReady) {
+      unawaited(webViewController.evaluateJavascript(
+        source: 'window.disposeReader && window.disposeReader()',
+      ));
+    }
     _animationController?.dispose();
     saveReadingProgress();
     removeOverlay();
@@ -1810,6 +1873,184 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: buttons,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _readerUrl(BuildContext context) {
+    final encodedPath = Uri.encodeComponent(widget.book.fileFullPath);
+    final bookUrl = 'http://127.0.0.1:${Server().port}/book/$encodedPath';
+    final initialMode = Prefs().getBookTranslationMode(widget.book.id);
+    final initialCfi = widget.cfi ??
+        _savedCfiForMode(initialMode) ??
+        widget.book.lastReadPosition;
+    return generateUrl(
+      bookUrl,
+      initialCfi,
+      backgroundColor: backgroundColor,
+      textColor: textColor,
+      isDarkMode: Theme.of(context).brightness == Brightness.dark,
+      i18n: {
+        'translateError': L10n.of(context).translateError,
+        'retry': L10n.of(context).commonRetry,
+        'retrying': '${L10n.of(context).commonRetry}...',
+      },
+    );
+  }
+
+  void _startBookLoadTimers() {
+    _slowLoadTimer?.cancel();
+    _loadTimeoutTimer?.cancel();
+    if (mounted) {
+      setState(() => _bookLoadState = const BookLoadState());
+    }
+    _slowLoadTimer = Timer(const Duration(seconds: 30), () {
+      if (!mounted || _bookLoadState.isReady || _bookLoadState.hasFailed) {
+        return;
+      }
+      setState(() {
+        _bookLoadState = _bookLoadState.copyWith(isSlow: true);
+      });
+      AnxLog.warning(
+        'BookLoad[${widget.book.id}] slow stage=${_bookLoadState.stage.name}',
+      );
+    });
+    _loadTimeoutTimer = Timer(const Duration(seconds: 120), () {
+      if (_bookLoadState.isReady || _bookLoadState.hasFailed) return;
+      _failBookLoad(BookLoadFailure(
+        code: 'reader_timeout',
+        message: 'Reader initialization timed out',
+        stage: _bookLoadState.stage,
+      ));
+    });
+  }
+
+  void _completeBookLoad() {
+    _slowLoadTimer?.cancel();
+    _loadTimeoutTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _bookLoadState = _bookLoadState.copyWith(
+        stage: BookLoadStage.ready,
+        isSlow: false,
+      );
+    });
+    AnxLog.info('BookLoad[${widget.book.id}] stage=ready');
+  }
+
+  void _failBookLoad(BookLoadFailure failure) {
+    _slowLoadTimer?.cancel();
+    _loadTimeoutTimer?.cancel();
+    AnxLog.severe(
+      'BookLoad[${widget.book.id}] failed code=${failure.code} '
+      'stage=${failure.stage.name} message=${failure.message}',
+    );
+    if (!mounted) return;
+    setState(() {
+      _bookLoadState = BookLoadState(
+        stage: BookLoadStage.failed,
+        failure: failure,
+      );
+    });
+  }
+
+  void _retryBookLoad() {
+    _slowLoadTimer?.cancel();
+    _loadTimeoutTimer?.cancel();
+    if (_webViewReady) {
+      unawaited(webViewController.evaluateJavascript(
+        source: 'window.disposeReader && window.disposeReader()',
+      ));
+    }
+    setState(() {
+      _webViewReady = false;
+      _bookLoadState = const BookLoadState();
+      _webViewGeneration++;
+    });
+  }
+
+  Future<void> _exportReaderLog() async {
+    final logFile = await getLogFile();
+    await shareFile(file: logFile, title: 'Anx Reader log');
+  }
+
+  Widget _buildBookLoadOverlay() {
+    final failure = _bookLoadState.failure;
+    final isFailed = failure != null;
+    final colorScheme = Theme.of(context).colorScheme;
+    return Positioned.fill(
+      child: ColoredBox(
+        color: colorScheme.surface,
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isFailed ? Icons.error_outline : Icons.menu_book_outlined,
+                      size: 44,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      isFailed
+                          ? L10n.of(context).bookLoadFailedTitle
+                          : _bookLoadState.isSlow
+                              ? L10n.of(context).bookLoadSlowTitle
+                              : L10n.of(context).bookLoadOpeningTitle,
+                      style: Theme.of(context).textTheme.titleLarge,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      isFailed
+                          ? '${failure.code}: ${failure.message}'
+                          : _bookLoadState.isSlow
+                              ? L10n.of(context).bookLoadSlowMessage
+                              : L10n.of(context).bookLoadCurrentStage(
+                                  _bookLoadState.stage.name,
+                                ),
+                      textAlign: TextAlign.center,
+                    ),
+                    if (!isFailed && !_bookLoadState.isSlow) ...[
+                      const SizedBox(height: 20),
+                      const LinearProgressIndicator(),
+                    ],
+                    if (isFailed || _bookLoadState.isSlow) ...[
+                      const SizedBox(height: 24),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          if (isFailed)
+                            OutlinedButton.icon(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.arrow_back),
+                              label: Text(L10n.of(context).bookLoadBackToShelf),
+                            ),
+                          OutlinedButton.icon(
+                            onPressed: _exportReaderLog,
+                            icon: const Icon(Icons.description_outlined),
+                            label: Text(L10n.of(context).bookLoadExportLog),
+                          ),
+                          FilledButton.icon(
+                            onPressed: _retryBookLoad,
+                            icon: const Icon(Icons.refresh),
+                            label: Text(L10n.of(context).commonRetry),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -2027,29 +2268,30 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     );
   }
 
-  Widget buildWebviewWithIOSWorkaround(
-      BuildContext context, String url, String initialCfi) {
+  Widget buildWebviewWithIOSWorkaround(BuildContext context) {
     final webView = InAppWebView(
+      key: ValueKey('reader-webview-$_webViewGeneration'),
       webViewEnvironment: webViewEnvironment,
-      initialUrlRequest: URLRequest(
-        url: WebUri(
-          generateUrl(
-            url,
-            initialCfi,
-            backgroundColor: backgroundColor,
-            textColor: textColor,
-            isDarkMode: Theme.of(context).brightness == Brightness.dark,
-            i18n: {
-              'translateError': L10n.of(context).translateError,
-              'retry': L10n.of(context).commonRetry,
-              'retrying': '${L10n.of(context).commonRetry}...',
-            },
-          ),
-        ),
-      ),
       initialSettings: initialSettings,
       contextMenu: contextMenu,
-      onLoadStop: (controller, uri) => onWebViewCreated(controller),
+      onWebViewCreated: onWebViewCreated,
+      onReceivedError: (controller, request, error) {
+        if (request.isForMainFrame == false) return;
+        _failBookLoad(BookLoadFailure(
+          code: 'webview_load_error_${error.type.toNativeValue()}',
+          message: error.description,
+          stage: _bookLoadState.stage,
+        ));
+      },
+      onReceivedHttpError: (controller, request, response) {
+        if (request.isForMainFrame == false) return;
+        final statusCode = response.statusCode ?? 0;
+        _failBookLoad(BookLoadFailure(
+          code: 'http_$statusCode',
+          message: response.reasonPhrase ?? 'HTTP $statusCode',
+          stage: _bookLoadState.stage,
+        ));
+      },
       onConsoleMessage: webviewConsoleMessage,
     );
 
@@ -2075,13 +2317,6 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
 
   @override
   Widget build(BuildContext context) {
-    String uri = Uri.encodeComponent(widget.book.fileFullPath);
-    String url = 'http://127.0.0.1:${Server().port}/book/$uri';
-    final initialMode = Prefs().getBookTranslationMode(widget.book.id);
-    String initialCfi = widget.cfi ??
-        _savedCfiForMode(initialMode) ??
-        widget.book.lastReadPosition;
-
     return Listener(
       onPointerSignal: (event) {
         _handlePointerEvents(event);
@@ -2090,7 +2325,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         resizeToAvoidBottomInset: false,
         body: Stack(
           children: [
-            buildWebviewWithIOSWorkaround(context, url, initialCfi),
+            buildWebviewWithIOSWorkaround(context),
+            if (!_bookLoadState.isReady) _buildBookLoadOverlay(),
             readingInfoWidget(),
             translationProgressWidget(),
             if (showHistory) _buildHistoryCapsule(),

@@ -36,6 +36,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as path;
 
 import 'book_player/book_player_server.dart';
+import 'book_player/reader_runtime.dart';
 
 AnxHeadlessWebView? headlessInAppWebView;
 final allowBookExtensions = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"];
@@ -466,6 +467,17 @@ Future<void> pushToReadingPage(
     return;
   }
 
+  try {
+    await ReaderRuntime.ensureReady();
+  } catch (error, stackTrace) {
+    AnxLog.severe('Reader runtime initialization failed', error, stackTrace);
+    if (!context.mounted) return;
+    AnxToast.show('阅读器初始化失败：$error');
+    return;
+  }
+
+  if (!context.mounted) return;
+
   if (EnvVar.enableInAppPurchase) {
     final iapAsync = ref.read(iapProvider);
     final isFeatureAvailable = iapAsync.maybeWhen(
@@ -610,13 +622,8 @@ Future<void> getBookMetadata(
 
   AnxHeadlessWebView webview = AnxHeadlessWebView(
     webViewEnvironment: webViewEnvironment,
-    initialUrlRequest: URLRequest(
-        url: WebUri(generateUrl(
-      bookUrl,
-      cfi,
-      importing: true,
-    ))),
-    onLoadStop: (controller, url) async {
+    initialUrlRequest: URLRequest(url: WebUri('about:blank')),
+    onWebViewCreated: (controller) async {
       controller.addJavaScriptHandler(
           handlerName: 'onMetadata',
           callback: (args) async {
@@ -633,7 +640,6 @@ Future<void> getBookMetadata(
                         ?.join(', ') ??
                     'Unknown';
 
-            // base64 cover
             String cover = metadata['cover'] ?? '';
             String description = metadata['description'] ?? '';
             AnxLog.info(
@@ -656,6 +662,27 @@ Future<void> getBookMetadata(
               metadataCompleter.completeError(error, stackTrace);
             }
           });
+      controller.addJavaScriptHandler(
+        handlerName: 'onBookLoadError',
+        callback: (args) {
+          if (!metadataCompleter.isCompleted) {
+            metadataCompleter.completeError(
+              Exception(
+                  'Webview: ${args.isEmpty ? 'unknown error' : args.first}'),
+            );
+          }
+          return null;
+        },
+      );
+      await controller.loadUrl(
+        urlRequest: URLRequest(
+          url: WebUri(generateUrl(
+            bookUrl,
+            cfi,
+            importing: true,
+          )),
+        ),
+      );
     },
     onConsoleMessage: (controller, consoleMessage) {
       if (consoleMessage.messageLevel == ConsoleMessageLevel.ERROR) {

@@ -54,13 +54,13 @@ Future<void> main() async {
 
   // If no migration needed, initialize paths normally
   if (!_needsMigration) {
-    initBasePath();
-    AnxLog.init();
-    AnxError.init();
+    await initBasePath();
+    await AnxLog.init();
+    await AnxError.init();
     await DBHelper().initDB();
   }
 
-  Server().start();
+  await Server().ensureStarted();
 
   audioHandler = await AudioService.init(
     builder: () => TtsHandler(),
@@ -166,7 +166,7 @@ class _MyAppState extends ConsumerState<MyApp>
       }
     } else if (state == AppLifecycleState.resumed) {
       if (AnxPlatform.isIOS) {
-        Server().start();
+        await Server().ensureStarted();
       }
     }
   }
