@@ -2,6 +2,7 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/enums/ai_prompts.dart';
 import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/ai_panel_position.dart';
+import 'package:anx_reader/enums/ai_panel_width_ratio.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/page/settings_page/ai_provider_list_page.dart';
 import 'package:anx_reader/providers/ai_cache_count.dart';
@@ -250,6 +251,8 @@ class _AISettingsState extends ConsumerState<AISettings> {
           aiChatDisplayModeTile(),
           if (Prefs().aiChatDisplayMode != AiChatDisplayMode.popup)
             aiPanelPositionTile(),
+          if (Prefs().aiChatDisplayMode != AiChatDisplayMode.popup)
+            aiPanelWidthRatioTile(),
         ],
       ),
       SettingsSection(
@@ -885,6 +888,49 @@ class _AISettingsState extends ConsumerState<AISettings> {
                   ),
                 ),
               ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  AbstractSettingsTile aiPanelWidthRatioTile() {
+    return CustomSettingsTile(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '大屏 AI 窗口宽度',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '手机始终使用独立页面；此设置用于平板和大屏设备。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            AnxSegmentedButton<AiPanelWidthRatio>(
+              segments: const [
+                SegmentButtonItem(
+                  value: AiPanelWidthRatio.half,
+                  label: '1/2 屏幕',
+                  icon: Icon(Icons.view_sidebar_outlined, size: 18),
+                ),
+                SegmentButtonItem(
+                  value: AiPanelWidthRatio.third,
+                  label: '1/3 屏幕',
+                  icon: Icon(Icons.vertical_split_outlined, size: 18),
+                ),
+              ],
+              selected: {Prefs().aiPanelWidthRatio},
+              onSelectionChanged: (selected) {
+                if (selected.isEmpty) return;
+                Prefs().aiPanelWidthRatio = selected.first;
+                setState(() {});
+              },
             ),
           ],
         ),

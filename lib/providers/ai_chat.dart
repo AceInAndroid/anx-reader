@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/providers/ai_history.dart';
 import 'package:anx_reader/providers/current_reading.dart';
@@ -184,7 +186,19 @@ class AiChat extends _$AiChat {
                 citations: citations,
               ).toJson(),
       );
+      final assistantIndex =
+          (state.value?.length ?? updatedMessages.length) - 1;
       await historyNotifier.upsert(completedEntry);
+      unawaited(
+        _generateAndSaveTurnTitle(
+          entryId: completedEntry.id,
+          assistantIndex: assistantIndex,
+          question: message,
+          answer: assistantResponse,
+          widgetRef: widgetRef,
+          historyNotifier: historyNotifier,
+        ),
+      );
     } catch (_) {
       final failedEntry = draftEntry.copyWith(
         messages: List<ChatMessage>.from(state.value ?? updatedMessages),
@@ -230,5 +244,74 @@ class AiChat extends _$AiChat {
 
   String _generateSessionId() {
     return DateTime.now().microsecondsSinceEpoch.toString();
+  }
+
+  Future<String> _generateTurnTitle({
+    required String question,
+    required String answer,
+    required WidgetRef widgetRef,
+  }) async {
+    final cleanAnswer = cleanAiDisplayText(answer, answerOnly: true);
+    try {
+      final generated = await aiGenerateText(
+        [
+          ChatMessage.humanText('''为下面这轮读书对话生成一个简短标题。
+要求：只输出标题，不要引号、标签、解释或标点；中文不超过16个字，英文不超过8个词。
+问题：${cleanAiDisplayText(question)}
+回答：${cleanAnswer.length > 800 ? cleanAnswer.substring(0, 800) : cleanAnswer}'''),
+        ],
+        useAgent: false,
+        ref: widgetRef,
+      );
+      final title = cleanAiDisplayText(generated, answerOnly: true);
+      if (title.isNotEmpty) return title;
+    } catch (_) {}
+    if (cleanAnswer.isEmpty) return '本轮对话';
+    return cleanAnswer.length <= 32
+        ? cleanAnswer
+        : '${cleanAnswer.substring(0, 32)}…';
+  }
+
+  Future<void> _generateAndSaveTurnTitle({
+    required String entryId,
+    required int assistantIndex,
+    required String question,
+    required String answer,
+    required WidgetRef widgetRef,
+    required AiHistoryNotifier historyNotifier,
+  }) async {
+    final title = await _generateTurnTitle(
+      question: question,
+      answer: answer,
+      widgetRef: widgetRef,
+    );
+    // Another turn may finish while the title request is running. Merge into
+    // the latest entry so the background update never restores stale messages.
+    final latest = historyNotifier.findById(entryId);
+    if (latest == null) return;
+    await historyNotifier.upsert(
+      latest.copyWith(
+        contextSnapshot: _withTurnTitle(
+          latest.contextSnapshot,
+          assistantIndex,
+          title,
+        ),
+      ),
+    );
+  }
+
+  Map<String, dynamic>? _withTurnTitle(
+    Map<String, dynamic>? snapshot,
+    int assistantIndex,
+    String title,
+  ) {
+    final updated = Map<String, dynamic>.from(snapshot ?? const {});
+    final rawTitles = updated['turnTitles'];
+    final titles = rawTitles is Map
+        ? rawTitles.map((key, value) => MapEntry(key.toString(), value))
+        : <String, dynamic>{};
+    titles['$assistantIndex'] = title;
+    updated['turnTitles'] = titles;
+    return updated;
   }
 }

@@ -87,6 +87,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   bool _isResizingAiChat = false;
   bool bookmarkExists = false;
 
+  bool _usesAiSplitLayout(BuildContext context) {
+    return MediaQuery.sizeOf(context).shortestSide >= 600;
+  }
+
+  double _effectiveAiPanelWidth(BuildContext context) {
+    return MediaQuery.sizeOf(context).width * Prefs().aiPanelWidthRatio.factor;
+  }
+
   late final FocusNode _readerFocusNode;
   // late final VolumeKeyBoard _volumeKeyBoard;
   // bool _volumeKeyListenerAttached = false;
@@ -558,8 +566,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     bool sendImmediate = false,
     ReadingContextSnapshot? selection,
   }) async {
-    final screenWidth = MediaQuery.of(navigatorKey.currentContext!).size.width;
-    final shouldShowFullscreen = screenWidth < 600;
+    final workspaceContext = navigatorKey.currentContext!;
+    final shouldShowFullscreen = !_usesAiSplitLayout(workspaceContext);
 
     final snapshot = selection;
     if (snapshot != null) {
@@ -610,8 +618,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       tooltip: L10n.of(context).aiChat,
       icon: const Icon(Icons.auto_awesome),
       onPressed: () async {
-        final screenWidth = MediaQuery.of(context).size.width;
-        final shouldShowAsSplit = screenWidth >= 600;
+        final shouldShowAsSplit = _usesAiSplitLayout(context);
 
         if (shouldShowAsSplit && aiWorkspaceController.visible) {
           aiWorkspaceController.hide();
@@ -764,7 +771,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       ),
     );
 
-    final isMobileAiVisible = MediaQuery.of(context).size.width < 600 &&
+    final isMobileAiVisible = !_usesAiSplitLayout(context) &&
         aiWorkspaceController.visible;
     return PopScope<void>(
       canPop: !isMobileAiVisible,
@@ -848,7 +855,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                             ),
                           ),
                         ),
-                        if (MediaQuery.of(context).size.width >= 600 &&
+                        if (_usesAiSplitLayout(context) &&
                             aiWorkspaceController.visible)
                           GestureDetector(
                             behavior: HitTestBehavior.translucent,
@@ -925,14 +932,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                     ),
                             ),
                           ),
-                        if (MediaQuery.of(context).size.width >= 600)
+                        if (_usesAiSplitLayout(context))
                           Offstage(
                             offstage: !aiWorkspaceController.visible,
                             child: SizedBox(
                               key: const ValueKey('ai-chat-panel'),
                               width: Prefs().aiPanelPosition ==
                                       AiPanelPositionEnum.right
-                                  ? _aiChatWidth
+                                  ? _effectiveAiPanelWidth(context)
                                   : null,
                               height: Prefs().aiPanelPosition ==
                                       AiPanelPositionEnum.bottom
@@ -943,7 +950,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                           ),
                       ],
                     ),
-                    if (MediaQuery.of(context).size.width < 600)
+                    if (!_usesAiSplitLayout(context))
                       Positioned.fill(
                         child: Offstage(
                           offstage: !aiWorkspaceController.visible,

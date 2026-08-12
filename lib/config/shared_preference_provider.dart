@@ -17,6 +17,7 @@ import 'package:anx_reader/enums/translation_mode.dart';
 import 'package:anx_reader/enums/writing_mode.dart';
 import 'package:anx_reader/enums/text_alignment.dart';
 import 'package:anx_reader/enums/ai_panel_position.dart';
+import 'package:anx_reader/enums/ai_panel_width_ratio.dart';
 import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/bgimg_fit.dart';
 import 'package:anx_reader/enums/code_highlight_theme.dart';
@@ -1991,6 +1992,15 @@ class Prefs extends ChangeNotifier {
 
   set aiPanelWidth(double width) {
     prefs.setDouble('aiPanelWidth', width);
+    notifyListeners();
+  }
+
+  AiPanelWidthRatio get aiPanelWidthRatio => AiPanelWidthRatio.fromCode(
+        prefs.getString('aiPanelWidthRatio') ?? AiPanelWidthRatio.half.code,
+      );
+
+  set aiPanelWidthRatio(AiPanelWidthRatio ratio) {
+    prefs.setString('aiPanelWidthRatio', ratio.code);
     notifyListeners();
   }
 

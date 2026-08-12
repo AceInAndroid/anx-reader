@@ -44,7 +44,7 @@ class AiReadingWorkspace extends ConsumerStatefulWidget {
   final List<Widget>? trailing;
   final Future<void> Function(AiChatHistoryEntry entry)? onOpenBookSession;
   final Future<void> Function(AiChatHistoryEntry entry)?
-  onRestoreReadingContext;
+      onRestoreReadingContext;
   final bool sendImmediate;
 
   @override
@@ -196,14 +196,12 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
             current.analysisDepth == null)) {
       return const SizedBox.shrink();
     }
-    final frameworkLabels = current.frameworks
-        .map((value) {
-          final framework = ReadingFramework.fromJson(value);
-          return framework == null
-              ? value
-              : const ReadingFrameworkRegistry().get(framework).label;
-        })
-        .join('、');
+    final frameworkLabels = current.frameworks.map((value) {
+      final framework = ReadingFramework.fromJson(value);
+      return framework == null
+          ? value
+          : const ReadingFrameworkRegistry().get(framework).label;
+    }).join('、');
     return ExpansionTile(
       initiallyExpanded: false,
       leading: const Icon(Icons.hub_outlined, size: 18),
@@ -345,7 +343,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
                       );
                       final started =
                           widget.chatKey.currentState?.sendPrompt(prompt) ??
-                          false;
+                              false;
                       if (started) {
                         widget.controller.clearPendingSelection();
                       }
@@ -378,8 +376,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
   Widget _buildAnalysisConfig(ReadingContextSnapshot snapshot) {
     const registry = ReadingFrameworkRegistry();
     final maxFrameworks = Prefs().readingAnalysisMaxFrameworks;
-    final researchEnabled =
-        Prefs().readingResearchWebSearch &&
+    final researchEnabled = Prefs().readingResearchWebSearch &&
         Prefs().readingWebSearchConfig.enabled;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -613,8 +610,8 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
           final visible = widget.controller.showAllHistory
               ? entries
               : entries
-                    .where((entry) => entry.bookId == widget.controller.bookId)
-                    .toList(growable: false);
+                  .where((entry) => entry.bookId == widget.controller.bookId)
+                  .toList(growable: false);
           if (visible.isEmpty) {
             return Center(child: Text(L10n.of(context).noConversationTip));
           }
@@ -700,7 +697,9 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
             Text(
               '框架：${entry.frameworks.map((value) {
                 final framework = ReadingFramework.fromJson(value);
-                return framework == null ? value : const ReadingFrameworkRegistry().get(framework).label;
+                return framework == null
+                    ? value
+                    : const ReadingFrameworkRegistry().get(framework).label;
               }).join('、')}',
             ),
           if (entry.outputTemplate != null)
@@ -843,10 +842,9 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
           ),
           const Divider(),
           Text('可信来源', style: Theme.of(context).textTheme.titleMedium),
-          for (final domain
-              in Prefs()
-                  .readingTrustedSourcePack(widget.controller.mode)
-                  .domains)
+          for (final domain in Prefs()
+              .readingTrustedSourcePack(widget.controller.mode)
+              .domains)
             ListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
@@ -917,6 +915,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
     }
     ref.read(aiChatProvider.notifier).setReadingModeOverride(restoredMode);
     widget.controller.showChat();
+    await widget.chatKey.currentState?.scrollToBottom(waitForLayout: true);
   }
 
   void _setMode(ReadingAiMode mode) {
@@ -957,8 +956,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
         ?.value
         .where((item) => item.id == sessionId)
         .firstOrNull;
-    final sourceLines =
-        entry?.citations
+    final sourceLines = entry?.citations
             .map((source) => source['url']?.toString())
             .whereType<String>()
             .take(3)
@@ -968,7 +966,9 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
         ? ''
         : '深度分析：${_analysisDepthLabel(ReadingAnalysisDepth.fromJson(entry!.analysisDepth))} · ${entry.frameworks.map((value) {
             final framework = ReadingFramework.fromJson(value);
-            return framework == null ? value : const ReadingFrameworkRegistry().get(framework).label;
+            return framework == null
+                ? value
+                : const ReadingFrameworkRegistry().get(framework).label;
           }).join('、')}\n';
     final normalized = answer.replaceAll(RegExp(r'\s+'), ' ').trim();
     final summary = normalized.length <= 480
@@ -983,8 +983,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
         chapter: snapshot.chapterTitle ?? '',
         type: 'highlight',
         color: Prefs().annotationColor,
-        readerNote:
-            'AI 摘要：$summary\n'
+        readerNote: 'AI 摘要：$summary\n'
             '$analysisLine'
             '${sourceLines.isEmpty ? '' : '来源：\n$sourceLines\n'}'
             '会话：anx-ai-session://${sessionId ?? ''}',
@@ -1004,49 +1003,49 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
   }
 
   String _modeLabel(ReadingAiMode mode) => switch (mode) {
-    ReadingAiMode.general => '通用陪读',
-    ReadingAiMode.history => '历史陪读',
-    ReadingAiMode.psychology => '心理陪读',
-    ReadingAiMode.finance => '理财陪读',
-  };
+        ReadingAiMode.general => '通用陪读',
+        ReadingAiMode.history => '历史陪读',
+        ReadingAiMode.psychology => '心理陪读',
+        ReadingAiMode.finance => '理财陪读',
+      };
 
   String _actionLabel(SelectionAiAction action) => switch (action) {
-    SelectionAiAction.explain => '解释',
-    SelectionAiAction.summarize => '总结',
-    SelectionAiAction.contextualize =>
-      widget.controller.mode == ReadingAiMode.history ? '时间线/背景' : '联系全书',
-    SelectionAiAction.factCheck =>
-      widget.controller.mode == ReadingAiMode.history ? '史料核查' : '事实核查',
-    SelectionAiAction.analyze =>
-      widget.controller.mode == ReadingAiMode.psychology
-          ? '反思对话'
-          : widget.controller.mode == ReadingAiMode.finance
-          ? '验证假设/风险'
-          : '分析',
-    SelectionAiAction.translate => '翻译',
-    SelectionAiAction.connectToBook => '联系全书',
-    SelectionAiAction.addNote => '加入笔记',
-    SelectionAiAction.sourceLookup => '查典籍',
-    SelectionAiAction.timeline => '时间线',
-    SelectionAiAction.reflection => '反思对话',
-    SelectionAiAction.exercise => '生成练习',
-    SelectionAiAction.validateAssumption => '验证假设',
-    SelectionAiAction.calculate => '计算',
-    SelectionAiAction.riskCheck => '风险检查',
-    SelectionAiAction.deepAnalyze => '深度分析',
-  };
+        SelectionAiAction.explain => '解释',
+        SelectionAiAction.summarize => '总结',
+        SelectionAiAction.contextualize =>
+          widget.controller.mode == ReadingAiMode.history ? '时间线/背景' : '联系全书',
+        SelectionAiAction.factCheck =>
+          widget.controller.mode == ReadingAiMode.history ? '史料核查' : '事实核查',
+        SelectionAiAction.analyze =>
+          widget.controller.mode == ReadingAiMode.psychology
+              ? '反思对话'
+              : widget.controller.mode == ReadingAiMode.finance
+                  ? '验证假设/风险'
+                  : '分析',
+        SelectionAiAction.translate => '翻译',
+        SelectionAiAction.connectToBook => '联系全书',
+        SelectionAiAction.addNote => '加入笔记',
+        SelectionAiAction.sourceLookup => '查典籍',
+        SelectionAiAction.timeline => '时间线',
+        SelectionAiAction.reflection => '反思对话',
+        SelectionAiAction.exercise => '生成练习',
+        SelectionAiAction.validateAssumption => '验证假设',
+        SelectionAiAction.calculate => '计算',
+        SelectionAiAction.riskCheck => '风险检查',
+        SelectionAiAction.deepAnalyze => '深度分析',
+      };
 
   String _analysisDepthLabel(ReadingAnalysisDepth depth) => switch (depth) {
-    ReadingAnalysisDepth.quick => '快读',
-    ReadingAnalysisDepth.standard => '精读',
-    ReadingAnalysisDepth.deep => '深读',
-    ReadingAnalysisDepth.research => '研究',
-  };
+        ReadingAnalysisDepth.quick => '快读',
+        ReadingAnalysisDepth.standard => '精读',
+        ReadingAnalysisDepth.deep => '深读',
+        ReadingAnalysisDepth.research => '研究',
+      };
 
   String _analysisOutputLabel(ReadingOutputTemplate output) => switch (output) {
-    ReadingOutputTemplate.learningNote => '学习笔记',
-    ReadingOutputTemplate.argumentAnalysis => '论证分析',
-    ReadingOutputTemplate.conceptMap => '概念图',
-    ReadingOutputTemplate.practicePlan => '实践计划',
-  };
+        ReadingOutputTemplate.learningNote => '学习笔记',
+        ReadingOutputTemplate.argumentAnalysis => '论证分析',
+        ReadingOutputTemplate.conceptMap => '概念图',
+        ReadingOutputTemplate.practicePlan => '实践计划',
+      };
 }

@@ -192,20 +192,28 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        final target = _scrollController.position.maxScrollExtent;
-        if (Prefs().reduceMotion) {
-          _scrollController.jumpTo(target);
-        } else {
-          _scrollController.animateTo(
-            target,
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-        }
-      }
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => scrollToBottom());
+  }
+
+  Future<void> scrollToBottom({bool waitForLayout = false}) async {
+    if (waitForLayout) {
+      // Restoring history also switches the workspace view. Give both the
+      // provider update and the newly visible message list time to lay out.
+      await WidgetsBinding.instance.endOfFrame;
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    if (!mounted || !_scrollController.hasClients) return;
+
+    final target = _scrollController.position.maxScrollExtent;
+    if (waitForLayout || Prefs().reduceMotion) {
+      _scrollController.jumpTo(target);
+    } else {
+      await _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   Widget _buildHistoryDrawer(BuildContext context) {
@@ -251,9 +259,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   Widget _buildHistoryTile(BuildContext context, AiChatHistoryEntry entry) {
     final allProviders = ref.watch(aiProvidersProvider);
     final provider = _providerById(allProviders, entry.serviceId);
-    final statusColor = entry.completed
-        ? Colors.green
-        : Theme.of(context).colorScheme.tertiary;
+    final statusColor =
+        entry.completed ? Colors.green : Theme.of(context).colorScheme.tertiary;
     final title = _deriveTitle(entry);
     final subtitle = _buildHistorySubtitle(provider, entry);
 
@@ -638,31 +645,29 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
       enabled: !_isStreaming,
       onSelected: _onProviderSelected,
       itemBuilder: (context) {
-        return enabledProviders
-            .map((provider) {
-              final isSelected = provider.id == selectedId;
-              final label = _modelLabel(provider);
-              final logo = _providerLogo(provider);
-              return PopupMenuItem<String>(
-                value: provider.id,
-                child: Row(
-                  children: [
-                    if (logo != null) logo else const SizedBox(width: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        label.isNotEmpty
-                            ? '${provider.title} · $label'
-                            : provider.title,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (isSelected) const Icon(Icons.check, size: 16),
-                  ],
+        return enabledProviders.map((provider) {
+          final isSelected = provider.id == selectedId;
+          final label = _modelLabel(provider);
+          final logo = _providerLogo(provider);
+          return PopupMenuItem<String>(
+            value: provider.id,
+            child: Row(
+              children: [
+                if (logo != null) logo else const SizedBox(width: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    label.isNotEmpty
+                        ? '${provider.title} · $label'
+                        : provider.title,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-              );
-            })
-            .toList(growable: false);
+                if (isSelected) const Icon(Icons.check, size: 16),
+              ],
+            ),
+          );
+        }).toList(growable: false);
       },
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -858,8 +863,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
         leading: IconButton(
           icon: const Icon(Icons.history),
           tooltip: L10n.of(context).history,
-          onPressed:
-              widget.onOpenHistory ??
+          onPressed: widget.onOpenHistory ??
               () => _scaffoldKey.currentState?.openDrawer(),
         ),
         actions: [
@@ -888,8 +892,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
       drawer: widget.onOpenHistory == null
           ? Drawer(child: _buildHistoryDrawer(context))
           : null,
-      body:
-          EnvVar.isAppStore &&
+      body: EnvVar.isAppStore &&
               Prefs().shouldShowHint(HintKey.aiDataSharingConsent)
           ? _buildDataSharingConsent(context)
           : Column(
@@ -911,20 +914,18 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
                             return _buildMessageList(messages);
                           },
                         )
-                      : ref
-                            .watch(aiChatProvider)
-                            .when(
-                              data: (messages) {
-                                if (messages.isEmpty) {
-                                  return buildEmptyState();
-                                }
+                      : ref.watch(aiChatProvider).when(
+                            data: (messages) {
+                              if (messages.isEmpty) {
+                                return buildEmptyState();
+                              }
 
-                                return _buildMessageList(messages);
-                              },
-                              loading: _loadingPlaceholder,
-                              error: (error, stack) =>
-                                  Center(child: Text('error: $error')),
-                            ),
+                              return _buildMessageList(messages);
+                            },
+                            loading: _loadingPlaceholder,
+                            error: (error, stack) =>
+                                Center(child: Text('error: $error')),
+                          ),
                 ),
                 inputBox,
               ],
@@ -987,23 +988,48 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   Widget _buildMessageList(List<ChatMessage> messages) {
+    final sessionId = ref.read(aiChatProvider.notifier).currentSessionId;
+    final history = ref.watch(aiHistoryProvider).asData?.value ?? const [];
+    AiChatHistoryEntry? currentEntry;
+    for (final entry in history) {
+      if (entry.id == sessionId) {
+        currentEntry = entry;
+        break;
+      }
+    }
+    final rawTitles = currentEntry?.contextSnapshot?['turnTitles'];
+    final turnTitles = rawTitles is Map
+        ? rawTitles
+            .map((key, value) => MapEntry(key.toString(), value.toString()))
+        : const <String, String>{};
     return ListView.builder(
       controller: _scrollController,
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
-        final isStreaming =
-            _messageStream != null && index == messages.length - 1;
-        return _buildMessageItem(message, index, isStreaming);
+        final isLatest = index == messages.length - 1;
+        final isStreaming = _messageStream != null && isLatest;
+        return _buildMessageItem(
+          message,
+          index,
+          isStreaming,
+          isLatest,
+          turnTitles['$index'],
+        );
       },
     );
   }
 
-  Widget _buildMessageItem(ChatMessage message, int index, bool isStreaming) {
+  Widget _buildMessageItem(
+    ChatMessage message,
+    int index,
+    bool isStreaming,
+    bool isLatest,
+    String? generatedTitle,
+  ) {
     final isUser = message is HumanChatMessage;
     final content = chatMessageDisplayContent(message);
     final parsed = parseReasoningContent(content);
-    final isLongMessage = content.length > 300;
     final lastAssistantMessage = _getLastAssistantMessage();
 
     return Padding(
@@ -1013,9 +1039,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
         right: isUser ? 0 : 8.0,
       ),
       child: Row(
-        mainAxisAlignment: isUser
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(width: 8),
@@ -1033,33 +1058,43 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
                   bottomRight: isUser ? const Radius.circular(12) : Radius.zero,
                 ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  isUser
-                      ? _buildCollapsibleText(content, isLongMessage)
-                      : _buildAssistantTimeline(parsed, isStreaming),
-                  if (!isUser)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        if (identical(message, lastAssistantMessage))
+              child: _HistoricalMessageRecord(
+                key: ValueKey(index),
+                preview: generatedTitle ?? _fallbackTurnTitle(content),
+                isLatest: isLatest,
+                fontSize: _fontSize,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    isUser
+                        ? SelectableText(
+                            content,
+                            style: TextStyle(fontSize: _fontSize),
+                            selectionControls: MaterialTextSelectionControls(),
+                          )
+                        : _buildAssistantTimeline(parsed, isStreaming),
+                    if (!isUser)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (identical(message, lastAssistantMessage))
+                            TextButton(
+                              onPressed: _regenerateLastMessage,
+                              child: Text(L10n.of(context).aiRegenerate),
+                            ),
                           TextButton(
-                            onPressed: _regenerateLastMessage,
-                            child: Text(L10n.of(context).aiRegenerate),
+                            onPressed: () => _copyMessageContent(content),
+                            child: Text(L10n.of(context).commonCopy),
                           ),
-                        TextButton(
-                          onPressed: () => _copyMessageContent(content),
-                          child: Text(L10n.of(context).commonCopy),
-                        ),
-                        if (widget.onSaveAnswer != null)
-                          TextButton(
-                            onPressed: () => widget.onSaveAnswer!(content),
-                            child: const Text('加入笔记'),
-                          ),
-                      ],
-                    ),
-                ],
+                          if (widget.onSaveAnswer != null)
+                            TextButton(
+                              onPressed: () => widget.onSaveAnswer!(content),
+                              child: const Text('加入笔记'),
+                            ),
+                        ],
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1067,6 +1102,14 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
         ],
       ),
     );
+  }
+
+  String _fallbackTurnTitle(String content) {
+    final clean = cleanAiDisplayText(content, answerOnly: true);
+    if (clean.isEmpty) return '本轮对话';
+    final sentence = clean.split(RegExp(r'[。！？.!?\n]')).first.trim();
+    if (sentence.isEmpty) return '本轮对话';
+    return sentence.length <= 32 ? sentence : '${sentence.substring(0, 32)}…';
   }
 
   String _buildCopyableText(ParsedReasoning parsed, String fallback) {
@@ -1248,87 +1291,79 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     }
     return ToolStepTile(step: step);
   }
-
-  Widget _buildCollapsibleText(String text, bool isLongMessage) {
-    if (!isLongMessage) {
-      return SelectableText(
-        text,
-        style: TextStyle(fontSize: _fontSize),
-        selectionControls: MaterialTextSelectionControls(),
-      );
-    }
-
-    return _CollapsibleText(text: text, fontSize: _fontSize);
-  }
 }
 
-class _CollapsibleText extends StatefulWidget {
-  const _CollapsibleText({required this.text, this.fontSize = 14.0});
+class _HistoricalMessageRecord extends StatefulWidget {
+  const _HistoricalMessageRecord({
+    super.key,
+    required this.preview,
+    required this.isLatest,
+    required this.fontSize,
+    required this.child,
+  });
 
-  final String text;
+  final String preview;
+  final bool isLatest;
   final double fontSize;
+  final Widget child;
 
   @override
-  State<_CollapsibleText> createState() => _CollapsibleTextState();
+  State<_HistoricalMessageRecord> createState() =>
+      _HistoricalMessageRecordState();
 }
 
-class _CollapsibleTextState extends State<_CollapsibleText> {
-  bool _isExpanded = false;
+class _HistoricalMessageRecordState extends State<_HistoricalMessageRecord> {
+  late bool _isExpanded = widget.isLatest;
+
+  @override
+  void didUpdateWidget(covariant _HistoricalMessageRecord oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isLatest != widget.isLatest) {
+      _isExpanded = widget.isLatest;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (_isExpanded)
-          SelectableText(
-            widget.text,
-            style: TextStyle(fontSize: widget.fontSize),
-            selectionControls: MaterialTextSelectionControls(),
-          )
-        else
-          Stack(
-            children: [
-              SelectableText(
-                widget.text.substring(0, 300),
+    if (_isExpanded) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          widget.child,
+          if (!widget.isLatest)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _isExpanded = false),
+                icon: const Icon(Icons.expand_less, size: 18),
+                label: Text(L10n.of(context).aiHintCollapse),
+              ),
+            ),
+        ],
+      );
+    }
+
+    return InkWell(
+      onTap: () => setState(() => _isExpanded = true),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: Text(
+                widget.preview.trim(),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(fontSize: widget.fontSize),
-                selectionControls: MaterialTextSelectionControls(),
               ),
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  height: 40,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Theme.of(
-                          context,
-                        ).colorScheme.surfaceContainer.withValues(alpha: 0),
-                        Theme.of(context).colorScheme.surfaceContainer,
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        TextButton(
-          onPressed: () {
-            setState(() {
-              _isExpanded = !_isExpanded;
-            });
-          },
-          child: Text(
-            _isExpanded
-                ? L10n.of(context).aiHintCollapse
-                : L10n.of(context).aiHintExpand,
-          ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.expand_more, size: 18),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
