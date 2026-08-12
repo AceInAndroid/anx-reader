@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anx_reader/config/feature_flags.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/reading_note.dart';
@@ -229,9 +230,12 @@ class _NotesPageState extends ConsumerState<NotesPage> {
                 value: ReadingNoteBookView.timeline, label: Text('时间流')),
             ButtonSegment(
                 value: ReadingNoteBookView.chapters, label: Text('章节')),
-            ButtonSegment(value: ReadingNoteBookView.topics, label: Text('主题')),
-            ButtonSegment(
-                value: ReadingNoteBookView.outcomes, label: Text('成果')),
+            if (FeatureFlags.readingCoach) ...[
+              ButtonSegment(
+                  value: ReadingNoteBookView.topics, label: Text('主题')),
+              ButtonSegment(
+                  value: ReadingNoteBookView.outcomes, label: Text('成果')),
+            ],
           ],
           selected: {state.bookView},
           onSelectionChanged: (values) => ref
@@ -808,21 +812,23 @@ class _ReadingNoteDetailState extends ConsumerState<ReadingNoteDetail>
             await _flush(recordRevision: true);
           },
         ),
-        _sectionTitle('主动阅读关联', Icons.auto_awesome_outlined),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final relation
-                in _document?.sources ?? const <ReadingNoteSource>[])
-              Chip(label: Text(_sourceLabel(relation.type))),
-            OutlinedButton.icon(
-              onPressed: _openKnowledgeCardFlow,
-              icon: const Icon(Icons.style_outlined),
-              label: const Text('生成知识卡'),
-            ),
-          ],
-        ),
+        if (FeatureFlags.readingCoach) ...[
+          _sectionTitle('主动阅读关联', Icons.auto_awesome_outlined),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final relation
+                  in _document?.sources ?? const <ReadingNoteSource>[])
+                Chip(label: Text(_sourceLabel(relation.type))),
+              OutlinedButton.icon(
+                onPressed: _openKnowledgeCardFlow,
+                icon: const Icon(Icons.style_outlined),
+                label: const Text('生成知识卡'),
+              ),
+            ],
+          ),
+        ],
         if (_saving) const LinearProgressIndicator(),
         if (_failed)
           ListTile(
@@ -1029,7 +1035,11 @@ const _collections = <ReadingNoteCollection, (IconData, String)>{
   ReadingNoteCollection.allBooks: (Icons.library_books_outlined, '所有书籍'),
   ReadingNoteCollection.inbox: (Icons.inbox_outlined, '未整理'),
   ReadingNoteCollection.questions: (Icons.help_outline, '难点与问题'),
-  ReadingNoteCollection.activeReading: (Icons.auto_awesome_outlined, '主动阅读关联'),
+  if (FeatureFlags.readingCoach)
+    ReadingNoteCollection.activeReading: (
+      Icons.auto_awesome_outlined,
+      '主动阅读关联'
+    ),
   ReadingNoteCollection.favorites: (Icons.star_outline, '收藏'),
   ReadingNoteCollection.trash: (Icons.delete_outline, '回收站'),
 };

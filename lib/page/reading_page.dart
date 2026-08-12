@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/config/feature_flags.dart';
 import 'package:anx_reader/dao/reading_time.dart';
 import 'package:anx_reader/dao/theme.dart';
 import 'package:anx_reader/enums/ai_panel_position.dart';
@@ -135,7 +136,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _requestReaderFocus();
-        if (widget.initialShowCoach) showReadingCoach();
+        if (FeatureFlags.readingCoach && widget.initialShowCoach) {
+          showReadingCoach();
+        }
         // _attachVolumeKeyListener();
       }
     });
@@ -479,7 +482,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         cfi: difficulty.cfi,
       );
     }
-    if (!_inspectionReminderShown &&
+    if (FeatureFlags.readingCoach &&
+        !_inspectionReminderShown &&
         coach.guide.status == InspectionGuideStatus.notStarted) {
       _inspectionReminderShown = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -622,6 +626,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     required double highestProgress,
     required String currentHref,
   }) async {
+    if (!FeatureFlags.readingCoach) return;
     final state = await ref.read(readingCoachProvider(_book.id).future);
     if (!shouldCreateChapterQuiz(
       previousHref: previousHref,
@@ -704,6 +709,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   }
 
   Future<void> showReadingCoach() async {
+    if (!FeatureFlags.readingCoach) return;
     aiWorkspaceController.showCoach();
     await showAiChat();
   }

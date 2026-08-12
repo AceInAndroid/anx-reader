@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ui';
 
+import 'package:anx_reader/config/feature_flags.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/book.dart';
 import 'package:anx_reader/dao/book_note.dart';
@@ -1116,7 +1117,9 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
           }
 
           if (annotation['annotation']['note'] == 'reading-difficulty') {
-            readingPageKey.currentState?.showReadingCoach();
+            if (FeatureFlags.readingCoach) {
+              readingPageKey.currentState?.showReadingCoach();
+            }
             return;
           }
 

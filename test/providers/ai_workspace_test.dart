@@ -124,4 +124,13 @@ void main() {
     expect(controller.chatScrollOffset, 128);
     expect(controller.view, AiWorkspaceView.chat);
   });
+
+  test('reading coach entry falls back to chat while feature is paused', () {
+    final controller = AiWorkspaceController(bookId: 10);
+
+    controller.showHistory();
+    controller.showCoach();
+
+    expect(controller.view, AiWorkspaceView.chat);
+  });
 }

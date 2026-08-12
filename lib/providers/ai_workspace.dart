@@ -1,3 +1,4 @@
+import 'package:anx_reader/config/feature_flags.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
@@ -41,7 +42,11 @@ class AiWorkspaceController extends ChangeNotifier {
   }
 
   void showChat() => _setView(AiWorkspaceView.chat);
-  void showCoach() => _setView(AiWorkspaceView.coach);
+  void showCoach() => _setView(
+        FeatureFlags.readingCoach
+            ? AiWorkspaceView.coach
+            : AiWorkspaceView.chat,
+      );
   void showHistory() => _setView(AiWorkspaceView.history);
   void showAgentsAndSources() => _setView(AiWorkspaceView.agentsAndSources);
 
