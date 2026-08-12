@@ -1,4 +1,4 @@
-enum ReadingMemorySourceType { difficulty, annotation }
+enum ReadingMemorySourceType { difficulty, annotation, readingNote }
 
 enum ReadingMemoryItemStatus { suggested, kept, active, ignored, archived }
 

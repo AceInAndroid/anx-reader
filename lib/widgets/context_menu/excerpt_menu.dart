@@ -5,6 +5,7 @@ import 'package:anx_reader/dao/vocabulary.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book_note.dart';
+import 'package:anx_reader/service/reading_note/reading_note_capture_service.dart';
 import 'package:anx_reader/page/reading_page.dart';
 import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/dictionary/english_dictionary.dart';
@@ -18,6 +19,7 @@ import 'package:anx_reader/widgets/book_share/excerpt_share_service.dart';
 import 'package:anx_reader/widgets/context_menu/selection_action_policy.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
 import 'package:anx_reader/widgets/icon_and_text.dart';
+import 'package:anx_reader/widgets/reading_note/quick_capture_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:icons_plus/icons_plus.dart';
@@ -285,6 +287,40 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     return bookNote;
   }
 
+  Future<void> _captureReadingNote() async {
+    final player = epubPlayerKey.currentState;
+    if (player == null) return;
+    final choice = await showReadingNoteQuickCaptureSheet(context);
+    if (choice == null || !mounted) return;
+    final document = await ReadingNoteCaptureService().capture(
+      bookId: player.book.id,
+      text: widget.annoContent,
+      cfi: widget.annoCfi,
+      chapter: player.chapterTitle,
+      chapterHref: player.chapterHref,
+      annotationType: annoType,
+      annotationColor: annoColor,
+      annotationId: noteId ?? widget.id,
+      kind: choice.kind,
+      body: choice.body,
+    );
+    final annotationId = int.tryParse(document.sources.first.sourceRef);
+    if (annotationId != null) {
+      final annotation = await bookNoteDao.selectBookNoteById(annotationId);
+      widget.onNoteCreated(annotationId);
+      player.addAnnotation(annotation);
+    }
+    widget.onClose();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Text('已保存到阅读笔记'),
+      action: SnackBarAction(
+        label: '撤销',
+        onPressed: () => ReadingNoteCaptureService().undo(document.note.id),
+      ),
+    ));
+  }
+
   Icon deleteIcon() {
     return deleteConfirm
         ? const Icon(
@@ -507,16 +543,7 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         ),
       SelectionMenuAction.note => IconAndText(
           compact: true,
-          onTap: () async {
-            epubPlayerKey.currentState?.setSelectionClearLocked(true);
-            await onColorSelected(annoColor, close: false);
-            final targetId = noteId ?? widget.id;
-            if (targetId != null) {
-              await widget.openReaderNoteMenu(targetId);
-            } else {
-              widget.toggleReaderNoteMenu(show: true);
-            }
-          },
+          onTap: _captureReadingNote,
           icon: const Icon(EvaIcons.edit_2_outline),
           text: L10n.of(context).contextMenuWriteIdea,
         ),

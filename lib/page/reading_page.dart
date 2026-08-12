@@ -55,12 +55,14 @@ class ReadingPage extends ConsumerStatefulWidget {
     this.cfi,
     required this.initialThemes,
     this.heroTag,
+    this.initialShowCoach = false,
   });
 
   final Book book;
   final String? cfi;
   final List<ReadTheme> initialThemes;
   final String? heroTag;
+  final bool initialShowCoach;
 
   @override
   ConsumerState<ReadingPage> createState() => ReadingPageState();
@@ -133,6 +135,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _requestReaderFocus();
+        if (widget.initialShowCoach) showReadingCoach();
         // _attachVolumeKeyListener();
       }
     });

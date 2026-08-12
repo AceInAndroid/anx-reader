@@ -4,6 +4,7 @@ import 'package:anx_reader/dao/book_note.dart';
 import 'package:anx_reader/dao/database.dart';
 import 'package:anx_reader/dao/reading_coach.dart';
 import 'package:anx_reader/dao/reading_memory.dart';
+import 'package:anx_reader/dao/reading_note.dart';
 import 'package:anx_reader/models/reading_memory.dart';
 import 'package:anx_reader/service/ai/reading_memory_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,12 +41,19 @@ void main() {
         .where((value) => value.isNotEmpty)) {
       await database.execute(statement);
     }
+    for (final statement in createReadingNotesWorkspaceSQL
+        .split(';')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)) {
+      await database.execute(statement);
+    }
     Future<Database> provider() async => database;
     memoryDao = ReadingMemoryDao(databaseProvider: provider);
     repository = ReadingMemoryRepository(
       dao: memoryDao,
       coachDao: ReadingCoachDao(databaseProvider: provider),
       noteDao: BookNoteDao(databaseProvider: provider),
+      formalNoteDao: ReadingNoteDao(databaseProvider: provider),
     );
   });
 
@@ -108,6 +116,42 @@ void main() {
     expect(first.id, isNot(second.id));
     expect(await repository.sources(7), hasLength(1));
     expect(await repository.sources(8), hasLength(1));
+  });
+
+  test('formal reading notes are collected as independent memory sources',
+      () async {
+    await database.insert('tb_reading_notes', {
+      'id': 'note-1',
+      'book_id': 7,
+      'title': '标题',
+      'status': 'active',
+      'capture_kind': 'question',
+      'is_favorite': 0,
+      'created_at': 1,
+      'updated_at': 1,
+    });
+    await database.insert('tb_reading_note_blocks', {
+      'id': 'block-1',
+      'note_id': 'note-1',
+      'block_type': 'text',
+      'content': '正式笔记中的问题',
+      'sort_order': 1,
+      'origin': 'user',
+      'created_at': 1,
+      'updated_at': 1,
+    });
+
+    final source = (await repository.collectSources(7)).single;
+
+    expect(source.type, ReadingMemorySourceType.readingNote);
+    expect(source.sourceRef, 'note-1');
+    expect(source.text, '正式笔记中的问题');
+
+    await database
+        .delete('tb_reading_notes', where: 'id = ?', whereArgs: ['note-1']);
+    final stored = (await repository.sources(7)).single;
+    expect(stored.text, '正式笔记中的问题');
+    expect(stored.isAvailable, isFalse);
   });
 
   test('suggested topic sources are excluded from incremental collection',

@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 13;
+const int currentDbVersion = 14;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -253,6 +253,49 @@ CREATE INDEX IF NOT EXISTS idx_memory_sources_book ON tb_reading_memory_sources(
 CREATE INDEX IF NOT EXISTS idx_memory_topics_book_status ON tb_reading_memory_topics(book_id, status);
 CREATE INDEX IF NOT EXISTS idx_memory_cards_book_due ON tb_reading_knowledge_cards(book_id, status, next_review_at);
 CREATE INDEX IF NOT EXISTS idx_memory_reviews_book_time ON tb_reading_card_reviews(book_id, reviewed_at DESC)
+''';
+
+const createReadingNotesWorkspaceSQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_notes (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active', capture_kind TEXT NOT NULL DEFAULT 'manual',
+  is_favorite INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL, deleted_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS tb_reading_note_blocks (
+  id TEXT PRIMARY KEY, note_id TEXT NOT NULL, block_type TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0,
+  origin TEXT NOT NULL DEFAULT 'user', created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tb_reading_note_sources (
+  note_id TEXT NOT NULL, source_type TEXT NOT NULL, source_ref TEXT NOT NULL,
+  chapter_href TEXT, chapter_title TEXT, cfi TEXT, text_snapshot TEXT NOT NULL DEFAULT '',
+  metadata TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL,
+  PRIMARY KEY(note_id, source_type, source_ref)
+);
+CREATE TABLE IF NOT EXISTS tb_reading_tags (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tb_reading_note_tags (
+  note_id TEXT NOT NULL, tag_id TEXT NOT NULL, PRIMARY KEY(note_id, tag_id)
+);
+CREATE TABLE IF NOT EXISTS tb_reading_note_revisions (
+  id TEXT PRIMARY KEY, note_id TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reading_notes_book_status
+ON tb_reading_notes(book_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reading_note_blocks_note
+ON tb_reading_note_blocks(note_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_reading_note_sources_ref
+ON tb_reading_note_sources(source_type, source_ref);
+CREATE INDEX IF NOT EXISTS idx_reading_note_tags_note
+ON tb_reading_note_tags(note_id);
+CREATE INDEX IF NOT EXISTS idx_reading_note_revisions_note
+ON tb_reading_note_revisions(note_id, created_at DESC)
 ''';
 
 class DBHelper {
@@ -665,6 +708,12 @@ class DBHelper {
       case12Migration:
       case 12:
         for (final statement in createReadingMemorySQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case13Migration;
+      case13Migration:
+      case 13:
+        for (final statement in createReadingNotesWorkspaceSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
     }

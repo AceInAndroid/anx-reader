@@ -97,7 +97,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 13);
+    expect(currentDbVersion, 14);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -218,5 +218,30 @@ void main() {
       )
     ''');
     expect(indexes, hasLength(4));
+  });
+
+  test('version 14 migration creates reading note workspace tables and indexes',
+      () async {
+    final db = await openTempDb('reading_notes_workspace.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 13, currentDbVersion);
+
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+        'tb_reading_notes', 'tb_reading_note_blocks',
+        'tb_reading_note_sources', 'tb_reading_tags',
+        'tb_reading_note_tags', 'tb_reading_note_revisions'
+      )
+    ''');
+    expect(tables, hasLength(6));
+    final indexes = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
+        'idx_reading_notes_book_status', 'idx_reading_note_blocks_note',
+        'idx_reading_note_sources_ref', 'idx_reading_note_tags_note',
+        'idx_reading_note_revisions_note'
+      )
+    ''');
+    expect(indexes, hasLength(5));
   });
 }

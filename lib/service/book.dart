@@ -454,6 +454,7 @@ Future<void> pushToReadingPage(
   Book book, {
   String? cfi,
   String? heroTag,
+  bool initialShowCoach = false,
 }) async {
   if (book.isDeleted) {
     AnxToast.show(L10n.of(context).bookDeleted);
@@ -503,6 +504,7 @@ Future<void> pushToReadingPage(
         cfi: cfi,
         initialThemes: initialThemes,
         heroTag: heroTag,
+        initialShowCoach: initialShowCoach,
       ),
     ),
   ).then((_) {

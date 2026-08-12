@@ -23,9 +23,11 @@ import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_memory.dart';
 import 'package:anx_reader/service/ai/reading_memory_ai_service.dart';
+import 'package:anx_reader/service/reading_note/reading_note_capture_service.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/widgets/ai/ai_chat_stream.dart';
+import 'package:anx_reader/widgets/reading_note/quick_capture_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:langchain_core/chat_models.dart';
@@ -2309,22 +2311,28 @@ $correctionRule
 
   Future<void> _saveSelectionAsNote(ReadingContextSnapshot snapshot) async {
     final cfi = snapshot.metadata['cfi']?.toString() ?? '';
-    final now = DateTime.now();
-    await bookNoteDao.save(
-      BookNote(
-        bookId: widget.controller.bookId,
-        content: snapshot.selectedText ?? '',
-        cfi: cfi,
-        chapter: snapshot.chapterTitle ?? '',
-        type: 'highlight',
-        color: Prefs().annotationColor,
-        readerNote: 'AI 阅读工作台待处理划线',
-        createTime: now,
-        updateTime: now,
-      ),
+    final choice = await showReadingNoteQuickCaptureSheet(context);
+    if (choice == null || !mounted) return;
+    final document = await ReadingNoteCaptureService().capture(
+      bookId: widget.controller.bookId,
+      text: snapshot.selectedText ?? '',
+      cfi: cfi,
+      chapter: snapshot.chapterTitle ?? '',
+      chapterHref: snapshot.chapterHref,
+      annotationType: 'highlight',
+      annotationColor: Prefs().annotationColor,
+      kind: choice.kind,
+      body: choice.body,
     );
     widget.controller.clearPendingSelection();
-    if (mounted) AnxToast.show(L10n.of(context).commonSaveSuccess);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(L10n.of(context).commonSaveSuccess),
+      action: SnackBarAction(
+        label: '撤销',
+        onPressed: () => ReadingNoteCaptureService().undo(document.note.id),
+      ),
+    ));
   }
 
   Future<void> _saveAnswerAsNote(String answer) async {

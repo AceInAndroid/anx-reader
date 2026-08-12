@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:anx_reader/dao/book_note.dart';
 import 'package:anx_reader/dao/reading_coach.dart';
 import 'package:anx_reader/dao/reading_memory.dart';
+import 'package:anx_reader/dao/reading_note.dart';
 import 'package:anx_reader/models/reading_memory.dart';
 import 'package:anx_reader/service/ai/reading_review_scheduler.dart';
 import 'package:crypto/crypto.dart';
@@ -12,12 +13,15 @@ class ReadingMemoryRepository {
     ReadingMemoryDao? dao,
     ReadingCoachDao? coachDao,
     BookNoteDao? noteDao,
+    ReadingNoteDao? formalNoteDao,
   })  : _dao = dao ?? readingMemoryDao,
         _coachDao = coachDao ?? readingCoachDao,
-        _noteDao = noteDao ?? bookNoteDao;
+        _noteDao = noteDao ?? bookNoteDao,
+        _formalNoteDao = formalNoteDao ?? readingNoteDaoInstance;
   final ReadingMemoryDao _dao;
   final ReadingCoachDao _coachDao;
   final BookNoteDao _noteDao;
+  final ReadingNoteDao _formalNoteDao;
   Future<List<ReadingMemorySource>> collectSources(int bookId,
       {bool includeUsed = false}) async {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -35,6 +39,25 @@ class ReadingMemoryRepository {
       if (text.isEmpty) continue;
       candidates.add(_source(bookId, ReadingMemorySourceType.annotation,
           note.id?.toString(), null, note.chapter, note.cfi, text, now));
+    }
+    for (final note in await _formalNoteDao.notes(bookId: bookId)) {
+      final blocks = await _formalNoteDao.blocks(note.id);
+      final text = blocks
+          .map((block) => block.content.trim())
+          .where((value) => value.isNotEmpty)
+          .join('\n');
+      if (text.isEmpty) continue;
+      final sources = await _formalNoteDao.sources(note.id);
+      final source = sources.firstOrNull;
+      candidates.add(_source(
+          bookId,
+          ReadingMemorySourceType.readingNote,
+          note.id,
+          source?.chapterHref,
+          source?.chapterTitle,
+          source?.cfi,
+          text,
+          now));
     }
     final deduped =
         {for (final item in candidates) item.contentHash: item}.values.toList();
@@ -78,8 +101,10 @@ class ReadingMemoryRepository {
     final stored = await _dao.sources(bookId);
     final difficulties = await _coachDao.selectDifficulties(bookId);
     final notes = await _noteDao.selectBookNotesByBookId(bookId);
+    final formalNotes = await _formalNoteDao.notes(bookId: bookId);
     final difficultyIds = difficulties.map((item) => item.id).toSet();
     final noteIds = notes.map((item) => item.id?.toString()).nonNulls.toSet();
+    final formalNoteIds = formalNotes.map((item) => item.id).toSet();
     return stored
         .map((source) => source.copyWith(
               isAvailable: switch (source.type) {
@@ -87,6 +112,8 @@ class ReadingMemoryRepository {
                   difficultyIds.contains(source.sourceRef),
                 ReadingMemorySourceType.annotation =>
                   noteIds.contains(source.sourceRef),
+                ReadingMemorySourceType.readingNote =>
+                  formalNoteIds.contains(source.sourceRef),
               },
             ))
         .toList(growable: false);
