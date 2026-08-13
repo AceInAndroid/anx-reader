@@ -4,6 +4,7 @@ console.log('AnxUA', navigator.userAgent)
 const bookLoadStartedAt = Date.now()
 const pendingFlutterEvents = []
 let currentBookLoadStage = 'bootstrap'
+let bookLoadReady = false
 
 const emitFlutter = (name, data) => {
   const bridge = window.flutter_inappwebview
@@ -33,7 +34,7 @@ const reportBookLoadStage = (stage, extra = {}) => {
   })
 }
 
-const reportBookLoadError = (error, stage) => {
+const reportBookLoadError = (error, stage, extra = {}) => {
   const message = error && error.message ? error.message : String(error)
   const failureStage = stage || currentBookLoadStage
   emitFlutter('onBookLoadError', {
@@ -41,6 +42,7 @@ const reportBookLoadError = (error, stage) => {
     message,
     details: error && error.stack ? error.stack : null,
     stage: failureStage,
+    ...extra,
   })
 }
 
@@ -696,14 +698,43 @@ const isPDF = async file => {
 const makeZipLoader = async file => {
   configure({ useWebWorkers: false })
   const reader = new ZipReader(new BlobReader(file))
-  const entries = await reader.getEntries()
-  const map = new Map(entries.map(entry => [entry.filename, entry]))
+  let entries
+  try {
+    entries = await reader.getEntries()
+  } catch (error) {
+    error.code = 'invalid_epub_zip'
+    await reader.close().catch(() => {})
+    throw error
+  }
+  if (!entries.length) {
+    const error = new Error('EPUB archive is empty')
+    error.code = 'empty_epub_archive'
+    await reader.close().catch(() => {})
+    throw error
+  }
+  const normalizeEntryName = name => {
+    const normalized = name.replace(/\\/g, '/').replace(/^\.\//, '')
+    try {
+      return decodeURI(normalized)
+    } catch (_) {
+      return normalized
+    }
+  }
+  const map = new Map()
+  for (const entry of entries) {
+    const normalized = normalizeEntryName(entry.filename)
+    if (!map.has(normalized)) map.set(normalized, entry)
+  }
   const load = f => (name, ...args) =>
-    map.has(name) ? f(map.get(name), ...args) : null
+    map.has(normalizeEntryName(name))
+      ? f(map.get(normalizeEntryName(name)), ...args)
+      : null
   const loadText = load(entry => entry.getData(new TextWriter()))
   const loadBlob = load((entry, type) => entry.getData(new BlobWriter(type)))
-  const getSize = name => map.get(name)?.uncompressedSize ?? 0
-  return { entries, loadText, loadBlob, getSize }
+  const getSize = name =>
+    map.get(normalizeEntryName(name))?.uncompressedSize ?? 0
+  const close = () => reader.close()
+  return { entries, loadText, loadBlob, getSize, close }
 }
 
 const getFileEntries = async entry => entry.isFile ? entry
@@ -764,7 +795,13 @@ const getView = async file => {
       book = await makeFB2(blob)
     } else {
       format = 'epub'
-      book = await new EPUB(loader).init()
+      try {
+        book = await new EPUB(loader).init()
+      } catch (error) {
+        await loader.close().catch(() => {})
+        if (!error.code) error.code = 'invalid_epub'
+        throw error
+      }
     }
   }
   else if (await isPDF(file)) {
@@ -1372,6 +1409,21 @@ class Reader {
     this.view.addEventListener('doctouchstart', this.#onTouchStart.bind(this))
     this.view.addEventListener('doctouchmove', this.#onTouchMove.bind(this))
     this.view.addEventListener('doctouchend', this.#onTouchEnd.bind(this))
+    this.view.addEventListener('section-error', ({ detail }) => {
+      const error = detail?.error ?? new Error('Failed to load EPUB section')
+      if (!error.code) error.code = 'epub_section_load_failed'
+      const payload = {
+        code: error.code,
+        message: error.message ?? String(error),
+        details: error.stack ?? null,
+        stage: 'render',
+        sectionIndex: detail?.index,
+      }
+      if (bookLoadReady) emitFlutter('onBookSectionError', payload)
+      else reportBookLoadError(error, 'render', {
+        sectionIndex: detail?.index,
+      })
+    })
 
     setStyle()
     if (!cfi)
@@ -1925,6 +1977,7 @@ const open = async (file, cfi) => {
   }
   
   if (!importing) {
+    bookLoadReady = true
     reportBookLoadStage('ready')
     callFlutter('onLoadEnd')
     onSetToc()

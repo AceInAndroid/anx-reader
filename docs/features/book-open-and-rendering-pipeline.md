@@ -239,6 +239,19 @@ Flutter handlers 则处理目录、定位、翻页、批注、书签、选区菜
 | R6/R7 文件服务边界 | 已修复 | 随机 token、批准文件表、撤销、GET/HEAD/Range、MIME、受限 CORS 和脱敏日志测试通过 |
 | R8 显式 CFI 进度 | 已修复 | 离开初始位置后恢复正常保存，首次定位不覆盖进度 |
 | R14/R15 资源关闭与调试 | 已修复 | `disposeReader()`；Android 仅 debug 或开发者模式开启调试 |
+| EPUB ZIP 生命周期与重复解压 | 已修复 | ZIP 初始化失败和退出阅读时关闭 reader；同一资源的并发请求共享解压任务 |
+| EPUB 结构与章节错误 | 已修复 | container/OPF/ZIP 使用稳定错误码；首屏章节失败进入错误页，后续章节失败记录可恢复日志 |
+
+### EPUB 专项优化状态
+
+- ZIP 中央目录只建立一次，并对反斜杠、前导 `./` 和 URI 编码的条目名做兼容归一化。
+- CSS、字体和图片等同一资源的并发请求共享正在执行的解压任务，避免复杂章节重复占用 CPU 和内存。
+- 旧 EPUB 中的 `res://`、`file://`、`content://` 厂商字体路径及不存在的包内资源会降级为空资源，避免低性能 WebView 产生重复 CORS/404 请求。
+- 导航文档、NCX 和厂商显示选项并行读取；加密信息仍先于正文资源解码完成。
+- 阅读退出会撤销 EPUB Object URL、清空资源引用图并关闭 ZIP reader。
+- EPUB、MOBI、AZW3 和 FB2 仍需先把整本文件载入 WebView。ZIP 条目按需解压，但当前不支持从 HTTP Range 直接解析 EPUB 中央目录；大文件继续使用打开前内存风险提示。
+
+真实 EPUB2 样本《如何阅读一本书》（483 KiB）验证结果：ZIP 完整，NCX 两级目录正确解析为 33 个 spine 章节和 12 个顶层目录；封面、长正文、末章、脚注锚点和 CFI 恢复均通过。modern 与 Chrome 83 legacy bundle 都能完成 `bootstrap → fetch → detect → parse → render → ready`，无 bridge 或资源加载错误。样本内旧阅读器 `res:///` 字体路径在过滤前会产生 99 条控制台错误，过滤后降为 0；剩余 warning 为 Chromium 对 iframe sandbox 组合的既有提示。
 
 以下各节保留原始审计证据，供回归定位。标记为已修复的描述代表修复前代码，不应再视为当前行为。
 

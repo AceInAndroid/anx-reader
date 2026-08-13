@@ -1242,13 +1242,22 @@ export class Paginator extends HTMLElement {
         this.setStyles(this.#styles)
         this.dispatchEvent(new CustomEvent('load', { detail }))
       }
-      await this.#display(Promise.resolve(this.sections[index].load())
-        .then(src => ({ index, src, anchor, onLoad, select }))
-        .catch(e => {
-          console.warn(e)
-          console.warn(new Error(`Failed to load section ${index}`))
-          return {}
+      let src
+      try {
+        src = await this.sections[index].load()
+      } catch (e) {
+        console.warn(e)
+        console.warn(new Error(`Failed to load section ${index}`))
+        if (!e.code) e.code = 'epub_section_load_failed'
+        // Initial rendering must reject so Flutter can show its error page.
+        if (!this.#view) throw e
+        this.dispatchEvent(new CustomEvent('section-error', {
+          detail: { index, error: e },
         }))
+        // Later failures keep the current section intact and remain retryable.
+        return false
+      }
+      await this.#display({ index, src, anchor, onLoad, select })
     }
   }
   async goTo(target) {

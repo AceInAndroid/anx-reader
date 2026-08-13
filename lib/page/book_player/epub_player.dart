@@ -970,6 +970,20 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         return null;
       },
     );
+    controller.addJavaScriptHandler(
+      handlerName: 'onBookSectionError',
+      callback: (args) {
+        final payload = args.isNotEmpty && args.first is Map
+            ? Map<String, dynamic>.from(args.first as Map)
+            : const <String, dynamic>{};
+        AnxLog.warning(
+          'BookLoad[${widget.book.id}] recoverable section error '
+          'code=${payload['code']} index=${payload['sectionIndex']} '
+          'message=${payload['message']}',
+        );
+        return null;
+      },
+    );
 
     controller.addJavaScriptHandler(
         handlerName: 'onRelocated',
