@@ -101,6 +101,7 @@ Stream<String> aiGenerateStream(
   bool useAgent = false,
   WidgetRef? ref,
   ReadingAiMode? readingMode,
+  bool allowFallback = true,
 }) async* {
   if (useAgent) {
     assert(ref != null, 'ref must be provided when useAgent is true');
@@ -120,7 +121,7 @@ Stream<String> aiGenerateStream(
     yield chunk;
   }
 
-  if (!primary.isError) return;
+  if (!primary.isError || !allowFallback) return;
 
   final fallbackId = _resolveRunnableFallbackId(
     registry: registry,
@@ -129,12 +130,13 @@ Stream<String> aiGenerateStream(
   if (fallbackId == null) return;
 
   AnxLog.info('Trying fallback provider: $fallbackId');
-  yield '\n[Falling back to backup provider...]';
 
   final fallback = await _generateStream(
     messages: messages,
     identifier: fallbackId,
-    overrideConfig: config,
+    // A fallback must use its own stored URL, key and model. Passing the
+    // primary override here can silently route it back through bad config.
+    overrideConfig: null,
     regenerate: regenerate,
     useAgent: useAgent,
     registry: registry,
@@ -153,6 +155,7 @@ Future<String> aiGenerateText(
   bool useAgent = false,
   WidgetRef? ref,
   ReadingAiMode? readingMode,
+  bool allowFallback = true,
 }) async {
   String? lastResult;
   await for (final chunk in aiGenerateStream(
@@ -163,6 +166,7 @@ Future<String> aiGenerateText(
     useAgent: useAgent,
     ref: ref,
     readingMode: readingMode,
+    allowFallback: allowFallback,
   )) {
     lastResult = chunk;
   }
@@ -197,7 +201,7 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
       execution = await _generateStream(
         messages: messages,
         identifier: fallbackId,
-        overrideConfig: config,
+        overrideConfig: null,
         regenerate: regenerate,
         useAgent: false,
         registry: registry,
@@ -262,7 +266,7 @@ String? _resolveRunnableFallbackId({
         .toList();
     final fallback = providers
         .where((p) => p.id == fallbackId)
-        .where((p) => p.enabled && AiKeyRotator.hasValidKey(p))
+        .where((p) => p.isRunnable)
         .firstOrNull;
     if (fallback != null) return fallback.id;
   } catch (_) {}
@@ -284,6 +288,7 @@ Future<_AiExecutionResult> _generateStream({
 
   LangchainAiConfig config;
   String? resolvedProviderId;
+  var hasStoredProviders = false;
 
   // Try to use new provider system first if ref is available
   if (registry.ref != null && overrideConfig == null) {
@@ -325,6 +330,7 @@ Future<_AiExecutionResult> _generateStream({
             useAgent: useAgent,
             registry: registry,
             config: config,
+            protocol: provider.protocol,
           );
 
           result.onSuccess = () {
@@ -347,6 +353,7 @@ Future<_AiExecutionResult> _generateStream({
     try {
       final rawProviders = Prefs().getAiProviders();
       if (rawProviders.isNotEmpty) {
+        hasStoredProviders = true;
         final providers = rawProviders
             .map((json) => AiProvider.fromJson(json as Map<String, dynamic>))
             .toList();
@@ -355,10 +362,7 @@ Future<_AiExecutionResult> _generateStream({
         if (identifier != null) {
           try {
             provider = providers.firstWhere(
-              (p) =>
-                  p.id == identifier &&
-                  p.enabled &&
-                  AiKeyRotator.hasValidKey(p),
+              (p) => p.id == identifier && p.isRunnable,
             );
           } catch (_) {
             provider = null;
@@ -367,15 +371,10 @@ Future<_AiExecutionResult> _generateStream({
           final selectedId = Prefs().selectedAiService;
           try {
             provider = providers.firstWhere(
-              (p) =>
-                  p.id == selectedId &&
-                  p.enabled &&
-                  AiKeyRotator.hasValidKey(p),
+              (p) => p.id == selectedId && p.isRunnable,
             );
           } catch (_) {}
-          provider ??= providers
-              .where((p) => p.enabled && AiKeyRotator.hasValidKey(p))
-              .firstOrNull;
+          provider ??= providers.where((p) => p.isRunnable).firstOrNull;
         }
 
         if (provider != null) {
@@ -410,6 +409,7 @@ Future<_AiExecutionResult> _generateStream({
               useAgent: useAgent,
               registry: registry,
               config: config,
+              protocol: provider.protocol,
             );
 
             result.onSuccess = () {
@@ -433,6 +433,24 @@ Future<_AiExecutionResult> _generateStream({
         'Failed to use no-ref new provider system, falling back to legacy: $e',
       );
     }
+  }
+
+  // Once provider records exist, they are authoritative. Do not silently use
+  // stale legacy credentials when the selected provider is incomplete or
+  // disabled; that would make the request behavior disagree with settings.
+  if (overrideConfig == null && hasStoredProviders) {
+    final selectedIdentifier = identifier ?? Prefs().selectedAiService;
+    final context = navigatorKey.currentContext;
+    return _AiExecutionResult(
+      stream: Stream.value(
+        context == null
+            ? 'AI service not configured'
+            : L10n.of(context).aiServiceNotConfigured,
+      ),
+      providerId: selectedIdentifier,
+      isError: true,
+      model: null,
+    );
   }
 
   // Fall back to legacy system
@@ -495,6 +513,7 @@ Future<_AiExecutionResult> _executeStream({
   required bool useAgent,
   required LangchainAiRegistry registry,
   required LangchainAiConfig config,
+  AiProtocol? protocol,
 }) async {
   const maxRetries = 3;
   late final _AiExecutionResult result;
@@ -542,7 +561,13 @@ Future<_AiExecutionResult> _executeStream({
           try {
             currentModel.close();
           } catch (_) {}
-          currentPipeline = registry.resolve(config, useAgent: useAgent);
+          currentPipeline = protocol == null
+              ? registry.resolve(config, useAgent: useAgent)
+              : registry.resolveByProtocol(
+                  protocol,
+                  config,
+                  useAgent: useAgent,
+                );
           currentModel = currentPipeline.model;
         }
       }

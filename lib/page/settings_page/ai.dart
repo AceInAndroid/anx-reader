@@ -4,6 +4,7 @@ import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/ai_panel_position.dart';
 import 'package:anx_reader/enums/ai_panel_width_ratio.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
+import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/page/settings_page/ai_provider_list_page.dart';
 import 'package:anx_reader/providers/ai_cache_count.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
@@ -13,6 +14,7 @@ import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/web_search.dart';
 import 'package:anx_reader/widgets/common/anx_button.dart';
 import 'package:anx_reader/widgets/common/anx_segmented_button.dart';
+import 'package:anx_reader/widgets/common/container/filled_container.dart';
 import 'package:anx_reader/widgets/delete_confirm.dart';
 import 'package:anx_reader/widgets/settings/settings_section.dart';
 import 'package:anx_reader/widgets/settings/settings_tile.dart';
@@ -214,36 +216,10 @@ class _AISettingsState extends ConsumerState<AISettings> {
     );
 
     return settingsSections(sections: [
-      SettingsSection(
-        title: Text(L10n.of(context).settingsAiServices),
-        tiles: [
-          SettingsTile.navigation(
-            title: Text(l10n.settingsAiProviders),
-            description: _buildProviderDescription(),
-            onPressed: (context) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const AiProviderCenterPage(),
-                ),
-              );
-            },
-          ),
-          CustomSettingsTile(
-              child: _AiRpmTile(setState: () => setState(() {}))),
-          // SettingsTile.navigation(
-          //   leading: const Icon(Icons.chat),
-          //   title: Text(L10n.of(context).aiChat),
-          //   onPressed: (context) {
-          //     Navigator.push(
-          //       context,
-          //       CupertinoPageRoute(
-          //         builder: (context) => const AiChatPage(),
-          //       ),
-          //     );
-          //   },
-          // ),
-        ],
+      CustomSettingsSection(
+        child: _AiProviderConfigurationSection(
+          rpmTile: _AiRpmTile(setState: () => setState(() {})),
+        ),
       ),
       SettingsSection(
         title: Text(L10n.of(context).settingsAiChatDisplay),
@@ -786,16 +762,6 @@ class _AISettingsState extends ConsumerState<AISettings> {
         ReadingOutputTemplate.practicePlan => '实践计划',
       };
 
-  // Build description showing current selected provider
-  Widget? _buildProviderDescription() {
-    final provider =
-        ref.read(aiProvidersProvider.notifier).getSelectedProvider();
-    if (provider == null) {
-      return null;
-    }
-    return Text(provider.title);
-  }
-
   // AI chat display mode configuration
   AbstractSettingsTile aiChatDisplayModeTile() {
     final l10n = L10n.of(context);
@@ -1251,6 +1217,354 @@ class _AISettingsState extends ConsumerState<AISettings> {
             child: Text(L10n.of(context).commonConfirm),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AiProviderConfigurationSection extends ConsumerWidget {
+  const _AiProviderConfigurationSection({required this.rpmTile});
+
+  final Widget rpmTile;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = L10n.of(context);
+    ref.watch(aiProvidersProvider);
+    final notifier = ref.read(aiProvidersProvider.notifier);
+    final primary = notifier.getRunnableSelectedProvider();
+    final dedicatedTranslation = notifier.getDedicatedTranslationProvider();
+    final effectiveTranslation = notifier.getRunnableTranslationProvider();
+    final fallback = notifier.getFallbackProvider();
+    final fallbackCandidates = notifier.getRunnableFallbackCandidates(
+      primary?.id,
+    );
+
+    final cards = <Widget>[
+      _AiConfigurationCard(
+        key: const ValueKey('ai-general-provider-card'),
+        icon: Icons.auto_awesome_rounded,
+        title: l10n.settingsAiGeneralProviders,
+        description: l10n.settingsAiGeneralProvidersTip,
+        status: _providerStatus(context, primary),
+        ready: primary != null,
+        onTap: () => _openProviderList(
+          context,
+          AiProviderListMode.general,
+        ),
+      ),
+      _AiConfigurationCard(
+        key: const ValueKey('ai-translation-provider-card'),
+        icon: Icons.translate_rounded,
+        title: l10n.aiTranslationProvider,
+        description: dedicatedTranslation == null
+            ? l10n.aiTranslationFollowsGeneral
+            : l10n.settingsAiTranslationProvidersTip,
+        status: effectiveTranslation == null
+            ? l10n.aiProviderNoRunnable
+            : dedicatedTranslation == null
+                ? l10n.aiTranslationProviderUsingGeneral(
+                    effectiveTranslation.model,
+                    effectiveTranslation.title,
+                  )
+                : _providerStatus(context, effectiveTranslation),
+        ready: effectiveTranslation != null,
+        onTap: () => _openProviderList(
+          context,
+          AiProviderListMode.translation,
+        ),
+      ),
+      _AiFallbackConfigurationCard(
+        key: const ValueKey('ai-fallback-provider-card'),
+        primary: primary,
+        fallback: fallback,
+        candidates: fallbackCandidates,
+        onChanged: notifier.setFallbackProvider,
+        onConfigure: () => _openProviderList(
+          context,
+          AiProviderListMode.general,
+        ),
+      ),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              l10n.settingsAiServices,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final spacing = 12.0;
+              final isWide = constraints.maxWidth >= 900;
+              final isTwoColumn = constraints.maxWidth >= 620;
+              final regularCardWidth = isWide
+                  ? (constraints.maxWidth - spacing * 2) / 3
+                  : isTwoColumn
+                      ? (constraints.maxWidth - spacing) / 2
+                      : constraints.maxWidth;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (var index = 0; index < cards.length; index++)
+                    SizedBox(
+                      width: isTwoColumn && !isWide && index == 2
+                          ? constraints.maxWidth
+                          : regularCardWidth,
+                      child: cards[index],
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          FilledContainer(radius: 20, child: rpmTile),
+        ],
+      ),
+    );
+  }
+
+  String _providerStatus(BuildContext context, AiProvider? provider) {
+    if (provider == null) return L10n.of(context).aiProviderNoRunnable;
+    final model = provider.model.trim();
+    return model.isEmpty ? provider.title : '${provider.title} · $model';
+  }
+
+  Future<void> _openProviderList(
+    BuildContext context,
+    AiProviderListMode mode,
+  ) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AiProviderListPage(mode: mode),
+      ),
+    );
+  }
+}
+
+class _AiConfigurationCard extends StatelessWidget {
+  const _AiConfigurationCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.status,
+    required this.ready,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+  final String status;
+  final bool ready;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return FilledContainer(
+      radius: 24,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 188),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(icon, color: colorScheme.onPrimaryContainer),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  description,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Icon(
+                        ready
+                            ? Icons.check_circle_outline
+                            : Icons.error_outline_rounded,
+                        size: 18,
+                        color: ready ? colorScheme.primary : colorScheme.error,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        status,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: ready ? null : colorScheme.error,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AiFallbackConfigurationCard extends StatelessWidget {
+  const _AiFallbackConfigurationCard({
+    super.key,
+    required this.primary,
+    required this.fallback,
+    required this.candidates,
+    required this.onChanged,
+    required this.onConfigure,
+  });
+
+  final AiProvider? primary;
+  final AiProvider? fallback;
+  final List<AiProvider> candidates;
+  final ValueChanged<String?> onChanged;
+  final VoidCallback onConfigure;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final primaryName = primary?.title ?? l10n.aiProviderNoRunnable;
+
+    return FilledContainer(
+      radius: 24,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 188),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Icon(
+                      Icons.alt_route_rounded,
+                      color: colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      l10n.aiFallbackProvider,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                fallback == null
+                    ? l10n.aiFallbackTip
+                    : l10n.aiFallbackChain(fallback!.title, primaryName),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (primary == null || candidates.isEmpty)
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: OutlinedButton.icon(
+                    onPressed: onConfigure,
+                    icon: const Icon(Icons.settings_outlined),
+                    label: Text(l10n.aiProviderConfigure),
+                  ),
+                )
+              else
+                DropdownButtonFormField<String?>(
+                  key: ValueKey(fallback?.id),
+                  initialValue: fallback?.id,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: l10n.aiFallbackProvider,
+                    border: const OutlineInputBorder(),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 12,
+                    ),
+                  ),
+                  items: [
+                    DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text(l10n.aiFallbackNone),
+                    ),
+                    for (final provider in candidates)
+                      DropdownMenuItem<String?>(
+                        value: provider.id,
+                        child: Text(
+                          provider.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: onChanged,
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

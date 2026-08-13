@@ -1,5 +1,4 @@
 import 'package:anx_reader/enums/ai_reasoning_effort.dart';
-import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
@@ -39,7 +38,10 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   List<AiApiKey> _apiKeys = [];
   bool _isModified = false;
   bool _isFetchingModels = false;
+  String? _createdProviderId;
   final GlobalKey _fetchButtonKey = GlobalKey();
+
+  String? get _providerId => widget.providerId ?? _createdProviderId;
 
   @override
   void initState() {
@@ -79,15 +81,14 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = L10n.of(context);
-    final provider = widget.providerId != null
-        ? ref
-            .watch(aiProvidersProvider)
-            .firstWhere((p) => p.id == widget.providerId)
+    final providerId = _providerId;
+    final provider = providerId != null
+        ? ref.watch(aiProvidersProvider).firstWhere((p) => p.id == providerId)
         : null;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.providerId == null
+        title: Text(providerId == null
             ? l10n.settingsAiProvidersAdd
             : l10n.settingsAiProviderName),
         actions: [
@@ -252,11 +253,6 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
                     AnxButton.outlined(
                       onPressed: _testConnection,
                       child: Text(l10n.settingsAiProviderTestConnection),
-                    ),
-                    const SizedBox(height: 8),
-                    AnxButton.outlined(
-                      onPressed: _testFallbackChain,
-                      child: const Text('Test Fallback Chain'),
                     ),
                   ],
                 ),
@@ -630,46 +626,8 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   }
 
   void _saveProvider() {
-    final l10n = L10n.of(context);
-
-    if (_nameController.text.isEmpty || _urlController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.commonFailed)),
-      );
-      return;
-    }
-
-    final provider = AiProvider(
-      id: widget.providerId ?? const Uuid().v4(),
-      title: _nameController.text,
-      url: _urlController.text,
-      protocol: _selectedProtocol,
-      enabled: true,
-      isBuiltin: widget.providerId != null
-          ? ref
-              .read(aiProvidersProvider)
-              .firstWhere((p) => p.id == widget.providerId)
-              .isBuiltin
-          : false,
-      apiKeys: _apiKeys,
-      model: _modelController.text,
-      reasoningEffort: _reasoningEffort,
-      requestTimeoutSeconds: _parseRequestTimeoutSeconds(),
-      keyIndex: 0,
-      createdAt: widget.providerId != null
-          ? ref
-              .read(aiProvidersProvider)
-              .firstWhere((p) => p.id == widget.providerId)
-              .createdAt
-          : DateTime.now(),
-      updatedAt: DateTime.now(),
-    );
-
-    if (widget.providerId == null) {
-      ref.read(aiProvidersProvider.notifier).addProvider(provider);
-    } else {
-      ref.read(aiProvidersProvider.notifier).updateProvider(provider);
-    }
+    if (!_validateProviderForm()) return;
+    _persistProviderForm();
 
     setState(() => _isModified = false);
     Navigator.pop(context);
@@ -679,45 +637,12 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     final l10n = L10n.of(context);
 
     // Save any pending changes before testing so the provider has the latest config
-    if (_isModified) {
-      if (_nameController.text.isEmpty || _urlController.text.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(l10n.commonFailed)),
-        );
-        return;
-      }
-      final provider = AiProvider(
-        id: widget.providerId ?? const Uuid().v4(),
-        title: _nameController.text,
-        url: _urlController.text,
-        protocol: _selectedProtocol,
-        enabled: true,
-        isBuiltin: widget.providerId != null
-            ? ref
-                .read(aiProvidersProvider)
-                .firstWhere((p) => p.id == widget.providerId)
-                .isBuiltin
-            : false,
-        apiKeys: _apiKeys,
-        model: _modelController.text,
-        reasoningEffort: _reasoningEffort,
-        requestTimeoutSeconds: _parseRequestTimeoutSeconds(),
-        keyIndex: 0,
-        createdAt: widget.providerId != null
-            ? ref
-                .read(aiProvidersProvider)
-                .firstWhere((p) => p.id == widget.providerId)
-                .createdAt
-            : DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-      if (widget.providerId == null) {
-        ref.read(aiProvidersProvider.notifier).addProvider(provider);
-      } else {
-        ref.read(aiProvidersProvider.notifier).updateProvider(provider);
-      }
+    if (_providerId == null || _isModified) {
+      if (!_validateProviderForm()) return;
+      _persistProviderForm();
       setState(() => _isModified = false);
     }
+    final providerId = _providerId;
 
     SmartDialog.show(
       onDismiss: () {
@@ -729,54 +654,63 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
           width: double.maxFinite,
           child: AiStream(
             prompt: generatePromptTest(),
-            identifier: widget.providerId,
+            identifier: providerId,
             regenerate: true,
+            allowFallback: false,
           ),
         ),
       ),
     );
   }
 
-  void _testFallbackChain() {
-    final l10n = L10n.of(context);
-    final fallbackId = Prefs().aiFallbackProvider;
-    if (fallbackId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(l10n.aiFallbackTip)),
-      );
-      return;
+  bool _validateProviderForm() {
+    if (_nameController.text.trim().isNotEmpty &&
+        _urlController.text.trim().isNotEmpty &&
+        _modelController.text.trim().isNotEmpty &&
+        _apiKeys.any((key) => key.enabled && key.key.trim().isNotEmpty)) {
+      return true;
     }
 
-    SmartDialog.show(
-      onDismiss: () {
-        cancelActiveAiRequest();
-      },
-      builder: (context) => AlertDialog(
-        title: Text('${l10n.commonTest} Fallback'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Expected success result: FALLBACK_OK',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.maxFinite,
-              child: AiStream(
-                prompt: generatePromptFallbackProbe(),
-                identifier: widget.providerId,
-                config: const {
-                  'api_key': 'INVALID_API_KEY_FOR_FALLBACK_TEST',
-                },
-                regenerate: true,
-              ),
-            ),
-          ],
-        ),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(L10n.of(context).configurationInformationIsIncomplete),
       ),
     );
+    return false;
+  }
+
+  void _persistProviderForm() {
+    final currentId = _providerId;
+    final providers = ref.read(aiProvidersProvider);
+    AiProvider? existing;
+    if (currentId != null) {
+      try {
+        existing = providers.firstWhere((provider) => provider.id == currentId);
+      } catch (_) {}
+    }
+
+    final provider = AiProvider(
+      id: currentId ?? const Uuid().v4(),
+      title: _nameController.text.trim(),
+      url: _urlController.text.trim(),
+      protocol: _selectedProtocol,
+      enabled: existing?.enabled ?? true,
+      isBuiltin: existing?.isBuiltin ?? false,
+      apiKeys: _apiKeys,
+      model: _modelController.text.trim(),
+      reasoningEffort: _reasoningEffort,
+      requestTimeoutSeconds: _parseRequestTimeoutSeconds(),
+      keyIndex: existing?.keyIndex ?? 0,
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    final notifier = ref.read(aiProvidersProvider.notifier);
+    if (existing == null) {
+      _createdProviderId = notifier.addProvider(provider);
+    } else {
+      notifier.updateProvider(provider);
+    }
   }
 
   int _parseRequestTimeoutSeconds() {

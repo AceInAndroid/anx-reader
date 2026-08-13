@@ -56,6 +56,7 @@ class AiChatHistoryEntry {
   final List<Map<String, dynamic>> citations;
 
   AiChatHistoryEntry copyWith({
+    String? serviceId,
     List<ChatMessage>? messages,
     int? updatedAt,
     bool? completed,
@@ -78,7 +79,7 @@ class AiChatHistoryEntry {
   }) {
     return AiChatHistoryEntry(
       id: id,
-      serviceId: serviceId,
+      serviceId: serviceId ?? this.serviceId,
       model: model ?? this.model,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

@@ -49,19 +49,6 @@ PromptTemplatePayload generatePromptTest() {
   );
 }
 
-PromptTemplatePayload generatePromptFallbackProbe() {
-  final template = ChatPromptTemplate.fromPromptMessages([
-    HumanChatMessagePromptTemplate.fromTemplate(
-      'Reply with exactly FALLBACK_OK and nothing else.',
-    ),
-  ]);
-  return PromptTemplatePayload(
-    template: template,
-    variables: const {},
-    identifier: AiPrompts.test,
-  );
-}
-
 PromptTemplatePayload generatePromptSummaryTheChapter() {
   final prompt = Prefs().getAiPrompt(AiPrompts.summaryTheChapter);
   final normalized = _normalizePrompt(prompt);

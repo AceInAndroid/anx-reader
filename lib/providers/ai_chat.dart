@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/providers/ai_history.dart';
+import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/index.dart';
@@ -48,9 +49,13 @@ class AiChat extends _$AiChat {
     bool isRegenerate,
   ) async* {
     final sessionId = _ensureSessionId();
-    final serviceId = Prefs().selectedAiService;
-    final config = Prefs().getAiConfig(serviceId);
-    final model = (config['model'])?.trim() ?? '';
+    final selectedProvider = widgetRef
+        .read(aiProvidersProvider.notifier)
+        .getRunnableSelectedProvider();
+    final serviceId = selectedProvider?.id ?? Prefs().selectedAiService;
+    final model = selectedProvider?.model.trim() ??
+        (Prefs().getAiConfig(serviceId)['model'])?.trim() ??
+        '';
     final historyNotifier = widgetRef.read(aiHistoryProvider.notifier);
     final initialHistoryState = widgetRef
         .read(aiHistoryProvider)
@@ -123,6 +128,7 @@ class AiChat extends _$AiChat {
       messages: List<ChatMessage>.from(updatedMessages),
       updatedAt: now,
       completed: false,
+      serviceId: serviceId,
       model: model,
       analysisDepth: analysisRequest?.depth.name,
       frameworks: analysisRequest?.frameworks

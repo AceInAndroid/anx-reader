@@ -1,63 +1,13 @@
-import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/page/settings_page/ai_provider_detail_page.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
+import 'package:anx_reader/widgets/common/container/filled_container.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 
 enum AiProviderListMode { general, translation }
-
-class AiProviderCenterPage extends StatelessWidget {
-  const AiProviderCenterPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = L10n.of(context);
-
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.settingsAiProviders)),
-      body: ListView(
-        children: [
-          ListTile(
-            leading: const Icon(Icons.auto_awesome),
-            title: Text(l10n.settingsAiGeneralProviders),
-            subtitle: Text(l10n.settingsAiGeneralProvidersTip),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const AiProviderListPage(
-                    mode: AiProviderListMode.general,
-                  ),
-                ),
-              );
-            },
-          ),
-          const Divider(height: 1),
-          ListTile(
-            leading: const Icon(Icons.translate_rounded),
-            title: Text(l10n.settingsAiTranslationProviders),
-            subtitle: Text(l10n.settingsAiTranslationProvidersTip),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const AiProviderListPage(
-                    mode: AiProviderListMode.translation,
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class AiProviderListPage extends ConsumerWidget {
   const AiProviderListPage({
@@ -71,8 +21,11 @@ class AiProviderListPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = L10n.of(context);
     final providers = ref.watch(aiProvidersProvider);
-    final selectedId =
-        ref.watch(aiProvidersProvider.notifier).getSelectedProvider()?.id;
+    final notifier = ref.read(aiProvidersProvider.notifier);
+    final selectedId = mode == AiProviderListMode.general
+        ? notifier.getSelectedProvider()?.id
+        : notifier.getDedicatedTranslationProvider()?.id;
+    final generalProvider = notifier.getRunnableSelectedProvider();
 
     return Scaffold(
       appBar: AppBar(
@@ -84,325 +37,73 @@ class AiProviderListPage extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
-            onPressed: () => _addProvider(context, ref),
+            onPressed: () => _addProvider(context),
             tooltip: l10n.settingsAiProvidersAdd,
           ),
         ],
       ),
-      body: Column(
+      body: ListView(
+        padding: const EdgeInsets.only(top: 8, bottom: 24),
         children: [
-          Expanded(
-            child: ListView.builder(
-              itemCount: providers.length,
-              itemBuilder: (context, index) {
-                final provider = providers[index];
-                final isSelected = provider.id == selectedId;
-                final isTranslationSelected =
-                    provider.id == _validTranslationProviderId(providers);
-                final hasValidKey = provider.hasValidKey;
-
-                return ListTile(
-                  leading: _buildProviderLogo(provider),
-                  title: Text(provider.title),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        provider.url,
-                        style: Theme.of(context).textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (!hasValidKey)
-                        Text(
-                          l10n.settingsAiProviderNoValidKeys,
-                          style: TextTheme.of(context).bodySmall?.copyWith(
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                        ),
-                    ],
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+            child: Text(
+              mode == AiProviderListMode.translation
+                  ? l10n.settingsAiTranslationProvidersTip
+                  : l10n.settingsAiGeneralProvidersTip,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (mode == AiProviderListMode.translation)
-                        IconButton(
-                          tooltip: l10n.settingsAiTranslationProviders,
-                          onPressed: hasValidKey && provider.enabled
-                              ? () => _setTranslationProvider(ref, provider.id)
-                              : null,
-                          icon: Icon(
-                            isTranslationSelected
-                                ? Icons.check_circle
-                                : Icons.radio_button_unchecked,
-                          ),
-                        )
-                      else if (isSelected)
-                        Chip(
-                          label: Text(l10n.settingsAiProviderDefault),
-                          labelStyle: TextTheme.of(context).labelSmall,
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                        )
-                      else
-                        TextButton(
-                          onPressed: () {
-                            ref
-                                .read(aiProvidersProvider.notifier)
-                                .setSelectedProvider(provider.id);
-                          },
-                          child: Text(l10n.settingsAiProviderSetDefault),
-                        ),
-                      const SizedBox(width: 8),
-                      Switch(
-                        value: provider.enabled,
-                        onChanged: (value) {
-                          ref
-                              .read(aiProvidersProvider.notifier)
-                              .toggleProvider(provider.id, value);
-                        },
-                      ),
-                    ],
-                  ),
-                  onTap: () async {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) =>
-                            AiProviderDetailPage(providerId: provider.id),
-                      ),
-                    );
-                  },
-                  onLongPress: provider.isBuiltin
-                      ? null
-                      : () => _deleteProvider(context, ref, provider),
-                );
-              },
             ),
           ),
           if (mode == AiProviderListMode.translation)
-            _buildTranslationProviderCard(context, ref, providers, selectedId),
-          if (mode == AiProviderListMode.general)
-            _buildFallbackCard(context, ref, providers, selectedId),
-        ],
-      ),
-    );
-  }
-
-  String? _validTranslationProviderId(List<AiProvider> providers) {
-    final translationId = Prefs().translationAiProvider;
-    if (translationId == null) return null;
-    final isValid = providers.any(
-      (provider) =>
-          provider.id == translationId &&
-          provider.enabled &&
-          provider.hasValidKey,
-    );
-    return isValid ? translationId : null;
-  }
-
-  void _setTranslationProvider(WidgetRef ref, String? providerId) {
-    Prefs().translationAiProvider = providerId;
-    ref.read(aiProvidersProvider.notifier).refresh();
-  }
-
-  Widget _buildTranslationProviderCard(
-    BuildContext context,
-    WidgetRef ref,
-    List<AiProvider> providers,
-    String? selectedId,
-  ) {
-    final l10n = L10n.of(context);
-    final notifier = ref.watch(aiProvidersProvider.notifier);
-    final selectedProvider = selectedId == null
-        ? null
-        : notifier.getRunnableProviderById(selectedId);
-    final runnableProviders = providers.where(
-      (provider) => provider.enabled && provider.hasValidKey,
-    );
-    final translationId = Prefs().translationAiProvider;
-    final validTranslationId =
-        runnableProviders.any((provider) => provider.id == translationId)
-            ? translationId
-            : null;
-    final effectiveName = validTranslationId == null
-        ? selectedProvider?.title
-        : providers
-            .firstWhere((provider) => provider.id == validTranslationId)
-            .title;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        border: Border(
-          top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.translate_rounded,
-                size: 20,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                l10n.aiTranslationProvider,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String?>(
-            initialValue: validTranslationId,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            _FollowGeneralProviderTile(
+              selected: selectedId == null,
+              generalProvider: generalProvider,
+              onSelected: () => notifier.setTranslationProvider(null),
             ),
-            items: [
-              DropdownMenuItem<String?>(
-                value: null,
-                child: Text(l10n.aiTranslationProviderDefault),
-              ),
-              for (final provider in runnableProviders)
-                DropdownMenuItem<String?>(
-                  value: provider.id,
-                  child: Text(provider.title),
-                ),
-            ],
-            onChanged: (value) {
-              Prefs().translationAiProvider = value;
-              ref.read(aiProvidersProvider.notifier).refresh();
-            },
-          ),
-          const SizedBox(height: 8),
-          Text(
-            effectiveName == null
-                ? l10n.aiTranslationProviderTip
-                : l10n.aiTranslationProviderUsing(effectiveName),
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFallbackCard(
-    BuildContext context,
-    WidgetRef ref,
-    List<AiProvider> providers,
-    String? selectedId,
-  ) {
-    final l10n = L10n.of(context);
-    final fallbackId = Prefs().aiFallbackProvider;
-    final notifier = ref.watch(aiProvidersProvider.notifier);
-    final fallbackCandidates = notifier.getRunnableFallbackCandidates(
-      selectedId,
-    );
-    final validFallbackId =
-        fallbackCandidates.any((p) => p.id == fallbackId) ? fallbackId : null;
-
-    // Find provider names for display
-    String primaryName = 'Unknown';
-    String? fallbackName;
-    for (final p in providers) {
-      if (p.id == selectedId) primaryName = p.title;
-      if (p.id == validFallbackId) fallbackName = p.title;
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        border: Border(
-          top: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.backup_rounded,
-                size: 20,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                l10n.aiFallbackProvider,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String?>(
-            initialValue: validFallbackId,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          for (final provider in providers)
+            _ProviderTile(
+              provider: provider,
+              selected: provider.id == selectedId,
+              selectedLabel: mode == AiProviderListMode.general
+                  ? l10n.settingsAiProviderDefault
+                  : l10n.aiTranslationProviderSelected,
+              runnable: notifier.isRunnableProvider(provider),
+              onSelected: () {
+                if (mode == AiProviderListMode.translation) {
+                  notifier.setTranslationProvider(provider.id);
+                } else {
+                  notifier.setSelectedProvider(provider.id);
+                }
+              },
+              onEnabledChanged: (value) {
+                notifier.toggleProvider(provider.id, value);
+              },
+              onEdit: () => _editProvider(context, provider.id),
+              onDelete: provider.isBuiltin
+                  ? null
+                  : () => _deleteProvider(context, ref, provider),
             ),
-            items: [
-              DropdownMenuItem<String?>(
-                value: null,
-                child: Text(l10n.aiFallbackNone),
-              ),
-              for (final p in fallbackCandidates)
-                DropdownMenuItem<String?>(value: p.id, child: Text(p.title)),
-            ],
-            onChanged: (value) {
-              Prefs().aiFallbackProvider = value;
-            },
-          ),
-          const SizedBox(height: 8),
-          Text(
-            fallbackName != null
-                ? l10n.aiFallbackChain(primaryName, fallbackName)
-                : l10n.aiFallbackTip,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildProviderLogo(AiProvider provider) {
-    if (provider.logoAsset != null) {
-      return Image.asset(
-        provider.logoAsset!,
-        width: 32,
-        height: 32,
-        errorBuilder: (context, error, stackTrace) =>
-            _buildFallbackAvatar(provider),
-      );
-    }
-    return _buildFallbackAvatar(provider);
-  }
-
-  Widget _buildFallbackAvatar(AiProvider provider) {
-    return CircleAvatar(
-      child: Text(
-        provider.title.isNotEmpty ? provider.title[0].toUpperCase() : '?',
-      ),
-    );
-  }
-
-  Future<void> _addProvider(BuildContext context, WidgetRef ref) async {
+  Future<void> _addProvider(BuildContext context) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const AiProviderDetailPage(providerId: null),
+      ),
+    );
+  }
+
+  Future<void> _editProvider(BuildContext context, String providerId) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AiProviderDetailPage(providerId: providerId),
       ),
     );
   }
@@ -413,7 +114,7 @@ class AiProviderListPage extends ConsumerWidget {
     AiProvider provider,
   ) async {
     final l10n = L10n.of(context);
-    bool confirmed = false;
+    var confirmed = false;
 
     await SmartDialog.show(
       builder: (dialogContext) => AlertDialog(
@@ -421,10 +122,7 @@ class AiProviderListPage extends ConsumerWidget {
         content: Text(l10n.settingsAiProviderDeleteConfirm),
         actions: [
           TextButton(
-            onPressed: () {
-              confirmed = false;
-              SmartDialog.dismiss();
-            },
+            onPressed: SmartDialog.dismiss,
             child: Text(l10n.commonCancel),
           ),
           TextButton(
@@ -441,5 +139,221 @@ class AiProviderListPage extends ConsumerWidget {
     if (confirmed && context.mounted) {
       ref.read(aiProvidersProvider.notifier).deleteProvider(provider.id);
     }
+  }
+}
+
+class _FollowGeneralProviderTile extends StatelessWidget {
+  const _FollowGeneralProviderTile({
+    required this.selected,
+    required this.generalProvider,
+    required this.onSelected,
+  });
+
+  final bool selected;
+  final AiProvider? generalProvider;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
+    final model = generalProvider?.model.trim();
+
+    return FilledContainer(
+      radius: 20,
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: ListTile(
+        minVerticalPadding: 12,
+        leading: _SelectionButton(
+          selected: selected,
+          enabled: true,
+          onPressed: onSelected,
+        ),
+        title: Text(l10n.aiTranslationProviderDefault),
+        subtitle: Text(
+          generalProvider == null
+              ? l10n.aiProviderNoRunnable
+              : [
+                  generalProvider!.title,
+                  if (model != null && model.isNotEmpty) model,
+                ].join(' · '),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        onTap: onSelected,
+      ),
+    );
+  }
+}
+
+class _ProviderTile extends StatelessWidget {
+  const _ProviderTile({
+    required this.provider,
+    required this.selected,
+    required this.selectedLabel,
+    required this.runnable,
+    required this.onSelected,
+    required this.onEnabledChanged,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final AiProvider provider;
+  final bool selected;
+  final String selectedLabel;
+  final bool runnable;
+  final VoidCallback onSelected;
+  final ValueChanged<bool> onEnabledChanged;
+  final VoidCallback onEdit;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
+    final theme = Theme.of(context);
+    final model = provider.model.trim();
+
+    return FilledContainer(
+      radius: 20,
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: InkWell(
+        onTap: onEdit,
+        onLongPress: onDelete,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
+          child: Row(
+            children: [
+              _SelectionButton(
+                selected: selected,
+                enabled: runnable,
+                onPressed: onSelected,
+              ),
+              _ProviderLogo(provider: provider),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            provider.title,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight:
+                                  selected ? FontWeight.w700 : FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (selected) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            selectedLabel,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      model.isEmpty ? provider.url : model,
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (!runnable)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(
+                          !provider.enabled
+                              ? l10n.settingsAiProviderDisabled
+                              : !provider.hasValidKey
+                                  ? l10n.settingsAiProviderNoValidKeys
+                                  : l10n.configurationInformationIsIncomplete,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.error,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (onDelete != null)
+                SizedBox.square(
+                  dimension: 48,
+                  child: IconButton(
+                    tooltip: l10n.commonDelete,
+                    onPressed: onDelete,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ),
+              Switch(
+                value: provider.enabled,
+                onChanged: onEnabledChanged,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectionButton extends StatelessWidget {
+  const _SelectionButton({
+    required this.selected,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final bool selected;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: 48,
+      child: IconButton(
+        onPressed: enabled ? onPressed : null,
+        icon: Icon(
+          selected ? Icons.check_circle : Icons.radio_button_unchecked,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProviderLogo extends StatelessWidget {
+  const _ProviderLogo({required this.provider});
+
+  final AiProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    if (provider.logoAsset != null) {
+      return Image.asset(
+        provider.logoAsset!,
+        width: 32,
+        height: 32,
+        errorBuilder: (context, error, stackTrace) => _fallbackAvatar(),
+      );
+    }
+    return _fallbackAvatar();
+  }
+
+  Widget _fallbackAvatar() {
+    return CircleAvatar(
+      radius: 16,
+      child: Text(
+        provider.title.isEmpty ? '?' : provider.title[0].toUpperCase(),
+      ),
+    );
   }
 }

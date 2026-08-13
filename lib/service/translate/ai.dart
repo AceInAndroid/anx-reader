@@ -1,7 +1,6 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/enums/lang_list.dart';
-import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/service/ai/index.dart';
@@ -13,24 +12,27 @@ import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:flutter/material.dart';
 import 'package:langchain_core/chat_models.dart';
 
-typedef AiTranslationStreamGenerator =
-    Stream<String> Function(List<ChatMessage> messages, {String? identifier});
+typedef AiTranslationStreamGenerator = Stream<String>
+    Function(List<ChatMessage> messages, {String? identifier});
 
-typedef AiTranslationTextGenerator =
-    Future<String> Function(List<ChatMessage> messages, {String? identifier});
+typedef AiTranslationTextGenerator = Future<String> Function(
+  List<ChatMessage> messages, {
+  String? identifier,
+  bool allowFallback,
+});
 
-typedef AiTranslationWidgetBuilder =
-    Widget Function(PromptTemplatePayload prompt, {String? identifier});
+typedef AiTranslationWidgetBuilder = Widget
+    Function(PromptTemplatePayload prompt, {String? identifier});
 
 class AiTranslateProvider extends TranslateServiceProvider {
   AiTranslateProvider({
     AiTranslationStreamGenerator? streamGenerator,
     AiTranslationTextGenerator? textGenerator,
     AiTranslationWidgetBuilder? streamWidgetBuilder,
-  }) : _streamGenerator = streamGenerator ?? _defaultStreamGenerator,
-       _textGenerator = textGenerator ?? _defaultTextGenerator,
-       _streamWidgetBuilder =
-           streamWidgetBuilder ?? _defaultStreamWidgetBuilder;
+  })  : _streamGenerator = streamGenerator ?? _defaultStreamGenerator,
+        _textGenerator = textGenerator ?? _defaultTextGenerator,
+        _streamWidgetBuilder =
+            streamWidgetBuilder ?? _defaultStreamWidgetBuilder;
 
   final AiTranslationStreamGenerator _streamGenerator;
   final AiTranslationTextGenerator _textGenerator;
@@ -105,7 +107,7 @@ class AiTranslateProvider extends TranslateServiceProvider {
         yield result;
       }
     } catch (e) {
-      yield L10n.of(navigatorKey.currentContext!).translateError + e.toString();
+      yield* Stream<String>.error(e);
     }
   }
 
@@ -136,6 +138,7 @@ class AiTranslateProvider extends TranslateServiceProvider {
       final result = await _generateValidAiTranslation(
         messages,
         identifier: primaryId,
+        allowFallback: false,
       );
       return result;
     } catch (e) {
@@ -148,6 +151,7 @@ class AiTranslateProvider extends TranslateServiceProvider {
       final fallbackResult = await _generateValidAiTranslation(
         messages,
         identifier: fallbackId,
+        allowFallback: false,
       );
       AnxLog.info(
         'AI translation fallback succeeded: $primaryId -> $fallbackId',
@@ -159,8 +163,13 @@ class AiTranslateProvider extends TranslateServiceProvider {
   Future<String> _generateValidAiTranslation(
     List<ChatMessage> messages, {
     String? identifier,
+    bool allowFallback = true,
   }) async {
-    final result = await _textGenerator(messages, identifier: identifier);
+    final result = await _textGenerator(
+      messages,
+      identifier: identifier,
+      allowFallback: allowFallback,
+    );
 
     if (result.trim().isNotEmpty &&
         result != '...' &&
@@ -208,9 +217,7 @@ class AiTranslateProvider extends TranslateServiceProvider {
         key: 'tip',
         label: 'Tip',
         type: ConfigItemType.tip,
-        defaultValue: L10n.of(
-          navigatorKey.currentContext!,
-        ).settingsTranslateAiTip,
+        defaultValue: L10n.of(context).settingsTranslateAiTip,
       ),
     ];
   }
@@ -226,8 +233,14 @@ Stream<String> _defaultStreamGenerator(
 Future<String> _defaultTextGenerator(
   List<ChatMessage> messages, {
   String? identifier,
+  bool allowFallback = true,
 }) {
-  return aiGenerateText(messages, identifier: identifier, regenerate: false);
+  return aiGenerateText(
+    messages,
+    identifier: identifier,
+    regenerate: false,
+    allowFallback: allowFallback,
+  );
 }
 
 Widget _defaultStreamWidgetBuilder(

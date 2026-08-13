@@ -22,6 +22,7 @@ class AiStream extends ConsumerStatefulWidget {
     this.canCopy = true,
     this.regenerate = false,
     this.useAgent = false,
+    this.allowFallback = true,
   });
 
   final PromptTemplatePayload prompt;
@@ -30,6 +31,7 @@ class AiStream extends ConsumerStatefulWidget {
   final bool canCopy;
   final bool regenerate;
   final bool useAgent;
+  final bool allowFallback;
 
   @override
   AiStreamState createState() => AiStreamState();
@@ -53,6 +55,7 @@ class AiStreamState extends ConsumerState<AiStream> {
       regenerate: regenerate,
       useAgent: widget.useAgent,
       ref: ref,
+      allowFallback: widget.allowFallback,
     );
   }
 

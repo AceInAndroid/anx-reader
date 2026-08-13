@@ -32,11 +32,9 @@ import 'package:anx_reader/providers/book_toc.dart';
 import 'package:anx_reader/providers/bookmark.dart';
 import 'package:anx_reader/providers/chapter_content_bridge.dart';
 import 'package:anx_reader/providers/current_reading.dart';
-import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
 import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/translate/index.dart';
-import 'package:anx_reader/service/translate/translation_ai_provider_resolver.dart';
 import 'package:anx_reader/providers/toc_search.dart';
 import 'package:anx_reader/service/tts/base_tts.dart';
 import 'package:anx_reader/service/tts/models/tts_sentence.dart';
@@ -1413,7 +1411,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     final service = Prefs().fullTextTranslateService;
     final from = Prefs().fullTextTranslateFrom;
     final to = Prefs().fullTextTranslateTo;
-    final scope = _translationServiceCacheScope(service);
+    final scope = translationServiceCacheScope(service);
     return 'translationDomCache_${widget.book.id}_${service.name}_${from.code}_${to.code}_$scope';
   }
 
@@ -1422,49 +1420,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     LangListEnum from,
     LangListEnum to,
   ) {
-    final scope = _translationServiceCacheScope(service);
+    final scope = translationServiceCacheScope(service);
     return 'translationTextCache_${widget.book.id}_${service.name}_${from.code}_${to.code}_$scope';
-  }
-
-  String _translationServiceCacheScope(TranslateService service) {
-    if (service != TranslateService.ai) return 'default';
-
-    final provider = _resolveEffectiveAiTranslationProvider();
-    if (provider == null) return 'ai_none';
-
-    final fingerprint = [
-      provider.id,
-      provider.protocol.code,
-      provider.url.trim(),
-      provider.model.trim(),
-      provider.reasoningEffort.name,
-    ].join('|');
-    return 'ai_${_stableTranslationTextKey(fingerprint)}';
-  }
-
-  AiProvider? _resolveEffectiveAiTranslationProvider() {
-    final providers = _loadStoredAiProviders();
-    final resolution = TranslationAiProviderResolver.resolve(
-      providers: providers,
-      selectedProviderId: Prefs().selectedAiService,
-      translationProviderId: Prefs().translationAiProvider,
-    );
-
-    final providerId = resolution.effectiveProviderId;
-    if (providerId == null) return null;
-    return TranslationAiProviderResolver.providerById(providers, providerId);
-  }
-
-  List<AiProvider> _loadStoredAiProviders() {
-    try {
-      return Prefs()
-          .getAiProviders()
-          .map((json) => AiProvider.fromJson(json as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      AnxLog.warning('Failed to load AI providers for translation cache: $e');
-      return [];
-    }
   }
 
   Future<void> _ensureTranslationTextCacheLoaded(

@@ -354,22 +354,9 @@ bool supportsFastTextTranslation(TranslateService service) {
 }
 
 TranslateService? resolveFastTextTranslateService(TranslateService preferred) {
-  if (supportsFastTextTranslation(preferred)) {
-    return preferred;
-  }
-
-  const fallbacks = [
-    TranslateService.microsoftApi,
-    TranslateService.googleApi,
-    TranslateService.deepl,
-  ];
-
-  for (final service in fallbacks) {
-    if (_hasUsableTranslateConfig(service)) {
-      return service;
-    }
-  }
-  return null;
+  return _fallbackTranslateServices(preferred)
+      .where(supportsFastTextTranslation)
+      .firstOrNull;
 }
 
 List<TranslateService> _fallbackTranslateServices(TranslateService primary) {
@@ -386,7 +373,9 @@ List<TranslateService> _fallbackTranslateServices(TranslateService primary) {
     }
   }
 
-  if (primary != TranslateService.ai && _hasRunnableAiTranslateProvider()) {
+  if (primary != TranslateService.ai &&
+      !services.contains(TranslateService.ai) &&
+      _hasRunnableAiTranslateProvider()) {
     services.add(TranslateService.ai);
   }
 
@@ -413,7 +402,11 @@ bool _hasRunnableAiTranslateProvider() {
       selectedProviderId: Prefs().selectedAiService,
       translationProviderId: Prefs().translationAiProvider,
     );
-    return resolution.effectiveProviderId != null;
+    final providerId = resolution.effectiveProviderId;
+    if (providerId == null) return false;
+    return providers.any(
+      (provider) => provider.id == providerId && provider.isRunnable,
+    );
   } catch (e) {
     AnxLog.warning('Failed to resolve AI translation fallback provider: $e');
     return false;
@@ -490,9 +483,93 @@ String _selectionTranslationCacheKey({
       contextText?.trim().replaceAll(RegExp(r'\s+'), ' ') ?? '';
   return [
     service.name,
+    translationServiceCacheScope(service),
     from.code,
     to.code,
     normalizedText,
     normalizedContext,
   ].join('|');
+}
+
+/// Identifies the complete execution route used by text-only translation.
+///
+/// The route is part of both selection and full-text cache namespaces so a
+/// provider, model, or fallback change cannot surface results produced by an
+/// older configuration.
+String translationServiceCacheScope(TranslateService service) {
+  final fingerprints = _fallbackTranslateServices(service)
+      .map(_translationServiceFingerprint)
+      .join('||');
+  return 'v2_${_stableTranslationFingerprint(fingerprints)}';
+}
+
+String _translationServiceFingerprint(TranslateService service) {
+  if (service == TranslateService.ai) {
+    final providers = _loadStoredAiProviders();
+    final resolution = TranslationAiProviderResolver.resolve(
+      providers: providers,
+      selectedProviderId: Prefs().selectedAiService,
+      translationProviderId: Prefs().translationAiProvider,
+    );
+    final primary = resolution.effectiveProviderId == null
+        ? null
+        : TranslationAiProviderResolver.providerById(
+            providers,
+            resolution.effectiveProviderId!,
+          );
+    final fallbackId = Prefs().aiFallbackProvider;
+    final fallback = fallbackId == null || fallbackId == primary?.id
+        ? null
+        : TranslationAiProviderResolver.providerById(providers, fallbackId);
+
+    return [
+      service.name,
+      _aiProviderFingerprint(primary),
+      _aiProviderFingerprint(
+        fallback != null && fallback.isRunnable ? fallback : null,
+      ),
+    ].join('|');
+  }
+
+  final config = Prefs().getTranslateServiceConfig(service);
+  return [
+    service.name,
+    _hasUsableTranslateConfig(service) ? 'configured' : 'unconfigured',
+    config?['api_url']?.toString().trim() ?? '',
+    config?['region']?.toString().trim() ?? '',
+  ].join('|');
+}
+
+String _aiProviderFingerprint(AiProvider? provider) {
+  if (provider == null) return 'none';
+  return [
+    provider.id,
+    provider.protocol.code,
+    provider.url.trim(),
+    provider.model.trim(),
+    provider.reasoningEffort.name,
+    provider.requestTimeoutSeconds,
+  ].join(':');
+}
+
+List<AiProvider> _loadStoredAiProviders() {
+  try {
+    return Prefs()
+        .getAiProviders()
+        .map((json) => AiProvider.fromJson(json as Map<String, dynamic>))
+        .toList();
+  } catch (e) {
+    AnxLog.warning('Failed to load AI providers for translation routing: $e');
+    return const [];
+  }
+}
+
+String _stableTranslationFingerprint(String value) {
+  const int fnvPrime = 0x01000193;
+  int hash = 0x811c9dc5;
+  for (final codeUnit in value.codeUnits) {
+    hash ^= codeUnit;
+    hash = (hash * fnvPrime) & 0xffffffff;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
 }

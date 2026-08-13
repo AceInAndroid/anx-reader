@@ -49,15 +49,26 @@ abstract class AiProvider with _$AiProvider {
 
   /// Get the current active API key (based on enabled keys and keyIndex)
   String? get currentApiKey {
-    final enabledKeys = apiKeys.where((k) => k.enabled).toList();
+    final enabledKeys = apiKeys
+        .where((key) => key.enabled && key.key.trim().isNotEmpty)
+        .toList();
     if (enabledKeys.isEmpty) return null;
     final index = keyIndex % enabledKeys.length;
-    return enabledKeys[index].key;
+    return enabledKeys[index].key.trim();
   }
 
   /// Check if this provider has any enabled API keys
   bool get hasValidKey {
-    return apiKeys.any((k) => k.enabled && k.key.isNotEmpty);
+    return apiKeys.any((k) => k.enabled && k.key.trim().isNotEmpty);
+  }
+
+  /// A provider is selectable only when every field needed to make a request
+  /// is present. Keep this definition shared by settings and request routing.
+  bool get isRunnable {
+    return enabled &&
+        url.trim().isNotEmpty &&
+        model.trim().isNotEmpty &&
+        hasValidKey;
   }
 }
 

@@ -1,5 +1,4 @@
 import 'package:anx_reader/models/ai_provider.dart';
-import 'package:anx_reader/service/ai/ai_key_rotator.dart';
 
 class TranslationAiProviderResolution {
   const TranslationAiProviderResolution({
@@ -55,6 +54,6 @@ class TranslationAiProviderResolver {
   }
 
   static bool isRunnableProvider(AiProvider provider) {
-    return provider.enabled && AiKeyRotator.hasValidKey(provider);
+    return provider.isRunnable;
   }
 }

@@ -20,6 +20,7 @@ import 'package:anx_reader/utils/get_path/get_base_path.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:anx_reader/utils/window_position_validator.dart';
 import 'package:anx_reader/providers/sync.dart';
+import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -99,6 +100,9 @@ class _MyAppState extends ConsumerState<MyApp>
   @override
   void initState() {
     super.initState();
+    // Initialize and migrate provider records before any translation or AI
+    // action can run, even if the user never opens AI settings.
+    ref.read(aiProvidersProvider);
     WidgetsBinding.instance.addObserver(this);
     windowManager.addListener(this);
   }

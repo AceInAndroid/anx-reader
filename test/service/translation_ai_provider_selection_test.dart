@@ -62,6 +62,21 @@ void main() {
       expect(resolution.effectiveProviderId, 'first-runnable');
       expect(resolution.usedDedicatedProvider, isFalse);
     });
+
+    test('rejects providers missing a URL or model', () {
+      final resolution = TranslationAiProviderResolver.resolve(
+        providers: [
+          _provider('missing-url', url: ''),
+          _provider('missing-model', model: ''),
+          _provider('ready'),
+        ],
+        selectedProviderId: 'missing-url',
+        translationProviderId: 'missing-model',
+      );
+
+      expect(resolution.effectiveProviderId, 'ready');
+      expect(resolution.invalidDedicatedProviderId, 'missing-model');
+    });
   });
 
   group('AiTranslateProvider provider routing', () {
@@ -125,7 +140,7 @@ void main() {
       () async {
         final recorder = _IdentifierRecorder();
         final provider = AiTranslateProvider(
-          textGenerator: (messages, {identifier}) async {
+          textGenerator: (messages, {identifier, allowFallback = true}) async {
             recorder.textIdentifier = identifier;
             return '你好';
           },
@@ -148,8 +163,9 @@ void main() {
         Prefs().aiFallbackProvider = 'fallback';
         final identifiers = <String?>[];
         final provider = AiTranslateProvider(
-          textGenerator: (messages, {identifier}) async {
+          textGenerator: (messages, {identifier, allowFallback = true}) async {
             identifiers.add(identifier);
+            expect(allowFallback, isFalse);
             if (identifier == 'translation') {
               return '''
 Source text:
@@ -210,6 +226,57 @@ Do not output the source text.
 
       expect(services, isNot(contains(TranslateService.ai)));
     });
+
+    test('fast text translation uses AI when API services are unconfigured',
+        () {
+      Prefs().saveAiProviders([_provider('general').toJson()]);
+      Prefs().selectedAiService = 'general';
+
+      expect(
+        resolveFastTextTranslateService(TranslateService.bingWeb),
+        TranslateService.ai,
+      );
+    });
+
+    test('AI cache scope changes with translation model and fallback route',
+        () {
+      Prefs().saveAiProviders([
+        _provider('general').toJson(),
+        _provider('translation').toJson(),
+        _provider('fallback').toJson(),
+      ]);
+      Prefs().selectedAiService = 'general';
+      Prefs().translationAiProvider = 'translation';
+
+      final initial = translationServiceCacheScope(TranslateService.ai);
+
+      Prefs().saveAiProviders([
+        _provider('general').toJson(),
+        _provider('translation', model: 'new-translation-model').toJson(),
+        _provider('fallback').toJson(),
+      ]);
+      final afterModelChange =
+          translationServiceCacheScope(TranslateService.ai);
+
+      Prefs().aiFallbackProvider = 'fallback';
+      final afterFallbackChange =
+          translationServiceCacheScope(TranslateService.ai);
+
+      expect(afterModelChange, isNot(initial));
+      expect(afterFallbackChange, isNot(afterModelChange));
+    });
+
+    test('non-AI cache scope changes when AI joins the fallback chain', () {
+      final withoutAi =
+          translationServiceCacheScope(TranslateService.microsoftApi);
+
+      Prefs().saveAiProviders([_provider('general').toJson()]);
+      Prefs().selectedAiService = 'general';
+      final withAi =
+          translationServiceCacheScope(TranslateService.microsoftApi);
+
+      expect(withAi, isNot(withoutAi));
+    });
   });
 }
 
@@ -217,15 +284,17 @@ AiProvider _provider(
   String id, {
   bool enabled = true,
   List<AiApiKey>? apiKeys,
+  String? url,
+  String? model,
 }) {
   return AiProvider(
     id: id,
     title: id,
-    url: 'http://localhost:1234/v1',
+    url: url ?? 'http://localhost:1234/v1',
     protocol: AiProtocol.openai,
     enabled: enabled,
     apiKeys: apiKeys ?? [AiApiKey(id: '$id-key', key: '$id-api-key')],
-    model: '$id-model',
+    model: model ?? '$id-model',
   );
 }
 
