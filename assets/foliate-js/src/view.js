@@ -146,13 +146,19 @@ export class View extends HTMLElement {
     }
   }
   close() {
-    this.renderer?.destroy()
-    this.renderer?.remove()
-    this.book?.destroy?.()
+    const renderer = this.renderer
+    const book = this.book
+    renderer?.destroy()
+    renderer?.remove()
+    book?.destroy?.()
+    this.renderer = null
+    this.book = null
     this.#sectionProgress = null
     this.#tocProgress = null
     this.#pageProgress = null
     this.#searchResults = new Map()
+    this.#index = null
+    this.#lastCfi = null
     this.lastLocation = null
     this.history.clear()
     this.tts = null
@@ -185,8 +191,12 @@ export class View extends HTMLElement {
     const tocItem = this.#tocProgress?.getProgress(index, range)
     const pageItem = this.#pageProgress?.getProgress(index, range)
     const cfi = this.getCFI(index, range)
-    const totalPages = this.renderer.pages ? this.renderer.pages - 2 : progress.section.total
-    const currentPage = this.renderer.page ?? progress.section.current
+    const totalPages = this.isFixedLayout
+      ? this.book.sections.length
+      : this.renderer.pages ? this.renderer.pages - 2 : progress.section.total
+    const currentPage = this.isFixedLayout
+      ? index + 1
+      : this.renderer.page ?? progress.section.current
     const chapterLocation = {
       current: currentPage,
       total: totalPages

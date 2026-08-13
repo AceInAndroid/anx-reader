@@ -1269,7 +1269,8 @@ const readingFeaturesDocHandler = (doc) => {
   }
 
   // handle vertical writing mode, replace “”‘’ with 『』「」
-  if (style.writingMode.startsWith('vertical') || reader.view.renderer.writingMode.startsWith('vertical')) {
+  if (style.writingMode?.startsWith('vertical')
+    || reader.view.renderer.writingMode?.startsWith('vertical')) {
     const replaceQuotes = (node) => {
       if (node.nodeType === Node.TEXT_NODE) {
         node.textContent = node.textContent

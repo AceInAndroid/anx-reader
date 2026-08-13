@@ -253,6 +253,10 @@ Flutter handlers 则处理目录、定位、翻页、批注、书签、选区菜
 
 真实 EPUB2 样本《如何阅读一本书》（483 KiB）验证结果：ZIP 完整，NCX 两级目录正确解析为 33 个 spine 章节和 12 个顶层目录；封面、长正文、末章、脚注锚点和 CFI 恢复均通过。modern 与 Chrome 83 legacy bundle 都能完成 `bootstrap → fetch → detect → parse → render → ready`，无 bridge 或资源加载错误。样本内旧阅读器 `res:///` 字体路径在过滤前会产生 99 条控制台错误，过滤后降为 0；剩余 warning 为 Chromium 对 iframe sandbox 组合的既有提示。
 
+真实 PDF 1.3 样本《上海迪士尼…一日攻略报告》（417 KiB、19 页）验证结果：modern 与 Chrome 83 legacy 均使用独立 PDF worker，单页、文本层、页级 CFI、跨页定位和退出销毁正常。修复前桌面首屏错误显示第 2/19 页、全书位置总数为 13，并将单页渲染为 1347×1905；修复后按单页模式显示第 1/19 页，位置总数为 19，1280×800 视口输出 566×800。Canvas 使用 contain 比例和最高 2× DPR，同页渲染任务去重，页面完成后执行 `PDFPageProxy.cleanup()`，8 页 LRU 和退出流程继续撤销 Blob URL。
+
+第二个真实 PDF 1.3 样本《坦克300·雪域纵横…》（321 KiB、3 页）包含可恢复的错误交叉引用，文件名同时覆盖 emoji、中文、间隔点、全角标点、空格和括号。modern 与模拟 Chrome 83 legacy 均完成 3/3 页渲染，三个文本层分别包含 814、758、466 个字符；桌面输出约 565×800，412×732 移动视口输出约 412×583。编码后的 token URL 能完成普通 GET 和尾段 `206 Range`，modern/legacy worker 路径正确，未上报结构化加载错误。关闭流程会销毁 PDF.js loading task、撤销缓存 Blob URL、移除 renderer，并清空 `View` 对 renderer 和 book 的强引用。
+
 以下各节保留原始审计证据，供回归定位。标记为已修复的描述代表修复前代码，不应再视为当前行为。
 
 ### P0：可能导致无法打开或长期空白
