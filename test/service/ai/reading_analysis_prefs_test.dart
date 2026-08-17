@@ -33,6 +33,12 @@ void main() {
     expect(Prefs().readingAnalysisMaxFrameworks, 2);
   });
 
+  test('reading agent beta is opt-in', () {
+    expect(Prefs().readingAgentBetaEnabled, isFalse);
+    Prefs().readingAgentBetaEnabled = true;
+    expect(Prefs().readingAgentBetaEnabled, isTrue);
+  });
+
   test('book override can be applied and removed without changing globals', () {
     Prefs().defaultReadingAnalysisDepth = ReadingAnalysisDepth.standard;
     Prefs().defaultReadingOutputTemplate = ReadingOutputTemplate.learningNote;

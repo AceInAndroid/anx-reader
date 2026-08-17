@@ -17,13 +17,20 @@ import 'package:anx_reader/providers/ai_workspace.dart';
 import 'package:anx_reader/providers/reading_coach.dart';
 import 'package:anx_reader/service/ai/reading_coach_policy.dart';
 import 'package:anx_reader/models/reading_coach.dart';
+import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/models/selection_snapshot.dart';
+import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/page/book_detail.dart';
 import 'package:anx_reader/page/book_player/epub_player.dart';
 import 'package:anx_reader/providers/sync.dart';
+import 'package:anx_reader/providers/book_toc.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/reading_agent_repository.dart';
+import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/agent_action_service.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ui/status_bar.dart';
@@ -93,6 +100,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   bool _isResizingAiChat = false;
   bool _inspectionReminderShown = false;
   bool bookmarkExists = false;
+  bool _readingAgentCapsuleDismissed = false;
+  String? _lastReadingAgentSnackActionId;
 
   bool _usesAiSplitLayout(BuildContext context) {
     return MediaQuery.sizeOf(context).shortestSide >= 600;
@@ -129,6 +138,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     setAwakeTimer(Prefs().awakeTime);
 
     _book = widget.book;
+    readingAgentRuntime.addListener(_onReadingAgentChanged);
     aiWorkspaceController = AiWorkspaceController(bookId: _book.id);
     aiWorkspaceController.addListener(_onAiWorkspaceChanged);
     heroTag = widget.heroTag ?? 'preventHeroWhenStart';
@@ -136,6 +146,13 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _requestReaderFocus();
+        if (Prefs().readingAgentBetaEnabled) {
+          unawaited(readingAgentRuntime.start(
+            bookId: _book.id,
+            bookTitle: _book.title,
+          ));
+          _registerReaderCommandGateway();
+        }
         if (FeatureFlags.readingCoach && widget.initialShowCoach) {
           showReadingCoach();
         }
@@ -157,6 +174,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
 
   @override
   void dispose() {
+    ReaderCommandGateway.instance.unregister(_book.id);
+    readingAgentRuntime.removeListener(_onReadingAgentChanged);
+    unawaited(readingAgentRuntime.finish());
     Sync().syncData(SyncDirection.upload, ref, trigger: SyncTrigger.auto);
     _readTimeWatch.stop();
     _awakeTimer?.cancel();
@@ -185,6 +205,45 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     if (bottomBarOffstage && !_readerFocusNode.hasFocus) {
       _readerFocusNode.requestFocus();
     }
+  }
+
+  void _onReadingAgentChanged() {
+    if (!mounted) return;
+    setState(() {});
+    final action = readingAgentRuntime.state.lastAgentAction;
+    if (action == null || action.id == _lastReadingAgentSnackActionId) return;
+    _lastReadingAgentSnackActionId = action.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showAgentUndoSnackBar(action);
+    });
+  }
+
+  void _registerReaderCommandGateway() {
+    ReaderCommandGateway.instance.register(
+      bookId: _book.id,
+      navigateToCfi: (cfi) => epubPlayerKey.currentState?.goToCfi(cfi),
+      navigateToHref: (href) => epubPlayerKey.currentState?.goToHref(href),
+      currentCfi: () => epubPlayerKey.currentState?.cfi,
+      addAnnotation: (note) => epubPlayerKey.currentState?.addAnnotation(note),
+      removeAnnotation: (key) =>
+          epubPlayerKey.currentState?.removeAnnotation(key),
+      addDifficultyAnnotation: ({required id, required cfi}) =>
+          epubPlayerKey.currentState?.addDifficultyAnnotation(id: id, cfi: cfi),
+      isValidHref: (href) {
+        bool contains(List<TocItem> items) {
+          for (final item in items) {
+            if (item.href == href ||
+                item.href.split('#').first == href.split('#').first) {
+              return true;
+            }
+            if (contains(item.subitems)) return true;
+          }
+          return false;
+        }
+
+        return contains(ref.read(bookTocProvider));
+      },
+    );
   }
 
   void _releaseReaderFocus() {
@@ -553,6 +612,12 @@ class ReadingPageState extends ConsumerState<ReadingPage>
 
   List<Widget> _buildAiChatTrailing(BuildContext context) {
     return [
+      if (Prefs().readingAgentBetaEnabled)
+        IconButton(
+          onPressed: _showReadingAgentPanel,
+          icon: const Icon(Icons.manage_history_outlined),
+          tooltip: '阅读 Agent 动作记录',
+        ),
       IconButton(
         onPressed: () {
           setState(() {
@@ -620,12 +685,70 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
   }
 
+  Widget _buildReadingAgentCapsule() {
+    final state = readingAgentRuntime.state;
+    final goal = state.activeGoal;
+    final pending = state.pendingProfileCount + state.pendingCheckpointCount;
+    final title = goal?.title ?? (pending > 0 ? '有 $pending 项待处理' : '最近动作可撤销');
+    final semantics = goal == null
+        ? '阅读 Agent，$title'
+        : '阅读目标：${goal.title}，进度 ${(goal.progress * 100).round()}%'
+            '${pending > 0 ? '，$pending 项待处理' : ''}';
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Semantics(
+        button: true,
+        label: semantics,
+        child: Material(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(22),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(22),
+            onTap: () async {
+              if (_usesAiSplitLayout(context)) {
+                aiWorkspaceController.show(fullscreen: false);
+                setState(() {});
+              } else {
+                await _showReadingAgentPanel();
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.auto_awesome, size: 16),
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: Text(title, overflow: TextOverflow.ellipsis),
+                  ),
+                  if (goal != null) ...[
+                    const SizedBox(width: 8),
+                    Text('${(goal.progress * 100).round()}%'),
+                  ],
+                  if (pending > 0) ...[
+                    const SizedBox(width: 8),
+                    Badge(label: Text('$pending')),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _onChapterChanged({
     required String previousHref,
     required String previousTitle,
     required double highestProgress,
     required String currentHref,
   }) async {
+    if (Prefs().readingAgentBetaEnabled) {
+      readingAgentRuntime.observeChapterChanged(currentHref: currentHref);
+    }
     if (!FeatureFlags.readingCoach) return;
     final state = await ref.read(readingCoachProvider(_book.id).future);
     if (!shouldCreateChapterQuiz(
@@ -755,6 +878,325 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
   }
 
+  Future<void> _showReadingAgentPanel() async {
+    readingAgentRuntime.consumeCheckpoints();
+    final goalTitleController = TextEditingController();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final state = readingAgentRuntime.state;
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                20,
+                0,
+                20,
+                16 + MediaQuery.viewInsetsOf(context).bottom,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            '阅读 Agent',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            _readingAgentCapsuleDismissed = true;
+                            Navigator.pop(sheetContext);
+                            setState(() {});
+                          },
+                          child: const Text('本次会话隐藏'),
+                        ),
+                      ],
+                    ),
+                    const Text('所有阅读事件均在本地处理；只有你主动使用 AI 时才调用模型。'),
+                    const SizedBox(height: 16),
+                    if (state.activeGoal case final goal?) ...[
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.flag_outlined),
+                        title: Text(goal.title),
+                        subtitle: Row(
+                          children: [
+                            Expanded(
+                              child: LinearProgressIndicator(
+                                value: goal.progress,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text('${(goal.progress * 100).round()}%'),
+                          ],
+                        ),
+                        trailing: PopupMenuButton<ReadingGoalStatus>(
+                          tooltip: '更新目标状态',
+                          onSelected: (status) async {
+                            await agentActionService.saveGoal(
+                              goal.copyWith(
+                                status: status,
+                                progress: status == ReadingGoalStatus.completed
+                                    ? 1
+                                    : goal.progress,
+                                updatedAt:
+                                    DateTime.now().millisecondsSinceEpoch,
+                              ),
+                            );
+                            if (sheetContext.mounted) {
+                              Navigator.pop(sheetContext);
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: ReadingGoalStatus.completed,
+                              child: Text('标记完成'),
+                            ),
+                            PopupMenuItem(
+                              value: ReadingGoalStatus.abandoned,
+                              child: Text('放弃目标'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      const Text('创建阅读目标'),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          for (final title in const [
+                            '理解本章',
+                            '完成指定范围',
+                            '形成阅读输出',
+                          ])
+                            ActionChip(
+                              label: Text(title),
+                              onPressed: () {
+                                goalTitleController.text = title;
+                                setSheetState(() {});
+                              },
+                            ),
+                        ],
+                      ),
+                      TextField(
+                        controller: goalTitleController,
+                        maxLength: 80,
+                        decoration: const InputDecoration(
+                          labelText: '目标描述',
+                          helperText: '先预览，确认后才保存',
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: FilledButton(
+                          onPressed: () async {
+                            final title = goalTitleController.text.trim();
+                            if (title.isEmpty) return;
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (context) => AlertDialog(
+                                title: const Text('确认阅读目标'),
+                                content: Text(title),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, false),
+                                    child: const Text('取消'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, true),
+                                    child: const Text('保存'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed != true) return;
+                            final now = DateTime.now().millisecondsSinceEpoch;
+                            final goal = ReadingGoal(
+                              id: '${_book.id}-$now',
+                              bookId: _book.id,
+                              title: title,
+                              range: {
+                                'startCfi': readingAgentRuntime.state.cfi,
+                                'chapterHref':
+                                    readingAgentRuntime.state.chapterHref,
+                              },
+                              criteria: const [],
+                              createdAt: now,
+                              updatedAt: now,
+                            );
+                            await agentActionService.saveGoal(goal);
+                            if (!sheetContext.mounted) return;
+                            Navigator.pop(sheetContext);
+                          },
+                          child: const Text('预览并保存'),
+                        ),
+                      ),
+                    ],
+                    if (state.pendingProfileCount > 0) ...[
+                      const Divider(height: 32),
+                      const Text(
+                        '待确认的阅读偏好',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      FutureBuilder<List<ReaderProfileItem>>(
+                        future: readingAgentRepository.profileCandidates(),
+                        builder: (context, snapshot) {
+                          final candidates = (snapshot.data ?? const [])
+                              .where((item) =>
+                                  item.evidenceCount >= 3 ||
+                                  item.confidence >= 1)
+                              .toList(growable: false);
+                          return Column(
+                            children: [
+                              for (final item in candidates)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(item.key),
+                                  subtitle: Text(item.value.toString()),
+                                  trailing: Wrap(
+                                    children: [
+                                      IconButton(
+                                        tooltip: '拒绝，90 天内不再建议',
+                                        onPressed: () async {
+                                          await agentActionService
+                                              .setProfileStatus(
+                                            key: item.key,
+                                            status:
+                                                ReaderProfileStatus.rejected,
+                                          );
+                                          readingAgentRuntime
+                                              .profileCandidateResolved();
+                                          setSheetState(() {});
+                                        },
+                                        icon: const Icon(Icons.close),
+                                      ),
+                                      IconButton(
+                                        tooltip: '确认偏好',
+                                        onPressed: () async {
+                                          await agentActionService
+                                              .setProfileStatus(
+                                            key: item.key,
+                                            status:
+                                                ReaderProfileStatus.confirmed,
+                                          );
+                                          readingAgentRuntime
+                                              .profileCandidateResolved();
+                                          setSheetState(() {});
+                                        },
+                                        icon: const Icon(Icons.check),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                    const Divider(height: 32),
+                    const Text(
+                      '最近 30 天动作',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    FutureBuilder<List<AgentAction>>(
+                      future: readingAgentRepository.recentActions(
+                        bookId: _book.id,
+                      ),
+                      builder: (context, snapshot) {
+                        final actions = snapshot.data ?? const [];
+                        if (actions.isEmpty) {
+                          return const ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text('暂无动作'),
+                          );
+                        }
+                        return Column(
+                          children: [
+                            for (final action in actions)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.history),
+                                title: Text(_agentActionLabel(action.type)),
+                                subtitle: Text(
+                                  DateTime.fromMillisecondsSinceEpoch(
+                                    action.createdAt,
+                                  ).toLocal().toString(),
+                                ),
+                                trailing:
+                                    action.status == AgentActionStatus.applied
+                                        ? TextButton(
+                                            onPressed: () async {
+                                              final result =
+                                                  await agentActionService
+                                                      .undo(action);
+                                              if (!context.mounted) return;
+                                              AnxToast.show(
+                                                  _undoResultLabel(result));
+                                              setSheetState(() {});
+                                            },
+                                            child: const Text('撤销'),
+                                          )
+                                        : Text(action.status.name),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    goalTitleController.dispose();
+  }
+
+  void _showAgentUndoSnackBar(AgentAction action) {
+    if (!mounted) return;
+    _lastReadingAgentSnackActionId = action.id;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${_agentActionLabel(action.type)}已完成'),
+        action: SnackBarAction(
+          label: '撤销',
+          onPressed: () async {
+            final result = await agentActionService.undo(action);
+            if (mounted) AnxToast.show(_undoResultLabel(result));
+          },
+        ),
+      ),
+    );
+  }
+
+  String _agentActionLabel(AgentActionType type) => switch (type) {
+        AgentActionType.goal => '阅读目标',
+        AgentActionType.profile => '阅读偏好',
+        AgentActionType.note => 'AI 笔记',
+        AgentActionType.difficulty => '阅读难点',
+      };
+
+  String _undoResultLabel(UndoResult result) => switch (result) {
+        UndoResult.undone => '已撤销',
+        UndoResult.alreadyUndone => '该动作已撤销',
+        UndoResult.expired => '撤销期限已过',
+        UndoResult.conflict => '内容之后已被修改，未覆盖你的修改',
+        UndoResult.missing => '找不到该动作',
+      };
+
   void updateState() {
     if (mounted) {
       setState(() {
@@ -860,6 +1302,13 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     ),
                   ],
                 ),
+                if (Prefs().readingAgentBetaEnabled &&
+                    !_readingAgentCapsuleDismissed &&
+                    readingAgentRuntime.state.hasCapsuleState)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: _buildReadingAgentCapsule(),
+                  ),
                 const Spacer(),
                 BottomSheet(
                   onClosing: () {},
@@ -992,6 +1441,43 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                     initialThemes: widget.initialThemes,
                                     updateParent: updateState,
                                     onChapterChanged: _onChapterChanged,
+                                    onReadingLocationChanged: ({
+                                      required cfi,
+                                      required chapterHref,
+                                      required chapterTitle,
+                                      required totalProgress,
+                                      required chapterProgress,
+                                    }) {
+                                      if (!Prefs().readingAgentBetaEnabled) {
+                                        return;
+                                      }
+                                      readingAgentRuntime.observeLocation(
+                                        cfi: cfi,
+                                        chapterHref: chapterHref,
+                                        chapterTitle: chapterTitle,
+                                        totalProgress: totalProgress,
+                                        chapterProgress: chapterProgress,
+                                      );
+                                    },
+                                    onSelectionCreated:
+                                        (SelectionSnapshot selection) {
+                                      if (!Prefs().readingAgentBetaEnabled) {
+                                        return;
+                                      }
+                                      readingAgentRuntime.selectionCreated(
+                                        ReadingSelectionState(
+                                          text: selection.text,
+                                          cfi: selection.cfi,
+                                          surroundingText:
+                                              selection.contextText,
+                                        ),
+                                      );
+                                    },
+                                    onSelectionCleared: () {
+                                      if (Prefs().readingAgentBetaEnabled) {
+                                        readingAgentRuntime.selectionCleared();
+                                      }
+                                    },
                                   ),
                                   if (_isResizingAiChat)
                                     SizedBox.expand(
@@ -1109,6 +1595,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                           child: PointerInterceptor(
                             child: _buildAiWorkspace(
                               trailing: [
+                                if (Prefs().readingAgentBetaEnabled)
+                                  IconButton(
+                                    onPressed: _showReadingAgentPanel,
+                                    icon: const Icon(
+                                      Icons.manage_history_outlined,
+                                    ),
+                                    tooltip: '阅读 Agent 动作记录',
+                                  ),
                                 IconButton(
                                   onPressed: aiWorkspaceController.hide,
                                   icon: const Icon(Icons.close),

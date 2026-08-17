@@ -232,6 +232,23 @@ class _AISettingsState extends ConsumerState<AISettings> {
         ],
       ),
       SettingsSection(
+        title: const Text('阅读 Agent Beta'),
+        tiles: [
+          SettingsTile.switchTile(
+            initialValue: Prefs().readingAgentBetaEnabled,
+            onToggle: (value) {
+              Prefs().readingAgentBetaEnabled = value;
+              setState(() {});
+            },
+            title: const Text('启用低打扰阅读 Agent'),
+            description: const Text(
+              '默认关闭。翻页和停留只在本地更新状态，不会调用模型；'
+              '主动建议需确认，明确要求的写入可撤销并保留 30 天记录。',
+            ),
+          ),
+        ],
+      ),
+      SettingsSection(
         title: const Text('阅读模式'),
         tiles: [
           _readingModeTile(),

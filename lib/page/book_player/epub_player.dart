@@ -78,6 +78,15 @@ class EpubPlayer extends ConsumerStatefulWidget {
     required double highestProgress,
     required String currentHref,
   })? onChapterChanged;
+  final void Function({
+    required String cfi,
+    required String chapterHref,
+    required String chapterTitle,
+    required double totalProgress,
+    required double chapterProgress,
+  })? onReadingLocationChanged;
+  final void Function(SelectionSnapshot selection)? onSelectionCreated;
+  final VoidCallback? onSelectionCleared;
 
   const EpubPlayer(
       {super.key,
@@ -87,7 +96,10 @@ class EpubPlayer extends ConsumerStatefulWidget {
       required this.onLoadEnd,
       required this.initialThemes,
       required this.updateParent,
-      this.onChapterChanged});
+      this.onChapterChanged,
+      this.onReadingLocationChanged,
+      this.onSelectionCreated,
+      this.onSelectionCleared});
 
   @override
   ConsumerState<EpubPlayer> createState() => EpubPlayerState();
@@ -1047,6 +1059,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
                 chapterCurrentPage: chapterCurrentPage,
                 chapterTotalPages: chapterTotalPages,
               );
+          widget.onReadingLocationChanged?.call(
+            cfi: cfi,
+            chapterHref: chapterHref,
+            chapterTitle: chapterTitle,
+            totalProgress: percentage,
+            chapterProgress: nextProgress,
+          );
           widget.updateParent();
           saveReadingProgress();
           readingPageKey.currentState?.resetAwakeTimer();
@@ -1107,6 +1126,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             return;
           }
           _lastSelectionContextText = snapshot.contextText;
+          widget.onSelectionCreated?.call(snapshot);
           unawaited(
             showContextMenu(
               context,
@@ -1158,6 +1178,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             return;
           }
           _lastSelectionContextText = null;
+          widget.onSelectionCleared?.call();
           removeOverlay();
         });
     controller.addJavaScriptHandler(

@@ -23,6 +23,8 @@ import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_memory.dart';
 import 'package:anx_reader/service/ai/reading_memory_ai_service.dart';
+import 'package:anx_reader/service/ai/agent_action_service.dart';
+import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
 import 'package:anx_reader/service/reading_note/reading_note_capture_service.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/env_var.dart';
@@ -2380,6 +2382,28 @@ $correctionRule
         ? normalized
         : '${normalized.substring(0, 480)}...';
     final now = DateTime.now();
+    if (Prefs().readingAgentBetaEnabled && readingAgentRuntime.isActive) {
+      final sourceText = snapshot.selectedText?.trim() ?? '';
+      final cfi = snapshot.metadata['cfi']?.toString() ?? '';
+      if (sourceText.isEmpty || cfi.isEmpty) {
+        AnxToast.show('请先从阅读页选择一段内容');
+        return;
+      }
+      await agentActionService.createSourcedNote(
+        bookId: widget.controller.bookId,
+        sourceText: sourceText,
+        cfi: cfi,
+        chapterTitle: snapshot.chapterTitle ?? '',
+        chapterHref: snapshot.chapterHref,
+        body: 'AI 摘要：$summary\n'
+            '$analysisLine'
+            '${sourceLines.isEmpty ? '' : '来源：\n$sourceLines\n'}'
+            '会话：anx-ai-session://${sessionId ?? ''}',
+        model: 'ai-workspace',
+      );
+      if (mounted) AnxToast.show(L10n.of(context).commonSaveSuccess);
+      return;
+    }
     await bookNoteDao.save(
       BookNote(
         bookId: widget.controller.bookId,

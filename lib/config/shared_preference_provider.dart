@@ -1995,6 +1995,16 @@ class Prefs extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Opt-in gate for the local Reading Agent runtime. This intentionally does
+  /// not enable the legacy reading coach.
+  bool get readingAgentBetaEnabled =>
+      prefs.getBool('readingAgentBetaEnabled') ?? false;
+
+  set readingAgentBetaEnabled(bool value) {
+    prefs.setBool('readingAgentBetaEnabled', value);
+    notifyListeners();
+  }
+
   TrustedSourcePack readingTrustedSourcePack(ReadingAiMode mode) {
     final builtin = TrustedSourcePack.forMode(mode);
     final raw = prefs.getString('readingTrustedSourceDomains');

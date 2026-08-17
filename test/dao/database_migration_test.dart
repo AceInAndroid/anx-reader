@@ -97,7 +97,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 15);
+    expect(currentDbVersion, 16);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -277,7 +277,45 @@ void main() {
     expect(indexes, hasLength(3));
   });
 
-  test('database migration from version 7 through version 15 succeeds',
+  test('version 16 migration creates reading agent tables and constraints',
+      () async {
+    final db = await openTempDb('reading_agent.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 15, currentDbVersion);
+
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+        'tb_reading_goals', 'tb_reader_profile_items', 'tb_agent_actions'
+      )
+    ''');
+    expect(tables, hasLength(3));
+    final indexes = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
+        'idx_reading_goals_one_active_book',
+        'idx_reading_goals_book_updated',
+        'idx_reader_profile_status_updated',
+        'idx_agent_actions_recent', 'idx_agent_actions_target'
+      )
+    ''');
+    expect(indexes, hasLength(5));
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    Map<String, Object?> goal(String id) => {
+          'id': id,
+          'book_id': 1,
+          'title': id,
+          'created_at': now,
+          'updated_at': now,
+        };
+    await db.insert('tb_reading_goals', goal('first'));
+    await expectLater(
+      db.insert('tb_reading_goals', goal('second')),
+      throwsA(anything),
+    );
+  });
+
+  test('database migration from version 7 through version 16 succeeds',
       () async {
     final db = await openTempDb('upgrade_v7_to_v15.db');
     addTearDown(db.close);

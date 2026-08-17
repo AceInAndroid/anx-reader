@@ -12,6 +12,7 @@ import 'package:anx_reader/widgets/ai/tool_step_tile.dart';
 import 'package:anx_reader/widgets/ai/tool_tiles/mindmap_step_tile.dart';
 import 'package:anx_reader/widgets/ai/tool_tiles/organize_bookshelf_step_tile.dart';
 import 'package:anx_reader/widgets/ai/tool_tiles/apply_book_tags_step_tile.dart';
+import 'package:anx_reader/widgets/ai/tool_tiles/reading_agent_step_tile.dart';
 
 class AiStream extends ConsumerStatefulWidget {
   const AiStream({
@@ -231,6 +232,14 @@ class AiStreamState extends ConsumerState<AiStream> {
     }
     if (step.name == 'apply_book_tags') {
       return ApplyBookTagsStepTile(step: step);
+    }
+    if (const {
+      'reading_goal_set',
+      'reading_note_create',
+      'reading_difficulty_save',
+      'reader_navigate',
+    }.contains(step.name)) {
+      return ReadingAgentStepTile(step: step);
     }
     return ToolStepTile(step: step);
   }

@@ -5,6 +5,8 @@ import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/timeout_http_client.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/tools/reading_agent_tools.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -135,6 +137,9 @@ class LangchainAiRegistry {
       tools = AiToolRegistry.buildTools(toolContext, enabledIds);
       final enabledDefs = AiToolRegistry.definitions
           .where((def) => enabledIds.contains(def.id))
+          .where((def) =>
+              Prefs().readingAgentBetaEnabled ||
+              !readingAgentToolIds.contains(def.id))
           .toList(growable: false);
       systemMessage = _buildAgentSystemMessage(
         isReading: isReading,
@@ -190,6 +195,9 @@ class LangchainAiRegistry {
         : '📚 User is browsing the library - You are a wise librarian, helping organize books and plan reading strategies.';
 
     final profile = readingMode.agentProfile;
+    final readingAgentContext = Prefs().readingAgentBetaEnabled && isReading
+        ? _formatReadingAgentContext(readingAgentRuntime.state)
+        : '';
     final guidance =
         '''You are "Anx Reader AI", an intelligent reading assistant integrated into the Anx Reader app.
 
@@ -201,6 +209,7 @@ $readingStateContext
 Reading mode: ${readingMode.name}
 Mode guidance: ${profile.systemPrompt}
 Safety boundary: ${profile.safetyPrompt}
+$readingAgentContext
 
 Use layered context. Start from the selection, adjacent paragraphs, chapter and book metadata. Read chapter text, table of contents, notes or other chapters only when needed through tools; never imply that the entire book or all notes were uploaded.
 
@@ -267,11 +276,33 @@ You can also use LaTeX for mathematical expressions. Here's an example:
 - Stay focused on reading-related assistance
 - Don't make assumptions about unavailable data
 - Use the user's language for responses
+- Reader page turns, dwell time, rereading and chapter changes never authorize a model request or a persistent write
+- Execute persistent writes directly only when the user explicitly asked to save/create/mark; proactive ideas must return a confirmation preview
+- Never treat profile candidates or model inferences as confirmed user facts
 
 ## Remember
 You are not just a tool executor, but the user's reading companion. Your mission is to make every reading session more insightful and enjoyable.''';
 
     return ChatMessage.system(guidance);
+  }
+
+  String _formatReadingAgentContext(ReadingWorldState state) {
+    if (!state.isUsableForAgent) return '';
+    final selection = state.selection;
+    return '''
+
+## Reading World State (local snapshot)
+- Book: ${state.bookTitle ?? ''} (id: ${state.bookId})
+- Chapter: ${state.chapterTitle ?? ''} (${state.chapterHref ?? ''})
+- CFI: ${state.cfi ?? ''}
+- Total progress: ${(state.totalProgress * 100).toStringAsFixed(1)}%
+- Chapter progress: ${(state.chapterProgress * 100).toStringAsFixed(1)}%
+- Active goal: ${state.activeGoal?.title ?? 'none'}
+- Unresolved difficulties: ${state.unresolvedDifficultyCount}
+- Confirmed reader profile: ${state.confirmedProfileSummary}
+${selection == null ? '- Selection: none' : '- Selection: active at ${selection.cfi} (${selection.text.length} characters)'}
+Only confirmed profile values above are user context. Pending profile candidates are intentionally excluded.
+''';
   }
 
   String _formatToolCatalog(List<AiToolDefinition> enabledTools) {

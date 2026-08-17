@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 15;
+const int currentDbVersion = 16;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -322,6 +322,46 @@ CREATE INDEX IF NOT EXISTS idx_note_ai_suggestions_batch_status
 ON tb_reading_note_ai_suggestions(batch_id, status);
 CREATE INDEX IF NOT EXISTS idx_note_ai_suggestions_source
 ON tb_reading_note_ai_suggestions(book_id, source_type, source_ref)
+''';
+
+const createReadingAgentSQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_goals (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, title TEXT NOT NULL,
+  range_json TEXT NOT NULL DEFAULT '{}', time_budget_minutes INTEGER,
+  criteria_json TEXT NOT NULL DEFAULT '[]', progress REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK(status IN ('active', 'completed', 'abandoned')),
+  CHECK(progress >= 0 AND progress <= 1)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_goals_one_active_book
+ON tb_reading_goals(book_id) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_reading_goals_book_updated
+ON tb_reading_goals(book_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS tb_reader_profile_items (
+  profile_key TEXT PRIMARY KEY, value_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'candidate', confidence REAL NOT NULL DEFAULT 0,
+  evidence_count INTEGER NOT NULL DEFAULT 0,
+  evidence_sessions_json TEXT NOT NULL DEFAULT '[]', rejected_until INTEGER,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  CHECK(status IN ('candidate', 'confirmed', 'rejected')),
+  CHECK(confidence >= 0 AND confidence <= 1), CHECK(evidence_count >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_reader_profile_status_updated
+ON tb_reader_profile_items(status, updated_at DESC);
+CREATE TABLE IF NOT EXISTS tb_agent_actions (
+  id TEXT PRIMARY KEY, action_type TEXT NOT NULL, target_id TEXT NOT NULL,
+  book_id INTEGER, before_snapshot TEXT, after_snapshot TEXT,
+  after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
+  session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL, undone_at INTEGER,
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty')),
+  CHECK(status IN ('applied', 'undone', 'conflict'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_recent
+ON tb_agent_actions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_target
+ON tb_agent_actions(action_type, target_id, created_at DESC)
 ''';
 
 class DBHelper {
@@ -746,6 +786,12 @@ class DBHelper {
       case14Migration:
       case 14:
         for (final statement in createReadingNoteAiOrganizerSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case15Migration;
+      case15Migration:
+      case 15:
+        for (final statement in createReadingAgentSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
     }
