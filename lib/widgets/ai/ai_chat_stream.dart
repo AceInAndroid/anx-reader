@@ -1304,6 +1304,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
       'reading_goal_set',
       'reading_note_create',
       'reading_difficulty_save',
+      'reading_memory_append',
       'reader_navigate',
     }.contains(step.name)) {
       return ReadingAgentStepTile(step: step);

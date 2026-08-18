@@ -137,6 +137,7 @@ class _ReadingAgentStepTileState extends State<ReadingAgentStepTile> {
         'reading_goal_set' => '阅读目标建议',
         'reading_note_create' => '阅读笔记建议',
         'reading_difficulty_save' => '阅读难点建议',
+        'reading_memory_append' => 'Markdown 记忆建议',
         'reader_navigate' => '阅读器导航',
         _ => '阅读 Agent 建议',
       };
@@ -152,6 +153,7 @@ class _ReadingAgentStepTileState extends State<ReadingAgentStepTile> {
       'reading_note_create' =>
         '${preview['title'] ?? ''}\n${preview['body'] ?? ''}'.trim(),
       'reading_difficulty_save' => preview['text']?.toString() ?? '',
+      'reading_memory_append' => preview['markdown']?.toString() ?? '',
       'reader_navigate' => '已在当前书内导航',
       _ => preview.toString(),
     };
@@ -217,6 +219,19 @@ class _ReadingAgentStepTileState extends State<ReadingAgentStepTile> {
               updatedAt: now,
             ),
           );
+          break;
+        case 'reading_memory_append':
+          final now = DateTime.now().millisecondsSinceEpoch;
+          await agentActionService.appendMemory(ReadingMemoryDocument(
+              id: const Uuid().v4(),
+              bookId: bookId,
+              title: preview['title']?.toString() ?? '',
+              markdown: preview['markdown']?.toString() ?? '',
+              sourceRefs: (preview['sourceRefs'] as List? ?? const [])
+                  .map((value) => value.toString())
+                  .toList(growable: false),
+              createdAt: now,
+              updatedAt: now));
           break;
         default:
           throw StateError('Unsupported Reading Agent suggestion');

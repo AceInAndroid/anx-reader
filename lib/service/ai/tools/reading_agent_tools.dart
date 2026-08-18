@@ -3,9 +3,11 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_note.dart';
+import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/agent_action_service.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:anx_reader/service/ai/tools/base_tool.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +18,8 @@ const readingAgentToolIds = {
   'reading_note_create',
   'reading_difficulty_save',
   'reading_goal_set',
+  'reading_memory_append',
+  'reading_memory_recall',
 };
 
 class ReaderNavigateTool extends RepositoryTool<JsonMap, Map<String, dynamic>> {
@@ -342,6 +346,116 @@ class ReadingGoalSetTool extends RepositoryTool<JsonMap, Map<String, dynamic>> {
   }
 }
 
+class ReadingMemoryAppendTool
+    extends RepositoryTool<JsonMap, Map<String, dynamic>> {
+  ReadingMemoryAppendTool(this._ref)
+      : super(
+          name: 'reading_memory_append',
+          description:
+              'Save a short Markdown memory for the current book. Explicit user requests may write directly; proactive suggestions require confirmation.',
+          inputJsonSchema: const {
+            'type': 'object',
+            'required': ['title', 'markdown', 'userInitiated'],
+            'properties': {
+              'title': {'type': 'string'},
+              'markdown': {'type': 'string'},
+              'sourceRefs': {
+                'type': 'array',
+                'items': {'type': 'string'}
+              },
+              'userInitiated': {'type': 'boolean'},
+            },
+          },
+        );
+  final WidgetRef _ref;
+  @override
+  JsonMap parseInput(Map<String, dynamic> json) => json;
+  @override
+  Future<Map<String, dynamic>> run(JsonMap input) async {
+    final reading = _ref.read(currentReadingProvider);
+    final book = reading.book;
+    if (!reading.isReading || book == null) {
+      throw StateError('No active reading session');
+    }
+    final title = input['title']?.toString().trim() ?? '';
+    final markdown = input['markdown']?.toString().trim() ?? '';
+    if (title.isEmpty || markdown.isEmpty) {
+      throw ArgumentError('Title and Markdown are required');
+    }
+    final preview = {
+      'title': title,
+      'markdown': markdown,
+      'sourceRefs': (input['sourceRefs'] as List? ?? const [])
+          .map((e) => e.toString())
+          .toList()
+    };
+    if (input['userInitiated'] != true) {
+      return {'requiresConfirmation': true, 'preview': preview};
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final mutation = await agentActionService.appendMemory(
+        ReadingMemoryDocument(
+            id: const Uuid().v4(),
+            bookId: book.id,
+            title: title,
+            markdown: markdown,
+            sourceRefs: List<String>.from(preview['sourceRefs'] as List),
+            createdAt: now,
+            updatedAt: now));
+    return {
+      'saved': true,
+      'memoryId': mutation.value.id,
+      'actionId': mutation.action.id,
+      'undoAvailableUntil': mutation.action.expiresAt
+    };
+  }
+}
+
+class ReadingMemoryRecallTool
+    extends RepositoryTool<JsonMap, Map<String, dynamic>> {
+  ReadingMemoryRecallTool(this._ref)
+      : super(
+          name: 'reading_memory_recall',
+          description:
+              'Read the current book local Markdown memories. Use an optional query to filter titles and content. This never writes or invokes another model.',
+          inputJsonSchema: const {
+            'type': 'object',
+            'properties': {
+              'query': {'type': 'string'}
+            },
+          },
+        );
+  final WidgetRef _ref;
+  @override
+  JsonMap parseInput(Map<String, dynamic> json) => json;
+  @override
+  Future<Map<String, dynamic>> run(JsonMap input) async {
+    final reading = _ref.read(currentReadingProvider);
+    final book = reading.book;
+    if (!reading.isReading || book == null) {
+      throw StateError('No active reading session');
+    }
+    final query = input['query']?.toString().trim().toLowerCase() ?? '';
+    final documents = (await readingAgentRepository.memoryDocuments(book.id))
+        .where((item) =>
+            query.isEmpty ||
+            item.title.toLowerCase().contains(query) ||
+            item.markdown.toLowerCase().contains(query))
+        .take(10)
+        .map((item) => {
+              'id': item.id,
+              'title': item.title,
+              'markdown': item.markdown.length <= 4000
+                  ? item.markdown
+                  : '${item.markdown.substring(0, 4000)}…',
+              'sourceRefs': item.sourceRefs,
+              'updatedAt': item.updatedAt,
+            })
+        .toList(growable: false);
+    return {'documents': documents, 'count': documents.length};
+  }
+}
+
 final readerNavigateToolDefinition = AiToolDefinition(
   id: 'reader_navigate',
   displayNameBuilder: (L10n _) => '阅读器导航',
@@ -368,6 +482,20 @@ final readingGoalSetToolDefinition = AiToolDefinition(
   displayNameBuilder: (L10n _) => '设置阅读目标',
   descriptionBuilder: (L10n _) => '先预览，用户确认后保存目标',
   build: (context) => ReadingGoalSetTool(context.ref).tool,
+);
+
+final readingMemoryAppendToolDefinition = AiToolDefinition(
+  id: 'reading_memory_append',
+  displayNameBuilder: (L10n _) => '写入 Markdown 记忆',
+  descriptionBuilder: (L10n _) => '保存可检索、可撤销的本书 Markdown 记忆',
+  build: (context) => ReadingMemoryAppendTool(context.ref).tool,
+);
+
+final readingMemoryRecallToolDefinition = AiToolDefinition(
+  id: 'reading_memory_recall',
+  displayNameBuilder: (L10n _) => '读取 Markdown 记忆',
+  descriptionBuilder: (L10n _) => '检索当前书的本地 Markdown 记忆',
+  build: (context) => ReadingMemoryRecallTool(context.ref).tool,
 );
 
 bool _isValidCfi(String value) =>

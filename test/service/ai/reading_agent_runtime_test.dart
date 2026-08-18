@@ -18,6 +18,21 @@ class _Repository extends ReadingAgentRepository {
   Future<List<ReaderProfileItem>> profileCandidates() async => const [];
 
   @override
+  Future<List<ReadingChapterCheckpoint>> pendingCheckpoints(int bookId) async =>
+      const [];
+  @override
+  Future<List<MasteryState>> masteryStates(int bookId) async => const [];
+  @override
+  Future<List<KnowledgeCard>> dueKnowledgeCards(int bookId) async => const [];
+  @override
+  Future<List<ReadingMemoryDocument>> memoryDocuments(int bookId) async =>
+      const [];
+  @override
+  Future<ReadingChapterCheckpoint> upsertCheckpoint(
+          ReadingChapterCheckpoint checkpoint) async =>
+      checkpoint;
+
+  @override
   Future<void> updateGoalProgress(ReadingGoal goal) async {
     progressWrites.add(goal);
   }

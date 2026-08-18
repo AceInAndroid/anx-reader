@@ -89,6 +89,8 @@ class AiToolRegistry {
     readingNoteCreateToolDefinition,
     readingDifficultySaveToolDefinition,
     readingGoalSetToolDefinition,
+    readingMemoryAppendToolDefinition,
+    readingMemoryRecallToolDefinition,
   ];
 
   static final Map<String, AiToolDefinition> _definitionMap = {

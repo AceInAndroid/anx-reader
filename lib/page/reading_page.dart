@@ -31,6 +31,7 @@ import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
 import 'package:anx_reader/service/ai/agent_action_service.dart';
+import 'package:anx_reader/service/ai/reading_intervention_policy.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ui/status_bar.dart';
@@ -101,6 +102,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   bool _inspectionReminderShown = false;
   bool bookmarkExists = false;
   bool _readingAgentCapsuleDismissed = false;
+  static const _readingInterventionPolicy = ReadingInterventionPolicy();
   String? _lastReadingAgentSnackActionId;
 
   bool _usesAiSplitLayout(BuildContext context) {
@@ -688,8 +690,15 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   Widget _buildReadingAgentCapsule() {
     final state = readingAgentRuntime.state;
     final goal = state.activeGoal;
-    final pending = state.pendingProfileCount + state.pendingCheckpointCount;
-    final title = goal?.title ?? (pending > 0 ? '有 $pending 项待处理' : '最近动作可撤销');
+    final pending = state.pendingProfileCount +
+        state.pendingCheckpointCount +
+        state.dueKnowledgeCardCount;
+    final title = goal?.title ??
+        (pending > 0
+            ? '有 $pending 项待处理'
+            : state.unresolvedDifficultyCount > 0
+                ? '${state.unresolvedDifficultyCount} 个问题待解决'
+                : '最近动作可撤销');
     final semantics = goal == null
         ? '阅读 Agent，$title'
         : '阅读目标：${goal.title}，进度 ${(goal.progress * 100).round()}%'
@@ -747,7 +756,12 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     required String currentHref,
   }) async {
     if (Prefs().readingAgentBetaEnabled) {
-      readingAgentRuntime.observeChapterChanged(currentHref: currentHref);
+      readingAgentRuntime.observeChapterChanged(
+        currentHref: currentHref,
+        completedHref: previousHref,
+        completedTitle: previousTitle,
+        completedProgress: highestProgress,
+      );
     }
     if (!FeatureFlags.readingCoach) return;
     final state = await ref.read(readingCoachProvider(_book.id).future);
@@ -878,8 +892,142 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
   }
 
+  Future<void> _finishChapterCheckpoint(
+      ReadingChapterCheckpoint checkpoint) async {
+    final reflection = TextEditingController();
+    MasteryLevel level = MasteryLevel.familiar;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text('完成检查 · ${checkpoint.chapterTitle}'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<MasteryLevel>(
+                initialValue: level,
+                decoration: const InputDecoration(labelText: '当前掌握度'),
+                items: const [
+                  DropdownMenuItem(
+                      value: MasteryLevel.emerging, child: Text('初步理解')),
+                  DropdownMenuItem(
+                      value: MasteryLevel.familiar, child: Text('基本掌握')),
+                  DropdownMenuItem(
+                      value: MasteryLevel.mastered, child: Text('可以解释或应用')),
+                ],
+                onChanged: (value) =>
+                    setDialogState(() => level = value ?? level),
+              ),
+              TextField(
+                controller: reflection,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: '一句话回忆（可选）',
+                  helperText: '填写后会生成一张明日到期的本地知识卡片',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('稍后')),
+            FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('完成检查')),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await readingAgentRepository.completeCheckpoint(checkpoint,
+        completed: true, reflection: reflection.text.trim());
+    await readingAgentRepository.saveMastery(MasteryState(
+        id: '${checkpoint.bookId}-${checkpoint.chapterHref.hashCode}',
+        bookId: checkpoint.bookId,
+        chapterHref: checkpoint.chapterHref,
+        topic: checkpoint.chapterTitle.isEmpty
+            ? checkpoint.chapterHref
+            : checkpoint.chapterTitle,
+        level: level,
+        score: level.index / (MasteryLevel.values.length - 1),
+        nextReviewAt: now + const Duration(days: 1).inMilliseconds,
+        updatedAt: now));
+    if (reflection.text.trim().isNotEmpty) {
+      await readingAgentRepository.saveKnowledgeCard(KnowledgeCard(
+          id: '${checkpoint.id}-recall',
+          bookId: checkpoint.bookId,
+          front: '请回忆：${checkpoint.chapterTitle}',
+          back: reflection.text.trim(),
+          chapterHref: checkpoint.chapterHref,
+          dueAt: now + const Duration(days: 1).inMilliseconds,
+          createdAt: now,
+          updatedAt: now));
+    }
+    readingAgentRuntime.checkpointResolved();
+  }
+
+  Future<void> _reviewKnowledgeCard(KnowledgeCard card, bool remembered) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final interval = remembered ? (card.intervalDays * 2).clamp(2, 60) : 1;
+    await readingAgentRepository.saveKnowledgeCard(card.copyWith(
+        intervalDays: interval,
+        repetitions: card.repetitions + 1,
+        dueAt: now + Duration(days: interval).inMilliseconds,
+        updatedAt: now));
+    readingAgentRuntime.knowledgeCardReviewed();
+  }
+
+  Future<void> _createMarkdownMemory() async {
+    final title = TextEditingController();
+    final body = TextEditingController();
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('新建 Markdown 记忆'),
+        content: SizedBox(
+          width: 520,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+                controller: title,
+                maxLength: 80,
+                decoration: const InputDecoration(labelText: '标题')),
+            TextField(
+                controller: body,
+                minLines: 4,
+                maxLines: 10,
+                decoration: const InputDecoration(labelText: 'Markdown 内容')),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('保存')),
+        ],
+      ),
+    );
+    if (save != true || title.text.trim().isEmpty || body.text.trim().isEmpty) {
+      return;
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await agentActionService.appendMemory(ReadingMemoryDocument(
+      id: '${_book.id}-$now',
+      bookId: _book.id,
+      title: title.text.trim(),
+      markdown: body.text.trim(),
+      sourceRefs: [
+        if (readingAgentRuntime.state.chapterHref case final href?) href,
+      ],
+      createdAt: now,
+      updatedAt: now,
+    ));
+  }
+
   Future<void> _showReadingAgentPanel() async {
-    readingAgentRuntime.consumeCheckpoints();
     final goalTitleController = TextEditingController();
     await showModalBottomSheet<void>(
       context: context,
@@ -1044,6 +1192,149 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                         ),
                       ),
                     ],
+                    if (state.pendingCheckpointCount > 0) ...[
+                      const Divider(height: 32),
+                      const Text('章节完成检查',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      FutureBuilder<List<ReadingChapterCheckpoint>>(
+                        future:
+                            readingAgentRepository.pendingCheckpoints(_book.id),
+                        builder: (context, snapshot) => Column(
+                          children: [
+                            for (final checkpoint
+                                in (snapshot.data ?? const []).take(3))
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.fact_check_outlined),
+                                title: Text(checkpoint.chapterTitle.isEmpty
+                                    ? checkpoint.chapterHref
+                                    : checkpoint.chapterTitle),
+                                subtitle: Text(
+                                    '${(checkpoint.progress * 100).round()}% · 点击后再开始检查'),
+                                trailing: FilledButton.tonal(
+                                  onPressed: () async {
+                                    await _finishChapterCheckpoint(checkpoint);
+                                    setSheetState(() {});
+                                  },
+                                  child: const Text('检查'),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (state.unresolvedDifficultyCount > 0) ...[
+                      const Divider(height: 32),
+                      const Text('跨章节未解决问题',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      FutureBuilder<ReadingCoachState>(
+                        future: ref.read(readingCoachProvider(_book.id).future),
+                        builder: (context, snapshot) {
+                          final items = (snapshot.data?.difficulties ??
+                                  const <ReadingDifficulty>[])
+                              .where((item) =>
+                                  item.status ==
+                                  ReadingDifficultyStatus.unresolved)
+                              .take(5);
+                          return Column(children: [
+                            for (final item in items)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.help_outline),
+                                title: Text(item.text,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis),
+                                subtitle: Text(item.chapterTitle ?? '未知章节'),
+                                onTap: () => ReaderCommandGateway.instance
+                                    .navigateToCfi(
+                                        bookId: _book.id, cfi: item.cfi),
+                                trailing: IconButton(
+                                  tooltip: '标记已解决',
+                                  icon: const Icon(Icons.check_circle_outline),
+                                  onPressed: () async {
+                                    await ref
+                                        .read(readingCoachProvider(_book.id)
+                                            .notifier)
+                                        .updateDifficulty(item.copyWith(
+                                            status: ReadingDifficultyStatus
+                                                .resolved,
+                                            updatedAt: DateTime.now()
+                                                .millisecondsSinceEpoch));
+                                    readingAgentRuntime.difficultyResolved();
+                                    setSheetState(() {});
+                                  },
+                                ),
+                              ),
+                          ]);
+                        },
+                      ),
+                    ],
+                    if (state.dueKnowledgeCardCount > 0) ...[
+                      const Divider(height: 32),
+                      const Text('到期知识卡片',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      FutureBuilder<List<KnowledgeCard>>(
+                        future:
+                            readingAgentRepository.dueKnowledgeCards(_book.id),
+                        builder: (context, snapshot) => Column(
+                          children: [
+                            for (final card
+                                in (snapshot.data ?? const []).take(3))
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: const Icon(Icons.style_outlined),
+                                title: Text(card.front),
+                                subtitle: Text(card.back,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis),
+                                trailing: Wrap(
+                                  spacing: 4,
+                                  children: [
+                                    IconButton(
+                                        tooltip: '再学习',
+                                        icon: const Icon(Icons.refresh),
+                                        onPressed: () async {
+                                          await _reviewKnowledgeCard(
+                                              card, false);
+                                          setSheetState(() {});
+                                        }),
+                                    IconButton(
+                                        tooltip: '记住了',
+                                        icon: const Icon(Icons.check),
+                                        onPressed: () async {
+                                          await _reviewKnowledgeCard(
+                                              card, true);
+                                          setSheetState(() {});
+                                        }),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const Divider(height: 32),
+                    Row(children: [
+                      const Expanded(
+                        child: Text('本书 Markdown 记忆',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                      TextButton.icon(
+                        onPressed: () async {
+                          await _createMarkdownMemory();
+                          setSheetState(() {});
+                        },
+                        icon: const Icon(Icons.add),
+                        label: const Text('新建'),
+                      ),
+                    ]),
+                    if (state.markdownMemorySummary.isNotEmpty) ...[
+                      for (final title in state.markdownMemorySummary)
+                        ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.description_outlined),
+                            title: Text(title)),
+                    ],
                     if (state.pendingProfileCount > 0) ...[
                       const Divider(height: 32),
                       const Text(
@@ -1187,6 +1478,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         AgentActionType.profile => '阅读偏好',
         AgentActionType.note => 'AI 笔记',
         AgentActionType.difficulty => '阅读难点',
+        AgentActionType.memory => 'Markdown 记忆',
       };
 
   String _undoResultLabel(UndoResult result) => switch (result) {
@@ -1303,8 +1595,12 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   ],
                 ),
                 if (Prefs().readingAgentBetaEnabled &&
-                    !_readingAgentCapsuleDismissed &&
-                    readingAgentRuntime.state.hasCapsuleState)
+                    _readingInterventionPolicy.decide(
+                          state: readingAgentRuntime.state,
+                          controlsVisible: true,
+                          dismissedForSession: _readingAgentCapsuleDismissed,
+                        ) ==
+                        ReadingIntervention.passiveCapsule)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
                     child: _buildReadingAgentCapsule(),

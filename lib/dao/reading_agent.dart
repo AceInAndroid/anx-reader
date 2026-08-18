@@ -90,6 +90,37 @@ class ReadingAgentDao extends BaseDao {
     );
   }
 
+  Future<List<ReadingChapterCheckpoint>> pendingCheckpoints(int bookId) =>
+      queryList('tb_reading_checkpoints',
+          mapper: ReadingChapterCheckpoint.fromDb,
+          where: "book_id = ? AND status = 'pending'",
+          whereArgs: [bookId],
+          orderBy: 'updated_at DESC');
+
+  Future<List<MasteryState>> masteryStates(int bookId) =>
+      queryList('tb_reading_mastery',
+          mapper: MasteryState.fromDb,
+          where: 'book_id = ?',
+          whereArgs: [bookId],
+          orderBy: 'updated_at DESC');
+
+  Future<
+      List<
+          KnowledgeCard>> dueKnowledgeCards(int bookId, int now) => queryList(
+      'tb_knowledge_cards',
+      mapper: KnowledgeCard.fromDb,
+      where:
+          "book_id = ? AND status = 'active' AND due_at IS NOT NULL AND due_at <= ?",
+      whereArgs: [bookId, now],
+      orderBy: 'due_at ASC');
+
+  Future<List<ReadingMemoryDocument>> memoryDocuments(int bookId) =>
+      queryList('tb_reading_memory_documents',
+          mapper: ReadingMemoryDocument.fromDb,
+          where: 'book_id = ?',
+          whereArgs: [bookId],
+          orderBy: 'updated_at DESC');
+
   Future<R> write<R>(Future<R> Function(Transaction txn) operation) =>
       transaction(operation);
 }

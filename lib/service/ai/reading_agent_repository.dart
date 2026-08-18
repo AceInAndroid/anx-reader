@@ -36,6 +36,79 @@ class ReadingAgentRepository {
 
   Future<ReadingGoal?> activeGoal(int bookId) => _dao.activeGoal(bookId);
   Future<List<ReadingGoal>> goals(int bookId) => _dao.goals(bookId);
+  Future<List<ReadingChapterCheckpoint>> pendingCheckpoints(int bookId) =>
+      _dao.pendingCheckpoints(bookId);
+  Future<List<MasteryState>> masteryStates(int bookId) =>
+      _dao.masteryStates(bookId);
+  Future<List<KnowledgeCard>> dueKnowledgeCards(int bookId) =>
+      _dao.dueKnowledgeCards(bookId, _clock());
+  Future<List<ReadingMemoryDocument>> memoryDocuments(int bookId) =>
+      _dao.memoryDocuments(bookId);
+
+  Future<ReadingChapterCheckpoint> upsertCheckpoint(
+      ReadingChapterCheckpoint checkpoint) async {
+    await _dao.write((txn) async {
+      await txn.insert('tb_reading_checkpoints', checkpoint.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.ignore);
+    });
+    return checkpoint;
+  }
+
+  Future<ReadingChapterCheckpoint> completeCheckpoint(
+      ReadingChapterCheckpoint checkpoint,
+      {required bool completed,
+      String reflection = ''}) async {
+    final updated = checkpoint.copyWith(
+        status: completed
+            ? ReadingCheckpointStatus.completed
+            : ReadingCheckpointStatus.skipped,
+        reflection: reflection,
+        updatedAt: _clock());
+    await _dao.write((txn) async {
+      await txn.insert('tb_reading_checkpoints', updated.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+    return updated;
+  }
+
+  Future<MasteryState> saveMastery(MasteryState state) async {
+    await _dao.write((txn) async => txn.insert(
+        'tb_reading_mastery', state.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace));
+    return state;
+  }
+
+  Future<KnowledgeCard> saveKnowledgeCard(KnowledgeCard card) async {
+    await _dao.write((txn) async => txn.insert(
+        'tb_knowledge_cards', card.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace));
+    return card;
+  }
+
+  Future<AgentMutation<ReadingMemoryDocument>> appendMemory(
+      ReadingMemoryDocument document,
+      {required String sessionId}) async {
+    if (document.bookId <= 0 || document.markdown.trim().isEmpty) {
+      throw ArgumentError('Markdown memory requires a book and content');
+    }
+    final now = _clock();
+    return _dao.write((txn) async {
+      final before = await _queryOne(
+          txn, 'tb_reading_memory_documents', 'id = ?', [document.id]);
+      await txn.insert('tb_reading_memory_documents', document.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      final action = _action(
+          type: AgentActionType.memory,
+          targetId: document.id,
+          bookId: document.bookId,
+          sessionId: sessionId,
+          before: before,
+          after: document.toDb(),
+          now: now);
+      await _insertAction(txn, action, now);
+      return AgentMutation(value: document, action: action);
+    });
+  }
 
   /// Location-derived progress is not a separate Agent action. Advance the
   /// latest goal-action snapshot with it so ordinary reading does not make an
@@ -399,6 +472,9 @@ class ReadingAgentRepository {
       case AgentActionType.difficulty:
         return _queryOne(
             txn, 'tb_reading_difficulties', 'id = ?', [action.targetId]);
+      case AgentActionType.memory:
+        return _queryOne(
+            txn, 'tb_reading_memory_documents', 'id = ?', [action.targetId]);
     }
   }
 
@@ -443,6 +519,15 @@ class ReadingAgentRepository {
               where: 'id = ?', whereArgs: [action.targetId]);
         } else {
           await txn.insert('tb_reading_difficulties',
+              Map<String, Object?>.from(action.beforeSnapshot!),
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+        return;
+      case AgentActionType.memory:
+        await txn.delete('tb_reading_memory_documents',
+            where: 'id = ?', whereArgs: [action.targetId]);
+        if (action.beforeSnapshot != null) {
+          await txn.insert('tb_reading_memory_documents',
               Map<String, Object?>.from(action.beforeSnapshot!),
               conflictAlgorithm: ConflictAlgorithm.replace);
         }

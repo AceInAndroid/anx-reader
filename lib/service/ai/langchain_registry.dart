@@ -299,6 +299,10 @@ You are not just a tool executor, but the user's reading companion. Your mission
 - Chapter progress: ${(state.chapterProgress * 100).toStringAsFixed(1)}%
 - Active goal: ${state.activeGoal?.title ?? 'none'}
 - Unresolved difficulties: ${state.unresolvedDifficultyCount}
+- Pending chapter checks: ${state.pendingCheckpointCount}
+- Due knowledge cards: ${state.dueKnowledgeCardCount}
+- Mastery: ${state.masterySummary}
+- Markdown memory documents: ${state.markdownMemorySummary}
 - Confirmed reader profile: ${state.confirmedProfileSummary}
 ${selection == null ? '- Selection: none' : '- Selection: active at ${selection.cfi} (${selection.text.length} characters)'}
 Only confirmed profile values above are user context. Pending profile candidates are intentionally excluded.

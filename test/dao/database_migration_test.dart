@@ -97,7 +97,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 16);
+    expect(currentDbVersion, 17);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -277,7 +277,7 @@ void main() {
     expect(indexes, hasLength(3));
   });
 
-  test('version 16 migration creates reading agent tables and constraints',
+  test('version 17 migration creates reading closure tables and constraints',
       () async {
     final db = await openTempDb('reading_agent.db');
     addTearDown(db.close);
@@ -286,10 +286,12 @@ void main() {
 
     final tables = await db.rawQuery('''
       SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
-        'tb_reading_goals', 'tb_reader_profile_items', 'tb_agent_actions'
+        'tb_reading_goals', 'tb_reader_profile_items', 'tb_agent_actions',
+        'tb_reading_checkpoints', 'tb_reading_mastery', 'tb_knowledge_cards',
+        'tb_reading_memory_documents'
       )
     ''');
-    expect(tables, hasLength(3));
+    expect(tables, hasLength(7));
     final indexes = await db.rawQuery('''
       SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (
         'idx_reading_goals_one_active_book',
@@ -315,7 +317,7 @@ void main() {
     );
   });
 
-  test('database migration from version 7 through version 16 succeeds',
+  test('database migration from version 7 through version 17 succeeds',
       () async {
     final db = await openTempDb('upgrade_v7_to_v15.db');
     addTearDown(db.close);

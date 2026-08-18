@@ -150,6 +150,15 @@ class AgentActionService {
     return mutation;
   }
 
+  Future<AgentMutation<ReadingMemoryDocument>> appendMemory(
+      ReadingMemoryDocument document) async {
+    final mutation =
+        await _repository.appendMemory(document, sessionId: _sessionId);
+    _runtime.memoryAdded(document.title);
+    _runtime.actionApplied(mutation.action);
+    return mutation;
+  }
+
   Future<AgentMutation<ReaderProfileItem>?> recordProfileEvidence({
     required String key,
     required Map<String, dynamic> value,
@@ -193,6 +202,9 @@ class AgentActionService {
         ReaderCommandGateway.instance.hideAnnotation(
           'difficulty:${action.targetId}',
         );
+      } else if (action.type == AgentActionType.memory) {
+        _runtime
+            .memoryRemoved(action.afterSnapshot?['title']?.toString() ?? '');
       }
       _runtime.actionUndone(action);
       if (action.type == AgentActionType.goal && action.bookId != null) {

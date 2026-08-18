@@ -32,6 +32,7 @@ void main() {
       createReadingNotesWorkspaceSQL,
       createReadingNoteAiOrganizerSQL,
       createReadingAgentSQL,
+      createReadingClosureSQL,
     ]) {
       for (final statement in sql
           .split(';')
@@ -259,5 +260,56 @@ void main() {
     expect(await repository.undo(mutation.action.id), UndoResult.undone);
     expect(await db.query('tb_notes'), isEmpty);
     expect(await db.query('tb_reading_notes'), isEmpty);
+  });
+
+  test(
+      'chapter closure persists mastery, due card, and undoable markdown memory',
+      () async {
+    final checkpoint = ReadingChapterCheckpoint(
+        id: 'checkpoint',
+        bookId: 1,
+        chapterHref: 'one.xhtml',
+        chapterTitle: 'One',
+        progress: .95,
+        createdAt: now,
+        updatedAt: now);
+    await repository.upsertCheckpoint(checkpoint);
+    await repository.completeCheckpoint(checkpoint,
+        completed: true, reflection: 'Core argument');
+    await repository.saveMastery(MasteryState(
+        id: 'mastery',
+        bookId: 1,
+        chapterHref: 'one.xhtml',
+        topic: 'One',
+        level: MasteryLevel.familiar,
+        score: .66,
+        nextReviewAt: now,
+        updatedAt: now));
+    await repository.saveKnowledgeCard(KnowledgeCard(
+        id: 'card',
+        bookId: 1,
+        front: 'Recall',
+        back: 'Core argument',
+        dueAt: now,
+        createdAt: now,
+        updatedAt: now));
+    final memory = await repository.appendMemory(
+        ReadingMemoryDocument(
+            id: 'memory',
+            bookId: 1,
+            title: 'Argument map',
+            markdown: '# Argument\n- Premise',
+            createdAt: now,
+            updatedAt: now),
+        sessionId: 'session');
+
+    expect(await repository.pendingCheckpoints(1), isEmpty);
+    expect((await repository.masteryStates(1)).single.level,
+        MasteryLevel.familiar);
+    expect(await repository.dueKnowledgeCards(1), hasLength(1));
+    expect((await repository.memoryDocuments(1)).single.markdown,
+        contains('# Argument'));
+    expect(await repository.undo(memory.action.id), UndoResult.undone);
+    expect(await repository.memoryDocuments(1), isEmpty);
   });
 }

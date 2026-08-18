@@ -66,3 +66,46 @@ actions while preserving the user's attention and control.
 Phase 1 has no background wakeups, vector database, cross-book knowledge graph,
 automatic skill learning, or automatic cloud analysis. It does not enable the
 legacy `readingCoach` or its MaterialBanner behavior.
+
+## Reading Agent Beta — Phase 2
+
+### Reading closure
+
+- A stable transition out of a chapter persists one local pending checkpoint.
+  It changes only the capsule count; it never starts a model call or opens UI.
+- A chapter check begins only after the user opens the Agent panel and presses
+  “检查”. The user supplies the mastery level; the model cannot promote its own
+  explanation into evidence of mastery.
+- An optional one-sentence recall becomes a local knowledge card due the next
+  day. Reviews use a deliberately small schedule: “再学习” returns in one day,
+  while “记住了” doubles the interval up to 60 days.
+- Unresolved difficulties are book-scoped rather than chapter-scoped in the
+  queue. They remain visible across chapter and session boundaries and retain
+  their original chapter and CFI for navigation.
+
+### Resumable context and Markdown memory
+
+- Starting the next reading session restores the active goal, pending chapter
+  checks, unresolved difficulties, due-card count, recent mastery summary,
+  confirmed profile, and Markdown memory titles before Agent chat is used.
+- Markdown memory is a small, database-backed document format: title, Markdown
+  body, optional source references, and timestamps. It is local-first and is
+  included in the existing database snapshot sync; it is not a vector store.
+- Explicit user requests may save Markdown memory immediately. Agent-initiated
+  memory is a confirmation preview. Writes are journaled and undoable under the
+  same 30-day conflict-safe rules as other Agent writes.
+- Only memory titles enter the automatic world-state prompt. The document body
+  is available through the explicit `reading_memory_recall` tool, preventing
+  silent growth of prompt context.
+
+### Low-interruption policy
+
+- The policy output is intentionally limited to `none` or `passiveCapsule`.
+  It has no authority to invoke a model, show a modal/banner/notification, or
+  persist an Agent suggestion.
+- The capsule appears only with reader controls, remains dismissible for the
+  session, contains counts and short labels only, and never reveals a card
+  answer or generated review text.
+- All completion checks, card reviews, mastery updates, and memory previews are
+  entered from a user click. Manual navigation, selection, and closing the
+  reader remain higher priority than the closure workflow.

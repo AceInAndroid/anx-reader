@@ -63,6 +63,9 @@ class ReadingWorldState {
     this.unresolvedDifficultyCount = 0,
     this.pendingProfileCount = 0,
     this.pendingCheckpointCount = 0,
+    this.dueKnowledgeCardCount = 0,
+    this.masterySummary = const {},
+    this.markdownMemorySummary = const [],
     this.lastAgentAction,
     this.confirmedProfileSummary = const {},
   });
@@ -81,6 +84,9 @@ class ReadingWorldState {
   final int unresolvedDifficultyCount;
   final int pendingProfileCount;
   final int pendingCheckpointCount;
+  final int dueKnowledgeCardCount;
+  final Map<String, MasteryLevel> masterySummary;
+  final List<String> markdownMemorySummary;
   final AgentAction? lastAgentAction;
   final Map<String, Map<String, dynamic>> confirmedProfileSummary;
 
@@ -90,8 +96,10 @@ class ReadingWorldState {
 
   bool get hasCapsuleState =>
       activeGoal != null ||
+      unresolvedDifficultyCount > 0 ||
       pendingProfileCount > 0 ||
       pendingCheckpointCount > 0 ||
+      dueKnowledgeCardCount > 0 ||
       lastAgentAction != null;
   bool get isUsableForAgent => bookId != null && sessionId != null;
 
@@ -108,6 +116,9 @@ class ReadingWorldState {
     int? unresolvedDifficultyCount,
     int? pendingProfileCount,
     int? pendingCheckpointCount,
+    int? dueKnowledgeCardCount,
+    Map<String, MasteryLevel>? masterySummary,
+    List<String>? markdownMemorySummary,
     AgentAction? lastAgentAction,
     bool clearLastAgentAction = false,
   }) =>
@@ -128,6 +139,11 @@ class ReadingWorldState {
         pendingProfileCount: pendingProfileCount ?? this.pendingProfileCount,
         pendingCheckpointCount:
             pendingCheckpointCount ?? this.pendingCheckpointCount,
+        dueKnowledgeCardCount:
+            dueKnowledgeCardCount ?? this.dueKnowledgeCardCount,
+        masterySummary: Map.unmodifiable(masterySummary ?? this.masterySummary),
+        markdownMemorySummary: List.unmodifiable(
+            markdownMemorySummary ?? this.markdownMemorySummary),
         lastAgentAction: clearLastAgentAction
             ? null
             : lastAgentAction ?? this.lastAgentAction,
@@ -156,6 +172,7 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
   Map<String, Object?>? _pendingLocation;
   String? _lastSettledKey;
   String? _pendingChapterHref;
+  ReadingChapterCheckpoint? _pendingCheckpoint;
   Future<void> _lastProgressWrite = Future<void>.value();
   ReadingWorldState _state = const ReadingWorldState();
 
@@ -172,10 +189,18 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
       _repository.confirmedProfile(),
       _repository.profileCandidates(),
       _readingCoachDao.selectDifficulties(bookId),
+      _repository.pendingCheckpoints(bookId),
+      _repository.masteryStates(bookId),
+      _repository.dueKnowledgeCards(bookId),
+      _repository.memoryDocuments(bookId),
     ]);
     final confirmed = results[1] as List<ReaderProfileItem>;
     final candidates = results[2] as List<ReaderProfileItem>;
     final difficulties = results[3] as List<ReadingDifficulty>;
+    final checkpoints = results[4] as List<ReadingChapterCheckpoint>;
+    final mastery = results[5] as List<MasteryState>;
+    final dueCards = results[6] as List<KnowledgeCard>;
+    final memories = results[7] as List<ReadingMemoryDocument>;
     _state = ReadingWorldState(
       bookId: bookId,
       bookTitle: bookTitle,
@@ -188,6 +213,13 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
       pendingProfileCount: candidates
           .where((item) => item.evidenceCount >= 3 || item.confidence >= 1)
           .length,
+      pendingCheckpointCount: checkpoints.length,
+      dueKnowledgeCardCount: dueCards.length,
+      masterySummary: {
+        for (final item in mastery.take(8)) item.topic: item.level
+      },
+      markdownMemorySummary:
+          memories.take(5).map((item) => item.title).toList(growable: false),
       confirmedProfileSummary: {
         for (final item in confirmed) item.key: item.value,
       },
@@ -216,14 +248,37 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
     _locationTimer = Timer(locationDebounce, _settleLocation);
   }
 
-  void observeChapterChanged({required String currentHref}) {
+  void observeChapterChanged(
+      {required String currentHref,
+      String? completedHref,
+      String? completedTitle,
+      double completedProgress = 0}) {
     if (!isActive || currentHref.isEmpty) return;
     _pendingChapterHref = currentHref;
+    if (completedHref?.isNotEmpty == true && completedHref != currentHref) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _pendingCheckpoint = ReadingChapterCheckpoint(
+          id: '${_state.bookId}:$completedHref',
+          bookId: _state.bookId!,
+          chapterHref: completedHref!,
+          chapterTitle: completedTitle ?? '',
+          progress: completedProgress.clamp(0, 1),
+          createdAt: now,
+          updatedAt: now);
+    }
     _chapterTimer?.cancel();
-    _chapterTimer = Timer(chapterSettleDelay, () {
+    _chapterTimer = Timer(chapterSettleDelay, () async {
       if (_pendingChapterHref != currentHref || !isActive) return;
+      final checkpoint = _pendingCheckpoint;
+      _pendingCheckpoint = null;
+      var checkpointCount = _state.pendingCheckpointCount + 1;
+      if (checkpoint != null) {
+        await _repository.upsertCheckpoint(checkpoint);
+        checkpointCount =
+            (await _repository.pendingCheckpoints(checkpoint.bookId)).length;
+      }
       _state = _state.copyWith(
-        pendingCheckpointCount: _state.pendingCheckpointCount + 1,
+        pendingCheckpointCount: checkpointCount,
       );
       _emit(ReadingEventType.chapterChanged, {'href': currentHref});
       notifyListeners();
@@ -273,6 +328,45 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void checkpointResolved() {
+    if (_state.pendingCheckpointCount == 0) return;
+    _state = _state.copyWith(
+        pendingCheckpointCount: _state.pendingCheckpointCount - 1);
+    notifyListeners();
+  }
+
+  void knowledgeCardReviewed() {
+    if (_state.dueKnowledgeCardCount == 0) return;
+    _state = _state.copyWith(
+        dueKnowledgeCardCount: _state.dueKnowledgeCardCount - 1);
+    notifyListeners();
+  }
+
+  void difficultyResolved() {
+    if (_state.unresolvedDifficultyCount == 0) return;
+    _state = _state.copyWith(
+        unresolvedDifficultyCount: _state.unresolvedDifficultyCount - 1);
+    notifyListeners();
+  }
+
+  void memoryAdded(String title) {
+    if (title.trim().isEmpty) return;
+    final titles = [title.trim(), ..._state.markdownMemorySummary]
+        .toSet()
+        .take(5)
+        .toList(growable: false);
+    _state = _state.copyWith(markdownMemorySummary: titles);
+    notifyListeners();
+  }
+
+  void memoryRemoved(String title) {
+    final titles = _state.markdownMemorySummary
+        .where((value) => value != title)
+        .toList(growable: false);
+    _state = _state.copyWith(markdownMemorySummary: titles);
+    notifyListeners();
+  }
+
   void profileCandidateResolved() {
     if (_state.pendingProfileCount == 0) return;
     _state = _state.copyWith(
@@ -287,6 +381,7 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
     _locationTimer = null;
     _chapterTimer = null;
     _pendingChapterHref = null;
+    _pendingCheckpoint = null;
     if (!isActive) return;
     // Flush only the last observed position so goal progress survives exit;
     // intermediate page turns remain memory-only.

@@ -4,7 +4,7 @@ import 'package:anx_reader/utils/get_path/get_cache_dir.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
-import 'package:anx_reader/dao/book.dart';
+import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/service/book.dart';
 import 'package:anx_reader/utils/get_path/get_base_path.dart';
 import 'package:anx_reader/utils/get_path/databases_path.dart';
@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 16;
+const int currentDbVersion = 17;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -355,13 +355,67 @@ CREATE TABLE IF NOT EXISTS tb_agent_actions (
   after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
   session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL, undone_at INTEGER,
-  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty')),
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory')),
   CHECK(status IN ('applied', 'undone', 'conflict'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_actions_recent
 ON tb_agent_actions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_actions_target
 ON tb_agent_actions(action_type, target_id, created_at DESC)
+''';
+
+const createReadingClosureSQL = '''
+ALTER TABLE tb_agent_actions RENAME TO tb_agent_actions_v16;
+CREATE TABLE tb_agent_actions (
+  id TEXT PRIMARY KEY, action_type TEXT NOT NULL, target_id TEXT NOT NULL,
+  book_id INTEGER, before_snapshot TEXT, after_snapshot TEXT,
+  after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
+  session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL, undone_at INTEGER,
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory')),
+  CHECK(status IN ('applied', 'undone', 'conflict'))
+);
+INSERT INTO tb_agent_actions SELECT * FROM tb_agent_actions_v16;
+DROP TABLE tb_agent_actions_v16;
+CREATE INDEX IF NOT EXISTS idx_agent_actions_recent
+ON tb_agent_actions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_target
+ON tb_agent_actions(action_type, target_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS tb_reading_checkpoints (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, chapter_href TEXT NOT NULL,
+  chapter_title TEXT NOT NULL DEFAULT '', progress REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending', reflection TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  CHECK(status IN ('pending', 'completed', 'skipped')),
+  UNIQUE(book_id, chapter_href)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_checkpoints_pending
+ON tb_reading_checkpoints(book_id, status, updated_at DESC);
+CREATE TABLE IF NOT EXISTS tb_reading_mastery (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, chapter_href TEXT,
+  topic TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'unknown',
+  score REAL NOT NULL DEFAULT 0, next_review_at INTEGER, updated_at INTEGER NOT NULL,
+  CHECK(level IN ('unknown', 'emerging', 'familiar', 'mastered')),
+  CHECK(score >= 0 AND score <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_mastery_book
+ON tb_reading_mastery(book_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS tb_knowledge_cards (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, front TEXT NOT NULL,
+  back TEXT NOT NULL, chapter_href TEXT, due_at INTEGER,
+  interval_days INTEGER NOT NULL DEFAULT 1, repetitions INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  CHECK(status IN ('active', 'suspended'))
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_cards_due
+ON tb_knowledge_cards(book_id, status, due_at);
+CREATE TABLE IF NOT EXISTS tb_reading_memory_documents (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, title TEXT NOT NULL,
+  markdown TEXT NOT NULL DEFAULT '', source_refs_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reading_memory_book
+ON tb_reading_memory_documents(book_id, updated_at DESC)
 ''';
 
 class DBHelper {
@@ -647,13 +701,12 @@ class DBHelper {
       case 3:
         // remove former book style
         Prefs().removeBookStyle();
-        bookDao.selectBooks().then((books) {
-          for (var book in books) {
-            if (!File(book.coverFullPath).existsSync()) {
-              resetBookCover(book);
-            }
+        final books = (await db.query('tb_books')).map(Book.fromDb);
+        for (final book in books) {
+          if (!File(book.coverFullPath).existsSync()) {
+            resetBookCover(book);
           }
-        });
+        }
         continue case4;
       case4:
       case 4:
@@ -792,6 +845,12 @@ class DBHelper {
       case15Migration:
       case 15:
         for (final statement in createReadingAgentSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case16Migration;
+      case16Migration:
+      case 16:
+        for (final statement in createReadingClosureSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
     }

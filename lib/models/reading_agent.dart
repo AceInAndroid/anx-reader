@@ -6,7 +6,225 @@ enum ReaderProfileStatus { candidate, confirmed, rejected }
 
 enum AgentActionStatus { applied, undone, conflict }
 
-enum AgentActionType { goal, profile, note, difficulty }
+enum AgentActionType { goal, profile, note, difficulty, memory }
+
+enum ReadingCheckpointStatus { pending, completed, skipped }
+
+class ReadingChapterCheckpoint {
+  const ReadingChapterCheckpoint({
+    required this.id,
+    required this.bookId,
+    required this.chapterHref,
+    required this.chapterTitle,
+    this.progress = 0,
+    this.status = ReadingCheckpointStatus.pending,
+    this.reflection = '',
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final int bookId;
+  final String chapterHref;
+  final String chapterTitle;
+  final double progress;
+  final ReadingCheckpointStatus status;
+  final String reflection;
+  final int createdAt;
+  final int updatedAt;
+
+  ReadingChapterCheckpoint copyWith({
+    double? progress,
+    ReadingCheckpointStatus? status,
+    String? reflection,
+    int? updatedAt,
+  }) =>
+      ReadingChapterCheckpoint(
+        id: id,
+        bookId: bookId,
+        chapterHref: chapterHref,
+        chapterTitle: chapterTitle,
+        progress: progress ?? this.progress,
+        status: status ?? this.status,
+        reflection: reflection ?? this.reflection,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object?> toDb() => {
+        'id': id,
+        'book_id': bookId,
+        'chapter_href': chapterHref,
+        'chapter_title': chapterTitle,
+        'progress': progress,
+        'status': status.name,
+        'reflection': reflection,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+
+  factory ReadingChapterCheckpoint.fromDb(Map<String, dynamic> row) =>
+      ReadingChapterCheckpoint(
+        id: row['id'].toString(),
+        bookId: _asInt(row['book_id']),
+        chapterHref: row['chapter_href']?.toString() ?? '',
+        chapterTitle: row['chapter_title']?.toString() ?? '',
+        progress: _asDouble(row['progress']),
+        status: _enumByName(ReadingCheckpointStatus.values, row['status'],
+            ReadingCheckpointStatus.pending),
+        reflection: row['reflection']?.toString() ?? '',
+        createdAt: _asInt(row['created_at']),
+        updatedAt: _asInt(row['updated_at']),
+      );
+}
+
+enum MasteryLevel { unknown, emerging, familiar, mastered }
+
+class MasteryState {
+  const MasteryState(
+      {required this.id,
+      required this.bookId,
+      this.chapterHref,
+      required this.topic,
+      this.level = MasteryLevel.unknown,
+      this.score = 0,
+      this.nextReviewAt,
+      required this.updatedAt});
+  final String id;
+  final int bookId;
+  final String? chapterHref;
+  final String topic;
+  final MasteryLevel level;
+  final double score;
+  final int? nextReviewAt;
+  final int updatedAt;
+  Map<String, Object?> toDb() => {
+        'id': id,
+        'book_id': bookId,
+        'chapter_href': chapterHref,
+        'topic': topic,
+        'level': level.name,
+        'score': score,
+        'next_review_at': nextReviewAt,
+        'updated_at': updatedAt
+      };
+  factory MasteryState.fromDb(Map<String, dynamic> row) => MasteryState(
+      id: row['id'].toString(),
+      bookId: _asInt(row['book_id']),
+      chapterHref: row['chapter_href']?.toString(),
+      topic: row['topic']?.toString() ?? '',
+      level:
+          _enumByName(MasteryLevel.values, row['level'], MasteryLevel.unknown),
+      score: _asDouble(row['score']),
+      nextReviewAt:
+          row['next_review_at'] == null ? null : _asInt(row['next_review_at']),
+      updatedAt: _asInt(row['updated_at']));
+}
+
+class KnowledgeCard {
+  const KnowledgeCard(
+      {required this.id,
+      required this.bookId,
+      required this.front,
+      required this.back,
+      this.chapterHref,
+      this.dueAt,
+      this.intervalDays = 1,
+      this.repetitions = 0,
+      this.status = 'active',
+      required this.createdAt,
+      required this.updatedAt});
+  final String id;
+  final int bookId;
+  final String front;
+  final String back;
+  final String? chapterHref;
+  final int? dueAt;
+  final int intervalDays;
+  final int repetitions;
+  final String status;
+  final int createdAt;
+  final int updatedAt;
+  KnowledgeCard copyWith(
+          {int? dueAt,
+          int? intervalDays,
+          int? repetitions,
+          String? status,
+          int? updatedAt}) =>
+      KnowledgeCard(
+          id: id,
+          bookId: bookId,
+          front: front,
+          back: back,
+          chapterHref: chapterHref,
+          dueAt: dueAt ?? this.dueAt,
+          intervalDays: intervalDays ?? this.intervalDays,
+          repetitions: repetitions ?? this.repetitions,
+          status: status ?? this.status,
+          createdAt: createdAt,
+          updatedAt: updatedAt ?? this.updatedAt);
+  Map<String, Object?> toDb() => {
+        'id': id,
+        'book_id': bookId,
+        'front': front,
+        'back': back,
+        'chapter_href': chapterHref,
+        'due_at': dueAt,
+        'interval_days': intervalDays,
+        'repetitions': repetitions,
+        'status': status,
+        'created_at': createdAt,
+        'updated_at': updatedAt
+      };
+  factory KnowledgeCard.fromDb(Map<String, dynamic> row) => KnowledgeCard(
+      id: row['id'].toString(),
+      bookId: _asInt(row['book_id']),
+      front: row['front']?.toString() ?? '',
+      back: row['back']?.toString() ?? '',
+      chapterHref: row['chapter_href']?.toString(),
+      dueAt: row['due_at'] == null ? null : _asInt(row['due_at']),
+      intervalDays: _asInt(row['interval_days']),
+      repetitions: _asInt(row['repetitions']),
+      status: row['status']?.toString() ?? 'active',
+      createdAt: _asInt(row['created_at']),
+      updatedAt: _asInt(row['updated_at']));
+}
+
+class ReadingMemoryDocument {
+  const ReadingMemoryDocument(
+      {required this.id,
+      required this.bookId,
+      required this.title,
+      required this.markdown,
+      this.sourceRefs = const [],
+      required this.createdAt,
+      required this.updatedAt});
+  final String id;
+  final int bookId;
+  final String title;
+  final String markdown;
+  final List<String> sourceRefs;
+  final int createdAt;
+  final int updatedAt;
+  Map<String, Object?> toDb() => {
+        'id': id,
+        'book_id': bookId,
+        'title': title,
+        'markdown': markdown,
+        'source_refs_json': jsonEncode(sourceRefs),
+        'created_at': createdAt,
+        'updated_at': updatedAt
+      };
+  factory ReadingMemoryDocument.fromDb(Map<String, dynamic> row) =>
+      ReadingMemoryDocument(
+          id: row['id'].toString(),
+          bookId: _asInt(row['book_id']),
+          title: row['title']?.toString() ?? '',
+          markdown: row['markdown']?.toString() ?? '',
+          sourceRefs: _stringList(row['source_refs_json']),
+          createdAt: _asInt(row['created_at']),
+          updatedAt: _asInt(row['updated_at']));
+}
 
 /// A durable reading outcome. Interpretation-based criteria are deliberately
 /// represented as user-confirmed booleans; only [progress] is automatic.
