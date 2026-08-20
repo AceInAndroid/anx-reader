@@ -58,6 +58,9 @@ const String _prefsBackupEntryValueKey = 'value';
 const Set<String> _prefsImportSkipKeys = {
   'iapPurchaseStatus',
   'iapLastCheckTime',
+  // Installation identity must never be cloned by backup restore; otherwise
+  // two physical devices would overwrite the same Reading Agent sync branch.
+  'readingAgentSyncDeviceId',
 };
 
 class Prefs extends ChangeNotifier {
@@ -134,6 +137,7 @@ class Prefs extends ChangeNotifier {
       prefsBackupVersionKey: prefsBackupSchemaVersion,
     };
     for (final String key in prefs.getKeys()) {
+      if (_prefsImportSkipKeys.contains(key)) continue;
       final Object? value = prefs.get(key);
       final Map<String, Object?>? encoded = encodePrefsBackupEntry(value);
       if (encoded != null) {

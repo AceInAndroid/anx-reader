@@ -77,4 +77,26 @@ void main() {
       ReadingIntervention.none,
     );
   });
+
+  test('mid-book setup is exposed only as a passive capsule', () {
+    const policy = ReadingInterventionPolicy();
+    expect(
+      policy.decide(
+        state: const ReadingWorldState(),
+        controlsVisible: true,
+        dismissedForSession: false,
+        coverageSetupPending: true,
+      ),
+      ReadingIntervention.passiveCapsule,
+    );
+    expect(
+      policy.decide(
+        state: const ReadingWorldState(),
+        controlsVisible: false,
+        dismissedForSession: false,
+        coverageSetupPending: true,
+      ),
+      ReadingIntervention.none,
+    );
+  });
 }

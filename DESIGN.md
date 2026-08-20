@@ -242,10 +242,12 @@ legacy `readingCoach` or its MaterialBanner behavior.
   structured payload, epistemic status, lifecycle status, source snapshot and
   location, session provenance, and creator. Text facts, user reflections,
   Agent inferences, and externally checked facts remain distinguishable.
-- `discoveredProgress` is the enforceable spoiler boundary. Artifact queries
-  filter by the current reading progress, and presentation surfaces apply the
-  same check again. A future character, relationship, clue, scene, or mystery
-  must not appear when the reader navigates to an earlier position.
+- Artifact position and ingestion time are separate. `sourceProgress` records
+  where an event occurred, `visibleFromProgress` is the enforceable spoiler
+  boundary, and `ingestedAt` plus `ingestionMode` record when and how it entered
+  the system (`live`, `backfill`, `imported`, or `synced`). A backfilled event
+  from 18% therefore remains hidden when the reader navigates to 10%, even if
+  the Agent created it today.
 - User- or Agent-authored Artifact writes require a traceable source, use the
   common Agent action transaction, and are conflict-safe and undoable for 30
   days. A deterministic runtime resume marker is local reader state rather
@@ -255,3 +257,54 @@ legacy `readingCoach` or its MaterialBanner behavior.
   and resumable context. They are local-first and never trigger a model from a
   page turn or session start. On the next session, availability is shown only
   in the passive controls-attached capsule; details open after the reader taps.
+
+### Mid-book Reading Agent activation
+
+- `currentPosition`, `safeKnowledgeBoundary`, and Artifact coverage are three
+  independent states. Current position stays in the in-memory world state;
+  the spoiler boundary and coverage interval live in the synchronized per-book
+  coverage table. Coverage must never imply that the Agent read text it did
+  not ingest.
+- When fiction support is first enabled after meaningful progress, the default
+  behavior is “from here.” The Agent does not scan earlier chapters or claim
+  knowledge of them. A passive controls-attached capsule may say where support
+  began and offer archive setup; it never opens a modal or calls a model by
+  itself.
+- The reader may explicitly choose “from here,” “organize read chapters,” or
+  “import existing outcomes.” Organizing shows the boundary and chapter count
+  before confirmation, calls the model only after confirmation, and must not
+  request any chapter beyond the safe boundary. Imported notes, Markdown, and
+  synchronized Artifacts retain their provenance; highlights are not silently
+  converted into story facts.
+- Returning to an earlier location always filters Artifacts by
+  `visibleFromProgress`. Ingestion time, device arrival time, and sync order do
+  not relax the spoiler boundary.
+
+### Multi-device Reading Agent synchronization
+
+- Legacy whole-database WebDAV sync remains a compatibility fallback, but it
+  is not the conflict model for Reading Agent state. Before any database
+  replacement, the runtime captures per-book state; after replacement it
+  merges that capture with every remote device package and only then uploads
+  this device's merged package.
+- Remote packages are isolated by stable book key and installation id:
+  `reading-agent/{file-md5-or-id}/{device-id}.json`. A device replaces only its
+  own package. Unknown schema versions, malformed JSON, and packages for books
+  absent locally are ignored without changing local data.
+- Reading position is keyed by `(book, deviceId)` and merged by latest
+  `updatedAt`. Reopening a book restores this installation's own position. The
+  global farthest progress is derived with `MAX(progress)` and may advance the
+  spoiler-safe knowledge boundary, but it must never force another device to
+  jump forward.
+- Records with stable ids use last-write-wins. Equal-time lifecycle conflicts
+  prefer terminal states so completed, resolved, or retracted work is not
+  accidentally reopened. Artifact conflicts retain the later/more
+  conservative `visibleFromProgress`. A user-pinned book profile beats an
+  automatic profile. Coverage unions known ranges and never lets `pending`
+  replace an initialized state. If concurrent packages contain multiple active
+  goals, only the most recently updated remains active.
+- Hard deletion is represented by a per-device tombstone and wins over an
+  older row. Agent undo creates tombstones for newly created goals,
+  difficulties, Markdown memories, and Artifacts. Action logs are device-local:
+  remote state can be consumed on every device, but cross-device undo is not
+  promised in this phase.

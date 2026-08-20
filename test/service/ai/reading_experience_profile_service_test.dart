@@ -28,6 +28,7 @@ void main() {
       createReadingAgentSQL,
       createReadingClosureSQL,
       createReadingExperienceModulesSQL,
+      createReadingCoverageSQL,
     ]) {
       for (final statement in sql
           .split(';')

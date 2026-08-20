@@ -534,7 +534,8 @@ class FictionArtifactSaveTool
       'sourceText': sourceText,
       'cfi': cfi,
       'chapterHref': state.chapterHref,
-      'discoveredProgress': state.totalProgress,
+      'sourceProgress': state.totalProgress,
+      'visibleFromProgress': state.totalProgress,
     };
     if (input['userInitiated'] != true) {
       return {'requiresConfirmation': true, 'preview': preview};
@@ -554,7 +555,9 @@ class FictionArtifactSaveTool
       chapterHref: state.chapterHref,
       chapterTitle: state.chapterTitle,
       discoveredAtCfi: cfi.isEmpty ? null : cfi,
-      discoveredProgress: state.totalProgress,
+      sourceProgress: state.totalProgress,
+      visibleFromProgress: state.totalProgress,
+      ingestedAt: now,
       createdBy: 'agent',
       createdAt: now,
       updatedAt: now,
@@ -610,7 +613,8 @@ class FictionCharacterRecallTool
       'relationships': result.relationships,
       'epistemicStatus': result.epistemicStatus.name,
       'sourceCfi': result.source.sourceStartCfi,
-      'discoveredProgress': result.source.discoveredProgress,
+      'sourceProgress': result.source.sourceProgress,
+      'visibleFromProgress': result.source.visibleFromProgress,
     };
   }
 }

@@ -24,6 +24,19 @@ class ReadingAgentDao extends BaseDao {
         whereArgs: [bookId],
       );
 
+  Future<BookReadingCoverage?> bookReadingCoverage(int bookId) => querySingle(
+        'tb_book_reading_coverage',
+        mapper: BookReadingCoverage.fromDb,
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+      );
+
+  Future<void> saveBookReadingCoverage(BookReadingCoverage coverage) => insert(
+        'tb_book_reading_coverage',
+        coverage.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
   Future<ReadingGoal?> activeGoal(int bookId) => querySingle(
         'tb_reading_goals',
         mapper: ReadingGoal.fromDb,
@@ -165,7 +178,7 @@ class ReadingAgentDao extends BaseDao {
       args.add(status.name);
     }
     if (visibleAtProgress != null) {
-      where.add('discovered_progress <= ?');
+      where.add('visible_from_progress <= ?');
       args.add(visibleAtProgress.clamp(0, 1));
     }
     return queryList(

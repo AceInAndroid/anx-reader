@@ -12,6 +12,8 @@ import 'package:anx_reader/providers/sync_status.dart';
 import 'package:anx_reader/providers/tb_groups.dart';
 import 'package:anx_reader/service/sync/sync_client_factory.dart';
 import 'package:anx_reader/service/sync/sync_client_base.dart';
+import 'package:anx_reader/service/sync/reading_agent_sync_service.dart';
+import 'package:anx_reader/service/ai/reading_device_identity.dart';
 import 'package:anx_reader/service/database_sync_manager.dart';
 import 'package:anx_reader/dao/database.dart';
 import 'package:anx_reader/utils/get_path/databases_path.dart';
@@ -285,6 +287,11 @@ class Sync extends _$Sync {
     }
 
     try {
+      final deviceId = await ReadingDeviceIdentity().getOrCreate();
+      final readingAgentSync = ReadingAgentSyncService(deviceId: deviceId);
+      // Capture before the legacy database sync: a remote database download
+      // may replace the whole local database.
+      final readingAgentBeforeDatabaseSync = await readingAgentSync.capture();
       await syncDatabase(finalDirection);
 
       if (await isCurrentEmpty()) {
@@ -292,6 +299,11 @@ class Sync extends _$Sync {
         changeState(state.copyWith(isSyncing: false));
         return;
       }
+
+      await readingAgentSync.synchronize(
+        client,
+        localBeforeDatabaseSync: readingAgentBeforeDatabaseSync,
+      );
 
       if (Prefs().syncCompletedToast) {
         AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavSyncingFiles);

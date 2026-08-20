@@ -14,6 +14,7 @@ class ReadingInterventionPolicy {
     required bool dismissedForSession,
     ReadingClosurePolicyDefinition? closurePolicy,
     bool resumeContextAvailable = false,
+    bool coverageSetupPending = false,
   }) {
     final checkpointVisible = closurePolicy?.checkpointTriggersCapsule ?? true;
     final hasVisibleState = state.activeGoal != null ||
@@ -21,7 +22,8 @@ class ReadingInterventionPolicy {
         state.pendingProfileCount > 0 ||
         state.lastAgentAction != null ||
         (checkpointVisible && state.pendingCheckpointCount > 0) ||
-        resumeContextAvailable;
+        resumeContextAvailable ||
+        coverageSetupPending;
     if (!controlsVisible || dismissedForSession || !hasVisibleState) {
       return ReadingIntervention.none;
     }

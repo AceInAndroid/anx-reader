@@ -7,6 +7,7 @@ import 'package:anx_reader/config/feature_flags.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/book.dart';
 import 'package:anx_reader/dao/book_note.dart';
+import 'package:anx_reader/dao/reading_agent_sync.dart';
 import 'package:anx_reader/enums/lang_list.dart';
 import 'package:anx_reader/enums/page_turn_mode.dart';
 import 'package:anx_reader/enums/reading_info.dart';
@@ -21,6 +22,7 @@ import 'package:anx_reader/models/bookmark.dart';
 import 'package:anx_reader/models/font_model.dart';
 import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/models/reading_rules.dart';
+import 'package:anx_reader/models/reading_agent_sync.dart';
 import 'package:anx_reader/models/search_result_model.dart';
 import 'package:anx_reader/models/selection_snapshot.dart';
 import 'package:anx_reader/models/toc_item.dart';
@@ -33,6 +35,7 @@ import 'package:anx_reader/providers/bookmark.dart';
 import 'package:anx_reader/providers/chapter_content_bridge.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
+import 'package:anx_reader/service/ai/reading_device_identity.dart';
 import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/providers/toc_search.dart';
@@ -1693,6 +1696,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   @override
   void initState() {
     book = widget.book;
+    unawaited(_seedDeviceReadingPosition());
     _activeTranslationMode = Prefs().getBookTranslationMode(widget.book.id);
     _activeTranslationDomCacheNamespace = _translationDomCacheStorageKey();
     _lastEInkMode = Prefs().isEInkMode;
@@ -1722,6 +1726,24 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     super.initState();
   }
 
+  Future<void> _seedDeviceReadingPosition() async {
+    if (widget.book.lastReadPosition.isEmpty &&
+        widget.book.readingPercentage <= 0) {
+      return;
+    }
+    final deviceId = await ReadingDeviceIdentity().getOrCreate();
+    final existing =
+        await readingAgentSyncDao.position(widget.book.id, deviceId);
+    if (existing != null) return;
+    await readingAgentSyncDao.savePosition(BookDeviceReadingPosition(
+      bookId: widget.book.id,
+      deviceId: deviceId,
+      cfi: widget.book.lastReadPosition,
+      progress: widget.book.readingPercentage,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -1745,6 +1767,16 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     }
     book.readingPercentage = percentage;
     await bookDao.updateBook(book);
+    final deviceId = await ReadingDeviceIdentity().getOrCreate();
+    await readingAgentSyncDao.savePosition(BookDeviceReadingPosition(
+      bookId: book.id,
+      deviceId: deviceId,
+      cfi: cfi,
+      progress: percentage,
+      chapterHref: chapterHref,
+      chapterTitle: chapterTitle,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
     if (mounted) {
       ref.read(bookListProvider.notifier).refresh();
     }

@@ -29,6 +29,7 @@ void main() {
       createReadingAgentSQL,
       createReadingClosureSQL,
       createReadingExperienceModulesSQL,
+      createReadingCoverageSQL,
     ]) {
       for (final statement in sql
           .split(';')
@@ -66,7 +67,9 @@ void main() {
       status: status,
       epistemicStatus: epistemicStatus,
       chapterHref: '$id.xhtml',
-      discoveredProgress: progress,
+      sourceProgress: progress,
+      visibleFromProgress: progress,
+      ingestedAt: now,
       createdAt: now,
       updatedAt: now,
     ));

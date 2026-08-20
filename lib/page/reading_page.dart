@@ -37,6 +37,10 @@ import 'package:anx_reader/service/ai/reading_intervention_policy.dart';
 import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
 import 'package:anx_reader/service/ai/fiction_reading_service.dart';
+import 'package:anx_reader/service/ai/fiction_backfill_service.dart';
+import 'package:anx_reader/service/ai/reading_coverage_service.dart';
+import 'package:anx_reader/dao/book_note.dart';
+import 'package:langchain_core/chat_models.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ui/status_bar.dart';
@@ -112,6 +116,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   static const _readingInterventionPolicy = ReadingInterventionPolicy();
   String? _lastReadingAgentSnackActionId;
   BookReadingProfile? _readingProfile;
+  BookReadingCoverage? _readingCoverage;
   bool _resumeContextAvailable = false;
 
   ReadingClosurePolicyDefinition get _closurePolicy =>
@@ -143,6 +148,12 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
     Prefs().removeLegacyReadingClosureForBook(_book.id);
     final closure = widget.closureRegistry.getById(profile.primaryModuleId);
+    final coverage = await readingCoverageService.loadOrInitialize(
+      bookId: _book.id,
+      currentPosition: _book.readingPercentage,
+      supportsArtifacts:
+          closure.supports(ReadingClosureCapability.readingArtifacts),
+    );
     final resumeArtifacts = closure.supports(
       ReadingClosureCapability.resumeContext,
     )
@@ -157,6 +168,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     aiWorkspaceController.setReadingProfile(profile);
     setState(() {
       _readingProfile = profile;
+      _readingCoverage = coverage;
       _resumeContextAvailable = resumeArtifacts.isNotEmpty;
     });
   }
@@ -304,6 +316,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         state.totalProgress <= 0) {
       return;
     }
+    final coverage = _readingCoverage;
+    if (coverage != null &&
+        state.totalProgress > coverage.safeKnowledgeBoundary) {
+      await readingCoverageService.advanceSafeBoundary(
+        coverage,
+        state.totalProgress,
+      );
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
     await readingAgentRepository.saveSystemArtifact(ReadingArtifact(
       id: '${_book.id}-fiction-resume',
@@ -319,7 +339,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       chapterHref: state.chapterHref,
       chapterTitle: state.chapterTitle,
       discoveredAtCfi: state.cfi,
-      discoveredProgress: state.totalProgress,
+      sourceProgress: state.totalProgress,
+      visibleFromProgress: state.totalProgress,
+      ingestedAt: now,
       createdBy: 'runtime',
       createdAt: now,
       updatedAt: now,
@@ -818,18 +840,25 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     final pending = state.pendingProfileCount +
         (closure.checkpointTriggersCapsule ? state.pendingCheckpointCount : 0) +
         (closure.showKnowledgeCards ? state.dueKnowledgeCardCount : 0);
-    final title = goal?.title ??
-        (pending > 0
-            ? '有 $pending 项待处理'
-            : _resumeContextAvailable
-                ? '可恢复上次阅读上下文'
-                : state.unresolvedDifficultyCount > 0
-                    ? '${state.unresolvedDifficultyCount} 个问题待解决'
-                    : '最近动作可撤销');
-    final semantics = goal == null
+    final coveragePending = _readingCoverage?.setupPending == true;
+    final startPercent =
+        ((_readingCoverage?.initializedAtProgress ?? 0) * 100).round();
+    final title = coveragePending
+        ? '你从本书 $startPercent% 开始使用阅读 Agent，可选择建立前情档案'
+        : goal?.title ??
+            (pending > 0
+                ? '有 $pending 项待处理'
+                : _resumeContextAvailable
+                    ? '可恢复上次阅读上下文'
+                    : state.unresolvedDifficultyCount > 0
+                        ? '${state.unresolvedDifficultyCount} 个问题待解决'
+                        : '最近动作可撤销');
+    final semantics = coveragePending
         ? '阅读 Agent，$title'
-        : '阅读目标：${goal.title}，进度 ${(goal.progress * 100).round()}%'
-            '${pending > 0 ? '，$pending 项待处理' : ''}';
+        : goal == null
+            ? '阅读 Agent，$title'
+            : '阅读目标：${goal.title}，进度 ${(goal.progress * 100).round()}%'
+                '${pending > 0 ? '，$pending 项待处理' : ''}';
     return Align(
       alignment: Alignment.topCenter,
       child: Semantics(
@@ -841,6 +870,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           child: InkWell(
             borderRadius: BorderRadius.circular(22),
             onTap: () async {
+              if (coveragePending) {
+                await _showCoverageSetup();
+                return;
+              }
               if (_usesAiSplitLayout(context)) {
                 aiWorkspaceController.show(fullscreen: false);
                 setState(() {});
@@ -859,7 +892,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     constraints: const BoxConstraints(maxWidth: 240),
                     child: Text(title, overflow: TextOverflow.ellipsis),
                   ),
-                  if (goal != null) ...[
+                  if (!coveragePending && goal != null) ...[
                     const SizedBox(width: 8),
                     Text('${(goal.progress * 100).round()}%'),
                   ],
@@ -889,6 +922,15 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         completedTitle: previousTitle,
         completedProgress: highestProgress,
       );
+      final coverage = _readingCoverage;
+      if (coverage != null &&
+          highestProgress > coverage.safeKnowledgeBoundary) {
+        final updated = await readingCoverageService.advanceSafeBoundary(
+          coverage,
+          highestProgress,
+        );
+        if (mounted) setState(() => _readingCoverage = updated);
+      }
     }
     if (!FeatureFlags.readingCoach) return;
     final state = await ref.read(readingCoachProvider(_book.id).future);
@@ -1340,7 +1382,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       chapterHref: state.chapterHref,
       chapterTitle: state.chapterTitle,
       discoveredAtCfi: state.cfi,
-      discoveredProgress: state.totalProgress,
+      sourceProgress: state.totalProgress,
+      visibleFromProgress: state.totalProgress,
+      ingestedAt: now,
       createdBy: 'user',
       createdAt: now,
       updatedAt: now,
@@ -1376,6 +1420,238 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         ],
       ),
     );
+  }
+
+  List<FictionBackfillChapter> _eligibleBackfillChapters(double boundary) {
+    final result = <FictionBackfillChapter>[];
+    void addItems(List<TocItem> items) {
+      for (final item in items) {
+        if (item.href.isNotEmpty) {
+          result.add(FictionBackfillChapter(
+            href: item.href,
+            title: item.label,
+            startProgress: item.startPercentage,
+          ));
+        }
+        addItems(item.subitems);
+      }
+    }
+
+    addItems(ref.read(bookTocProvider));
+    final byHref = <String, FictionBackfillChapter>{};
+    for (final chapter in result) {
+      byHref.putIfAbsent(chapter.href.split('#').first, () => chapter);
+    }
+    final unique = byHref.values.toList()
+      ..sort((a, b) => a.startProgress.compareTo(b.startProgress));
+    return [
+      for (var index = 0; index < unique.length; index++)
+        FictionBackfillChapter(
+          href: unique[index].href,
+          title: unique[index].title,
+          startProgress: unique[index].startProgress,
+          // The current partial chapter is excluded because fetching its full
+          // text could cross the safe boundary.
+          endProgress:
+              index + 1 < unique.length ? unique[index + 1].startProgress : 1,
+        ),
+    ]
+        .where((chapter) => chapter.endProgress! <= boundary + .000001)
+        .toList(growable: false);
+  }
+
+  Future<void> _showCoverageSetup() async {
+    final coverage = _readingCoverage;
+    if (coverage == null) return;
+    final percent = (coverage.initializedAtProgress * 100).round();
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('建立小说前情档案',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Text('你从本书 $percent% 开始使用阅读 Agent。默认从这里开始，不会读取或推测前文。'),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.play_arrow_outlined),
+                title: const Text('从这里开始'),
+                subtitle: const Text('不处理前文，此后逐步记录人物、关系和悬念'),
+                onTap: () async {
+                  final updated =
+                      await readingCoverageService.startFromHere(coverage);
+                  if (!mounted) return;
+                  setState(() => _readingCoverage = updated);
+                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                },
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.auto_stories_outlined),
+                title: const Text('整理已读部分'),
+                subtitle: Text('确认后读取 0%～$percent% 内已完整读完的章节并调用 AI，不读取后文'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  await _confirmAndBackfill(coverage);
+                },
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.file_download_outlined),
+                title: const Text('导入已有成果'),
+                subtitle: const Text('从笔记、批注、同步 Artifact 和 Markdown 记忆恢复'),
+                onTap: () async {
+                  Navigator.pop(sheetContext);
+                  await _confirmAndImport(coverage);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmAndBackfill(BookReadingCoverage coverage) async {
+    final chapters = _eligibleBackfillChapters(coverage.safeKnowledgeBoundary);
+    final percent = (coverage.safeKnowledgeBoundary * 100).round();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('确认整理已读部分'),
+        content: Text(
+          '将读取 $percent% 之前已完整读完的 ${chapters.length} 个目录章节并调用 AI 建立人物、关系和悬念档案。为避免越过边界，当前尚未读完的章节不会读取。\n\n生成内容属于 Agent 推断，可在动作记录中撤销。',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('确认并整理')),
+        ],
+      ),
+    );
+    if (confirmed != true || chapters.isEmpty) return;
+    SmartDialog.showLoading(msg: '正在整理已读章节…');
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final sessionId = readingAgentRuntime.state.sessionId;
+      if (sessionId == null) throw StateError('阅读会话尚未开始');
+      final artifacts = await fictionBackfillService.build(
+        bookId: _book.id,
+        moduleId: ReadingClosureIds.fictionImmersion,
+        safeBoundary: coverage.safeKnowledgeBoundary,
+        chapters: chapters,
+        loadChapter: (href) =>
+            epubPlayerKey.currentState?.chapterContentByHref(href) ??
+            Future.value(''),
+        generate: (prompt) => aiGenerateText(
+          [ChatMessage.humanText(prompt)],
+          ref: ref,
+          readingMode: ReadingAiMode.general,
+        ),
+        sessionId: sessionId,
+        ingestedAt: now,
+      );
+      for (final artifact in artifacts) {
+        await agentActionService.saveArtifact(artifact);
+      }
+      final updated = await readingCoverageService.markBackfilled(
+        coverage,
+        throughProgress: coverage.safeKnowledgeBoundary,
+      );
+      if (mounted) {
+        setState(() => _readingCoverage = updated);
+        AnxToast.show('已建立 ${artifacts.length} 条前情档案');
+      }
+    } catch (error) {
+      if (mounted) AnxToast.show('整理失败：$error');
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
+  Future<void> _confirmAndImport(BookReadingCoverage coverage) async {
+    final notes = await bookNoteDao.selectBookNotesByBookId(_book.id);
+    final memories = await readingAgentRepository.memoryDocuments(_book.id);
+    final existing = await readingAgentRepository.artifacts(_book.id);
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('导入已有成果'),
+        content: Text(
+          '找到 ${notes.length} 条笔记/批注、${memories.length} 份 Markdown 记忆、${existing.length} 条已有 Artifact。\n\n本次只恢复这些已存在的成果，不调用 AI，也不把高亮自动解释成人物事实。',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('导入')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final importedText = [
+      for (final note in notes)
+        if (note.readerNote?.trim().isNotEmpty == true)
+          '${note.chapter}：${note.readerNote!.trim()}',
+      for (final memory in memories)
+        '${memory.title}：${memory.markdown.trim()}',
+    ].join('\n');
+    if (importedText.isNotEmpty) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final snapshot = importedText.length > 2000
+          ? importedText.substring(0, 2000)
+          : importedText;
+      await agentActionService.saveArtifact(ReadingArtifact(
+        id: '${_book.id}-imported-context-$now',
+        bookId: _book.id,
+        moduleId: ReadingClosureIds.fictionImmersion,
+        kind: ReadingArtifactKinds.resumeContext,
+        payload: {
+          'summary': snapshot,
+          'noteCount': notes.length,
+          'memoryCount': memories.length,
+        },
+        epistemicStatus: ReadingArtifactEpistemicStatus.userReflection,
+        sourceTextSnapshot: snapshot,
+        chapterHref: readingAgentRuntime.state.chapterHref,
+        chapterTitle: readingAgentRuntime.state.chapterTitle,
+        sourceProgress: coverage.initializedAtProgress,
+        visibleFromProgress: coverage.initializedAtProgress,
+        ingestedAt: now,
+        ingestionMode: ReadingArtifactIngestionMode.imported,
+        createdBy: 'user',
+        createdAt: now,
+        updatedAt: now,
+      ));
+    }
+    final progressValues = existing.map((item) => item.sourceProgress).toList();
+    final start = progressValues.isEmpty
+        ? coverage.initializedAtProgress
+        : progressValues.reduce(math.min);
+    final end = progressValues.isEmpty
+        ? coverage.initializedAtProgress
+        : progressValues.reduce(math.max);
+    final updated = await readingCoverageService.markImported(
+      coverage,
+      coverageStart: start,
+      coverageEnd: end,
+    );
+    if (!mounted) return;
+    setState(() => _readingCoverage = updated);
+    AnxToast.show('已有成果已纳入本书档案');
   }
 
   Future<void> _showReadingAgentPanel() async {
@@ -2076,6 +2352,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                           dismissedForSession: _readingAgentCapsuleDismissed,
                           closurePolicy: _closurePolicy,
                           resumeContextAvailable: _resumeContextAvailable,
+                          coverageSetupPending:
+                              _readingCoverage?.setupPending == true,
                         ) ==
                         ReadingIntervention.passiveCapsule)
                   Padding(

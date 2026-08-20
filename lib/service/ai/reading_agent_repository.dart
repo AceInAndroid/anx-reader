@@ -35,6 +35,10 @@ class ReadingAgentRepository {
   final int Function() _clock;
 
   Future<ReadingGoal?> activeGoal(int bookId) => _dao.activeGoal(bookId);
+  Future<BookReadingCoverage?> bookReadingCoverage(int bookId) =>
+      _dao.bookReadingCoverage(bookId);
+  Future<void> saveBookReadingCoverage(BookReadingCoverage coverage) =>
+      _dao.saveBookReadingCoverage(coverage);
   Future<List<ReadingGoal>> goals(int bookId) => _dao.goals(bookId);
   Future<List<ReadingChapterCheckpoint>> pendingCheckpoints(int bookId) =>
       _dao.pendingCheckpoints(bookId);
@@ -146,6 +150,7 @@ class ReadingAgentRepository {
           await _queryOne(txn, 'tb_reading_artifacts', 'id = ?', [artifact.id]);
       await txn.insert('tb_reading_artifacts', artifact.toDb(),
           conflictAlgorithm: ConflictAlgorithm.replace);
+      await _expandArtifactCoverage(txn, artifact);
       final action = _action(
         type: AgentActionType.artifact,
         targetId: artifact.id,
@@ -169,11 +174,14 @@ class ReadingAgentRepository {
         artifact.payload.isEmpty) {
       throw ArgumentError('System artifact requires identity and payload');
     }
-    await _dao.write((txn) => txn.insert(
-          'tb_reading_artifacts',
-          artifact.toDb(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        ));
+    await _dao.write((txn) async {
+      await txn.insert(
+        'tb_reading_artifacts',
+        artifact.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await _expandArtifactCoverage(txn, artifact);
+    });
     return artifact;
   }
 
@@ -459,7 +467,7 @@ class ReadingAgentRepository {
         );
         return UndoResult.conflict;
       }
-      await _restore(txn, action);
+      await _restore(txn, action, 'agent-action-${action.sessionId}');
       await txn.update(
         'tb_agent_actions',
         {'status': AgentActionStatus.undone.name, 'undone_at': now},
@@ -548,13 +556,48 @@ class ReadingAgentRepository {
     }
   }
 
-  Future<void> _restore(Transaction txn, AgentAction action) async {
+  Future<void> _expandArtifactCoverage(
+    Transaction txn,
+    ReadingArtifact artifact,
+  ) async {
+    final rows = await txn.query(
+      'tb_book_reading_coverage',
+      where: 'book_id = ?',
+      whereArgs: [artifact.bookId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final coverage = BookReadingCoverage.fromDb(rows.first);
+    await txn.update(
+      'tb_book_reading_coverage',
+      {
+        'artifact_coverage_start':
+            artifact.sourceProgress < coverage.artifactCoverageStart
+                ? artifact.sourceProgress
+                : coverage.artifactCoverageStart,
+        'artifact_coverage_end':
+            artifact.sourceProgress > coverage.artifactCoverageEnd
+                ? artifact.sourceProgress
+                : coverage.artifactCoverageEnd,
+        'updated_at': _clock(),
+      },
+      where: 'book_id = ?',
+      whereArgs: [artifact.bookId],
+    );
+  }
+
+  Future<void> _restore(
+      Transaction txn, AgentAction action, String syncDeviceId) async {
     switch (action.type) {
       case AgentActionType.goal:
         final snapshot = action.beforeSnapshot ?? const {};
+        final target = snapshot['target'];
         await txn.delete('tb_reading_goals',
             where: 'id = ?', whereArgs: [action.targetId]);
-        final target = snapshot['target'];
+        if (target == null && action.bookId != null) {
+          await _recordSyncDeletion(
+              txn, 'goal', action.targetId, action.bookId!, syncDeviceId);
+        }
         if (target is Map) {
           await txn.insert(
               'tb_reading_goals', Map<String, Object?>.from(target));
@@ -587,6 +630,10 @@ class ReadingAgentRepository {
         if (action.beforeSnapshot == null) {
           await txn.delete('tb_reading_difficulties',
               where: 'id = ?', whereArgs: [action.targetId]);
+          if (action.bookId != null) {
+            await _recordSyncDeletion(txn, 'difficulty', action.targetId,
+                action.bookId!, syncDeviceId);
+          }
         } else {
           await txn.insert('tb_reading_difficulties',
               Map<String, Object?>.from(action.beforeSnapshot!),
@@ -596,6 +643,10 @@ class ReadingAgentRepository {
       case AgentActionType.memory:
         await txn.delete('tb_reading_memory_documents',
             where: 'id = ?', whereArgs: [action.targetId]);
+        if (action.beforeSnapshot == null && action.bookId != null) {
+          await _recordSyncDeletion(
+              txn, 'memory', action.targetId, action.bookId!, syncDeviceId);
+        }
         if (action.beforeSnapshot != null) {
           await txn.insert('tb_reading_memory_documents',
               Map<String, Object?>.from(action.beforeSnapshot!),
@@ -605,6 +656,10 @@ class ReadingAgentRepository {
       case AgentActionType.artifact:
         await txn.delete('tb_reading_artifacts',
             where: 'id = ?', whereArgs: [action.targetId]);
+        if (action.beforeSnapshot == null && action.bookId != null) {
+          await _recordSyncDeletion(
+              txn, 'artifact', action.targetId, action.bookId!, syncDeviceId);
+        }
         if (action.beforeSnapshot != null) {
           await txn.insert(
             'tb_reading_artifacts',
@@ -612,8 +667,31 @@ class ReadingAgentRepository {
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
         }
+        if (action.bookId != null) {
+          await _recomputeArtifactCoverage(txn, action.bookId!);
+        }
         return;
     }
+  }
+
+  Future<void> _recordSyncDeletion(Transaction txn, String entityType,
+      String entityId, int bookId, String deviceId) async {
+    final table = await txn.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table' "
+      "AND name = 'tb_reading_sync_tombstones'",
+    );
+    if (table.isEmpty) return;
+    await txn.insert(
+      'tb_reading_sync_tombstones',
+      {
+        'entity_type': entityType,
+        'entity_id': entityId,
+        'book_id': bookId,
+        'device_id': deviceId,
+        'deleted_at': _clock(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<void> _insertDocument(
@@ -631,6 +709,37 @@ class ReadingAgentRepository {
       await txn.insert('tb_reading_note_tags',
           {'note_id': document.note.id, 'tag_id': tag.id});
     }
+  }
+
+  Future<void> _recomputeArtifactCoverage(Transaction txn, int bookId) async {
+    final coverageRows = await txn.query(
+      'tb_book_reading_coverage',
+      where: 'book_id = ?',
+      whereArgs: [bookId],
+      limit: 1,
+    );
+    if (coverageRows.isEmpty) return;
+    final coverage = BookReadingCoverage.fromDb(coverageRows.first);
+    final ranges = await txn.rawQuery(
+      'SELECT MIN(source_progress) AS min_progress, '
+      'MAX(source_progress) AS max_progress FROM tb_reading_artifacts '
+      "WHERE book_id = ? AND status != 'retracted'",
+      [bookId],
+    );
+    final min = ranges.first['min_progress'];
+    final max = ranges.first['max_progress'];
+    await txn.update(
+      'tb_book_reading_coverage',
+      {
+        'artifact_coverage_start':
+            min is num ? min.toDouble() : coverage.initializedAtProgress,
+        'artifact_coverage_end':
+            max is num ? max.toDouble() : coverage.initializedAtProgress,
+        'updated_at': _clock(),
+      },
+      where: 'book_id = ?',
+      whereArgs: [bookId],
+    );
   }
 
   Future<Map<String, dynamic>?> _noteSnapshot(

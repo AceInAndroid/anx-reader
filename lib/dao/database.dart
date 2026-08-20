@@ -1,19 +1,39 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:anx_reader/utils/get_path/get_cache_dir.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/book.dart';
+import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/book.dart';
 import 'package:anx_reader/utils/get_path/get_base_path.dart';
 import 'package:anx_reader/utils/get_path/databases_path.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:path/path.dart';
+import 'package:crypto/crypto.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 18;
+const int currentDbVersion = 20;
+
+String _canonicalHash(Object? value) => sha256
+    .convert(utf8.encode(jsonEncode(_canonicalDatabaseValue(value))))
+    .toString();
+
+Object? _canonicalDatabaseValue(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.map((key) => key.toString()).toList()..sort();
+    return {
+      for (final key in keys) key: _canonicalDatabaseValue(value[key]),
+    };
+  }
+  if (value is List) {
+    return value.map(_canonicalDatabaseValue).toList(growable: false);
+  }
+  return value;
+}
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -465,6 +485,78 @@ CREATE INDEX IF NOT EXISTS idx_reading_artifacts_module_updated
 ON tb_reading_artifacts(module_id, updated_at DESC)
 ''';
 
+const createReadingCoverageSQL = '''
+ALTER TABLE tb_reading_artifacts RENAME TO tb_reading_artifacts_v18;
+CREATE TABLE tb_reading_artifacts (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, module_id TEXT NOT NULL,
+  artifact_kind TEXT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1,
+  payload_json TEXT NOT NULL DEFAULT '{}', epistemic_status TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active', source_start_cfi TEXT,
+  source_end_cfi TEXT, source_text_snapshot TEXT NOT NULL DEFAULT '',
+  chapter_href TEXT, chapter_title TEXT, discovered_at_cfi TEXT,
+  source_progress REAL NOT NULL DEFAULT 0,
+  visible_from_progress REAL NOT NULL DEFAULT 0,
+  ingested_at INTEGER NOT NULL, ingestion_mode TEXT NOT NULL DEFAULT 'live',
+  session_id TEXT, created_by TEXT NOT NULL DEFAULT 'user',
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  CHECK(epistemic_status IN ('textFact', 'userReflection', 'agentInference', 'externalFact')),
+  CHECK(status IN ('active', 'resolved', 'retracted')),
+  CHECK(source_progress >= 0 AND source_progress <= 1),
+  CHECK(visible_from_progress >= 0 AND visible_from_progress <= 1),
+  CHECK(ingestion_mode IN ('live', 'backfill', 'imported', 'synced'))
+);
+INSERT INTO tb_reading_artifacts (
+  id, book_id, module_id, artifact_kind, schema_version, payload_json,
+  epistemic_status, status, source_start_cfi, source_end_cfi,
+  source_text_snapshot, chapter_href, chapter_title, discovered_at_cfi,
+  source_progress, visible_from_progress, ingested_at, ingestion_mode,
+  session_id, created_by, created_at, updated_at
+)
+SELECT id, book_id, module_id, artifact_kind, schema_version, payload_json,
+  epistemic_status, status, source_start_cfi, source_end_cfi,
+  source_text_snapshot, chapter_href, chapter_title, discovered_at_cfi,
+  discovered_progress, discovered_progress, created_at, 'live',
+  session_id, created_by, created_at, updated_at
+FROM tb_reading_artifacts_v18;
+DROP TABLE tb_reading_artifacts_v18;
+CREATE INDEX IF NOT EXISTS idx_reading_artifacts_book_kind
+ON tb_reading_artifacts(book_id, artifact_kind, status, visible_from_progress);
+CREATE INDEX IF NOT EXISTS idx_reading_artifacts_module_updated
+ON tb_reading_artifacts(module_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS tb_book_reading_coverage (
+  book_id INTEGER PRIMARY KEY, safe_knowledge_boundary REAL NOT NULL,
+  artifact_coverage_start REAL NOT NULL, artifact_coverage_end REAL NOT NULL,
+  setup_status TEXT NOT NULL DEFAULT 'pending',
+  initialized_at_progress REAL NOT NULL, created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK(safe_knowledge_boundary >= 0 AND safe_knowledge_boundary <= 1),
+  CHECK(artifact_coverage_start >= 0 AND artifact_coverage_start <= 1),
+  CHECK(artifact_coverage_end >= 0 AND artifact_coverage_end <= 1),
+  CHECK(setup_status IN ('pending', 'fromHere', 'backfilled', 'imported'))
+);
+CREATE INDEX IF NOT EXISTS idx_book_reading_coverage_status
+ON tb_book_reading_coverage(setup_status, updated_at DESC)
+''';
+
+const createReadingAgentSyncSQL = '''
+CREATE TABLE IF NOT EXISTS tb_book_device_positions (
+  book_id INTEGER NOT NULL, device_id TEXT NOT NULL, cfi TEXT NOT NULL DEFAULT '',
+  progress REAL NOT NULL DEFAULT 0, chapter_href TEXT, chapter_title TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(book_id, device_id),
+  CHECK(progress >= 0 AND progress <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_book_device_positions_progress
+ON tb_book_device_positions(book_id, progress DESC);
+CREATE TABLE IF NOT EXISTS tb_reading_sync_tombstones (
+  entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, book_id INTEGER NOT NULL,
+  device_id TEXT NOT NULL, deleted_at INTEGER NOT NULL,
+  PRIMARY KEY(entity_type, entity_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_sync_tombstones_book
+ON tb_reading_sync_tombstones(book_id, deleted_at DESC)
+''';
+
 class DBHelper {
   static final DBHelper _instance = DBHelper._internal();
   static Database? _database;
@@ -906,6 +998,19 @@ class DBHelper {
         for (final statement in createReadingExperienceModulesSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
+        continue case18Migration;
+      case18Migration:
+      case 18:
+        for (final statement in createReadingCoverageSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        await _migrateArtifactActionSnapshots(db);
+        continue case19Migration;
+      case19Migration:
+      case 19:
+        for (final statement in createReadingAgentSyncSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
     }
 
     if (oldVersion != 0 && Prefs().webdavStatus) {
@@ -923,6 +1028,41 @@ class DBHelper {
     final exists = columns.any((row) => row['name'] == column);
     if (!exists) {
       await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+    }
+  }
+
+  Future<void> _migrateArtifactActionSnapshots(Database db) async {
+    final actions = await db.query(
+      'tb_agent_actions',
+      columns: ['id', 'before_snapshot', 'after_snapshot'],
+      where: "action_type = 'artifact'",
+    );
+    for (final action in actions) {
+      Map<String, dynamic>? migrate(Object? raw) {
+        if (raw == null) return null;
+        final decoded = jsonDecode(raw.toString());
+        if (decoded is! Map) return null;
+        final value = Map<String, dynamic>.from(decoded);
+        final progress = value.remove('discovered_progress') ?? 0;
+        value['source_progress'] = progress;
+        value['visible_from_progress'] = progress;
+        value['ingested_at'] = value['created_at'] ?? 0;
+        value['ingestion_mode'] = ReadingArtifactIngestionMode.live.name;
+        return value;
+      }
+
+      final before = migrate(action['before_snapshot']);
+      final after = migrate(action['after_snapshot']);
+      await db.update(
+        'tb_agent_actions',
+        {
+          'before_snapshot': before == null ? null : jsonEncode(before),
+          'after_snapshot': after == null ? null : jsonEncode(after),
+          'after_hash': _canonicalHash(after),
+        },
+        where: 'id = ?',
+        whereArgs: [action['id']],
+      );
     }
   }
 }

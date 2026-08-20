@@ -34,6 +34,7 @@ void main() {
       createReadingAgentSQL,
       createReadingClosureSQL,
       createReadingExperienceModulesSQL,
+      createReadingCoverageSQL,
     ]) {
       for (final statement in sql
           .split(';')
@@ -325,7 +326,9 @@ void main() {
         sourceStartCfi: 'epubcfi(/6/4)',
         sourceTextSnapshot: '林先生站在月台上。',
         discoveredAtCfi: 'epubcfi(/6/4)',
-        discoveredProgress: .4,
+        sourceProgress: .4,
+        visibleFromProgress: .4,
+        ingestedAt: now,
         createdAt: now,
         updatedAt: now,
       ),

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
@@ -97,7 +98,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 18);
+    expect(currentDbVersion, 20);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -277,7 +278,7 @@ void main() {
     expect(indexes, hasLength(3));
   });
 
-  test('version 18 migration creates reading experience tables and constraints',
+  test('version 19 migration creates reading experience tables and constraints',
       () async {
     final db = await openTempDb('reading_agent.db');
     addTearDown(db.close);
@@ -318,7 +319,7 @@ void main() {
     );
   });
 
-  test('database migration from version 7 through version 18 succeeds',
+  test('database migration from version 7 through version 20 succeeds',
       () async {
     final db = await openTempDb('upgrade_v7_to_v15.db');
     addTearDown(db.close);
@@ -331,5 +332,98 @@ void main() {
     final columns =
         await db.rawQuery('PRAGMA table_info(tb_reading_note_blocks)');
     expect(columns.map((row) => row['name']), contains('metadata'));
+  });
+
+  test('version 19 splits artifact source, visibility, and ingestion fields',
+      () async {
+    final db = await openTempDb('artifact_v19.db');
+    addTearDown(db.close);
+    for (final sql in [
+      createReadingAgentSQL,
+      createReadingClosureSQL,
+      createReadingExperienceModulesSQL,
+    ]) {
+      for (final statement in sql
+          .split(';')
+          .map((value) => value.trim())
+          .where((value) => value.isNotEmpty)) {
+        await db.execute(statement);
+      }
+    }
+    await db.insert('tb_reading_artifacts', {
+      'id': 'old',
+      'book_id': 1,
+      'module_id': 'fiction.immersion',
+      'artifact_kind': 'fiction.character',
+      'payload_json': '{"name":"林先生"}',
+      'epistemic_status': 'textFact',
+      'chapter_href': 'chapter.xhtml',
+      'discovered_progress': .4,
+      'created_at': 123,
+      'updated_at': 456,
+    });
+    await db.insert('tb_agent_actions', {
+      'id': 'old-action',
+      'action_type': 'artifact',
+      'target_id': 'old',
+      'book_id': 1,
+      'after_snapshot': jsonEncode({
+        'id': 'old',
+        'book_id': 1,
+        'module_id': 'fiction.immersion',
+        'artifact_kind': 'fiction.character',
+        'payload_json': '{"name":"林先生"}',
+        'epistemic_status': 'textFact',
+        'status': 'active',
+        'source_text_snapshot': '',
+        'chapter_href': 'chapter.xhtml',
+        'discovered_progress': .4,
+        'created_by': 'user',
+        'created_at': 123,
+        'updated_at': 456,
+      }),
+      'after_hash': 'legacy',
+      'status': 'applied',
+      'session_id': 'session',
+      'created_at': 123,
+      'expires_at': 999999,
+    });
+
+    await helper.onUpgradeDatabase(db, 18, 19);
+    final row = (await db.query('tb_reading_artifacts')).single;
+    expect(row['source_progress'], .4);
+    expect(row['visible_from_progress'], .4);
+    expect(row['ingested_at'], 123);
+    expect(row['ingestion_mode'], 'live');
+    final action = (await db.query('tb_agent_actions')).single;
+    final migratedSnapshot =
+        jsonDecode(action['after_snapshot']! as String) as Map<String, dynamic>;
+    expect(migratedSnapshot['source_progress'], .4);
+    expect(migratedSnapshot['visible_from_progress'], .4);
+    expect(migratedSnapshot, isNot(contains('discovered_progress')));
+    expect(action['after_hash'], isNot('legacy'));
+    final coverage = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tb_book_reading_coverage'");
+    expect(coverage, isNotEmpty);
+  });
+
+  test('version 20 creates per-device positions and sync tombstones', () async {
+    final db = await openTempDb('reading_sync_v20.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 19, 20);
+
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (
+        'tb_book_device_positions', 'tb_reading_sync_tombstones'
+      )
+    ''');
+    expect(tables, hasLength(2));
+    final positionColumns =
+        await db.rawQuery('PRAGMA table_info(tb_book_device_positions)');
+    expect(
+      positionColumns.map((row) => row['name']).toSet(),
+      containsAll({'book_id', 'device_id', 'cfi', 'progress', 'updated_at'}),
+    );
   });
 }

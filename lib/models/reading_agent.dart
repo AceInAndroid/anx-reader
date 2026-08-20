@@ -102,6 +102,83 @@ enum ReadingArtifactEpistemicStatus {
 
 enum ReadingArtifactStatus { active, resolved, retracted }
 
+enum ReadingArtifactIngestionMode { live, backfill, imported, synced }
+
+enum ReadingCoverageSetupStatus { pending, fromHere, backfilled, imported }
+
+/// Per-book spoiler and archive coverage state. The current reading position
+/// deliberately does not live here; it remains part of ReadingWorldState.
+class BookReadingCoverage {
+  const BookReadingCoverage({
+    required this.bookId,
+    required this.safeKnowledgeBoundary,
+    required this.artifactCoverageStart,
+    required this.artifactCoverageEnd,
+    required this.setupStatus,
+    required this.initializedAtProgress,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int bookId;
+  final double safeKnowledgeBoundary;
+  final double artifactCoverageStart;
+  final double artifactCoverageEnd;
+  final ReadingCoverageSetupStatus setupStatus;
+  final double initializedAtProgress;
+  final int createdAt;
+  final int updatedAt;
+
+  bool get setupPending => setupStatus == ReadingCoverageSetupStatus.pending;
+
+  BookReadingCoverage copyWith({
+    double? safeKnowledgeBoundary,
+    double? artifactCoverageStart,
+    double? artifactCoverageEnd,
+    ReadingCoverageSetupStatus? setupStatus,
+    int? updatedAt,
+  }) =>
+      BookReadingCoverage(
+        bookId: bookId,
+        safeKnowledgeBoundary:
+            safeKnowledgeBoundary ?? this.safeKnowledgeBoundary,
+        artifactCoverageStart:
+            artifactCoverageStart ?? this.artifactCoverageStart,
+        artifactCoverageEnd: artifactCoverageEnd ?? this.artifactCoverageEnd,
+        setupStatus: setupStatus ?? this.setupStatus,
+        initializedAtProgress: initializedAtProgress,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object?> toDb() => {
+        'book_id': bookId,
+        'safe_knowledge_boundary': safeKnowledgeBoundary.clamp(0, 1),
+        'artifact_coverage_start': artifactCoverageStart.clamp(0, 1),
+        'artifact_coverage_end': artifactCoverageEnd.clamp(0, 1),
+        'setup_status': setupStatus.name,
+        'initialized_at_progress': initializedAtProgress.clamp(0, 1),
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+
+  factory BookReadingCoverage.fromDb(Map<String, dynamic> row) =>
+      BookReadingCoverage(
+        bookId: _asInt(row['book_id']),
+        safeKnowledgeBoundary: _asDouble(row['safe_knowledge_boundary']),
+        artifactCoverageStart: _asDouble(row['artifact_coverage_start']),
+        artifactCoverageEnd: _asDouble(row['artifact_coverage_end']),
+        setupStatus: _enumByName(
+          ReadingCoverageSetupStatus.values,
+          row['setup_status'],
+          ReadingCoverageSetupStatus.fromHere,
+        ),
+        initializedAtProgress: _asDouble(row['initialized_at_progress']),
+        createdAt: _asInt(row['created_at']),
+        updatedAt: _asInt(row['updated_at']),
+      );
+}
+
 abstract final class ReadingArtifactKinds {
   static const character = 'fiction.character';
   static const relationship = 'fiction.relationship';
@@ -113,8 +190,9 @@ abstract final class ReadingArtifactKinds {
 
 /// Versioned, source-traceable outcome used by genre modules.
 ///
-/// [discoveredProgress] is the enforceable spoiler boundary. A caller must not
-/// expose this artifact before the reader reaches that progress.
+/// [visibleFromProgress] is the enforceable spoiler boundary. [sourceProgress]
+/// records where the event occurred, while [ingestedAt] records when it entered
+/// the system. Keeping these separate makes backfill safe.
 class ReadingArtifact {
   const ReadingArtifact({
     required this.id,
@@ -131,7 +209,10 @@ class ReadingArtifact {
     this.chapterHref,
     this.chapterTitle,
     this.discoveredAtCfi,
-    this.discoveredProgress = 0,
+    this.sourceProgress = 0,
+    this.visibleFromProgress = 0,
+    required this.ingestedAt,
+    this.ingestionMode = ReadingArtifactIngestionMode.live,
     this.sessionId,
     this.createdBy = 'user',
     required this.createdAt,
@@ -152,14 +233,17 @@ class ReadingArtifact {
   final String? chapterHref;
   final String? chapterTitle;
   final String? discoveredAtCfi;
-  final double discoveredProgress;
+  final double sourceProgress;
+  final double visibleFromProgress;
+  final int ingestedAt;
+  final ReadingArtifactIngestionMode ingestionMode;
   final String? sessionId;
   final String createdBy;
   final int createdAt;
   final int updatedAt;
 
   bool isVisibleAtProgress(double progress) =>
-      discoveredProgress <= progress.clamp(0, 1) + 0.000001;
+      visibleFromProgress <= progress.clamp(0, 1) + 0.000001;
 
   ReadingArtifact copyWith({
     Map<String, dynamic>? payload,
@@ -171,7 +255,10 @@ class ReadingArtifact {
     String? chapterHref,
     String? chapterTitle,
     String? discoveredAtCfi,
-    double? discoveredProgress,
+    double? sourceProgress,
+    double? visibleFromProgress,
+    int? ingestedAt,
+    ReadingArtifactIngestionMode? ingestionMode,
     String? sessionId,
     String? createdBy,
     int? updatedAt,
@@ -191,7 +278,10 @@ class ReadingArtifact {
         chapterHref: chapterHref ?? this.chapterHref,
         chapterTitle: chapterTitle ?? this.chapterTitle,
         discoveredAtCfi: discoveredAtCfi ?? this.discoveredAtCfi,
-        discoveredProgress: discoveredProgress ?? this.discoveredProgress,
+        sourceProgress: sourceProgress ?? this.sourceProgress,
+        visibleFromProgress: visibleFromProgress ?? this.visibleFromProgress,
+        ingestedAt: ingestedAt ?? this.ingestedAt,
+        ingestionMode: ingestionMode ?? this.ingestionMode,
         sessionId: sessionId ?? this.sessionId,
         createdBy: createdBy ?? this.createdBy,
         createdAt: createdAt,
@@ -213,7 +303,10 @@ class ReadingArtifact {
         'chapter_href': chapterHref,
         'chapter_title': chapterTitle,
         'discovered_at_cfi': discoveredAtCfi,
-        'discovered_progress': discoveredProgress.clamp(0, 1),
+        'source_progress': sourceProgress.clamp(0, 1),
+        'visible_from_progress': visibleFromProgress.clamp(0, 1),
+        'ingested_at': ingestedAt,
+        'ingestion_mode': ingestionMode.name,
         'session_id': sessionId,
         'created_by': createdBy,
         'created_at': createdAt,
@@ -243,7 +336,14 @@ class ReadingArtifact {
         chapterHref: row['chapter_href']?.toString(),
         chapterTitle: row['chapter_title']?.toString(),
         discoveredAtCfi: row['discovered_at_cfi']?.toString(),
-        discoveredProgress: _asDouble(row['discovered_progress']),
+        sourceProgress: _asDouble(row['source_progress']),
+        visibleFromProgress: _asDouble(row['visible_from_progress']),
+        ingestedAt: _asInt(row['ingested_at']),
+        ingestionMode: _enumByName(
+          ReadingArtifactIngestionMode.values,
+          row['ingestion_mode'],
+          ReadingArtifactIngestionMode.live,
+        ),
         sessionId: row['session_id']?.toString(),
         createdBy: row['created_by']?.toString() ?? 'user',
         createdAt: _asInt(row['created_at']),
