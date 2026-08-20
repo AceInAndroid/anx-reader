@@ -19,6 +19,7 @@ import 'package:anx_reader/providers/iap.dart';
 import 'package:anx_reader/providers/book_list.dart';
 import 'package:anx_reader/providers/toc_search.dart';
 import 'package:anx_reader/service/convert_to_epub/txt/convert_from_txt.dart';
+import 'package:anx_reader/service/convert_to_epub/markdown/convert_from_markdown.dart';
 import 'package:anx_reader/service/md5_service.dart';
 import 'package:anx_reader/utils/webView/anx_headless_webview.dart';
 import 'package:anx_reader/utils/env_var.dart';
@@ -41,7 +42,16 @@ import 'book_player/book_open_policy.dart';
 import 'book_player/reader_runtime.dart';
 
 AnxHeadlessWebView? headlessInAppWebView;
-final allowBookExtensions = ["epub", "mobi", "azw3", "fb2", "txt", "pdf"];
+final allowBookExtensions = [
+  "epub",
+  "mobi",
+  "azw3",
+  "fb2",
+  "txt",
+  "md",
+  "markdown",
+  "pdf",
+];
 
 /// import book list and **delete file**
 void importBookList(List<File> fileList, BuildContext context, WidgetRef ref) {
@@ -425,12 +435,16 @@ Future<void> importBook(File file, WidgetRef ref) async {
       'BookImport[$importId] stage=md5_complete available=${md5 != null}',
     );
 
-    if (file.path.split('.').last.toLowerCase() == 'txt') {
-      AnxLog.info('BookImport[$importId] stage=txt_conversion_start');
-      final tempFile = await convertFromTxt(file);
+    final extension = path.extension(file.path).toLowerCase();
+    if (extension == '.txt' || extension == '.md' || extension == '.markdown') {
+      final format = extension == '.txt' ? 'txt' : 'markdown';
+      AnxLog.info('BookImport[$importId] stage=${format}_conversion_start');
+      final tempFile = extension == '.txt'
+          ? await convertFromTxt(file)
+          : await convertFromMarkdown(file);
       file.deleteSync();
       file = tempFile;
-      AnxLog.info('BookImport[$importId] stage=txt_conversion_complete');
+      AnxLog.info('BookImport[$importId] stage=${format}_conversion_complete');
     }
 
     await getBookMetadata(file, md5: md5, importId: importId);

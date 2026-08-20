@@ -12,6 +12,7 @@ import 'package:anx_reader/service/ai/langchain_registry.dart';
 import 'package:anx_reader/service/ai/langchain_runner.dart';
 import 'package:anx_reader/service/ai/request_queue.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:anx_reader/utils/ai_reasoning_parser.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -101,12 +102,17 @@ Stream<String> aiGenerateStream(
   bool useAgent = false,
   WidgetRef? ref,
   ReadingAiMode? readingMode,
+  ReadingSkillSelection? readingSkill,
   bool allowFallback = true,
 }) async* {
   if (useAgent) {
     assert(ref != null, 'ref must be provided when useAgent is true');
   }
-  final registry = LangchainAiRegistry(ref, readingModeOverride: readingMode);
+  final registry = LangchainAiRegistry(
+    ref,
+    readingModeOverride: readingMode,
+    readingSkillOverride: readingSkill,
+  );
 
   final primary = await _generateStream(
     messages: messages,
@@ -155,6 +161,7 @@ Future<String> aiGenerateText(
   bool useAgent = false,
   WidgetRef? ref,
   ReadingAiMode? readingMode,
+  ReadingSkillSelection? readingSkill,
   bool allowFallback = true,
 }) async {
   String? lastResult;
@@ -166,6 +173,7 @@ Future<String> aiGenerateText(
     useAgent: useAgent,
     ref: ref,
     readingMode: readingMode,
+    readingSkill: readingSkill,
     allowFallback: allowFallback,
   )) {
     lastResult = chunk;

@@ -6,6 +6,9 @@ import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/timeout_http_client.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/reading_closure_policy.dart';
+import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
+import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:anx_reader/service/ai/tools/reading_agent_tools.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,9 +23,14 @@ import 'langchain_ai_config.dart';
 
 /// Factory responsible for building chat models based on user preferences.
 class LangchainAiRegistry {
-  const LangchainAiRegistry(this.ref, {this.readingModeOverride});
+  const LangchainAiRegistry(
+    this.ref, {
+    this.readingModeOverride,
+    this.readingSkillOverride,
+  });
   final WidgetRef? ref;
   final ReadingAiMode? readingModeOverride;
+  final ReadingSkillSelection? readingSkillOverride;
 
   LangchainPipeline resolve(
     LangchainAiConfig config, {
@@ -141,15 +149,28 @@ class LangchainAiRegistry {
               Prefs().readingAgentBetaEnabled ||
               !readingAgentToolIds.contains(def.id))
           .toList(growable: false);
+      final currentBook =
+          isReading ? ref!.read(currentReadingProvider).book : null;
+      final resolvedMode = readingModeOverride ??
+          (currentBook == null
+              ? ReadingAiMode.general
+              : Prefs().readingAiModeForBook(currentBook.id));
+      final closurePolicy = currentBook == null
+          ? null
+          : const ReadingClosurePolicyMatcher().match(
+              mode: resolvedMode,
+              title: currentBook.title,
+              author: currentBook.author,
+              description: currentBook.description ?? '',
+              pinnedId: readingExperienceProfileService
+                  .pinnedModuleId(currentBook.id),
+            );
       systemMessage = _buildAgentSystemMessage(
         isReading: isReading,
         enabledTools: enabledDefs,
-        readingMode: readingModeOverride ??
-            (isReading
-                ? Prefs().readingAiModeForBook(
-                    ref!.read(currentReadingProvider).book!.id,
-                  )
-                : ReadingAiMode.general),
+        readingMode: resolvedMode,
+        readingSkill: readingSkillOverride,
+        closurePolicy: closurePolicy,
       );
     }
 
@@ -164,6 +185,8 @@ class LangchainAiRegistry {
     required bool isReading,
     required List<AiToolDefinition> enabledTools,
     required ReadingAiMode readingMode,
+    ReadingSkillSelection? readingSkill,
+    ReadingClosurePolicyDefinition? closurePolicy,
   }) {
     final currentLanguageCode =
         Prefs().locale?.languageCode ?? Platform.localeName;
@@ -198,6 +221,14 @@ class LangchainAiRegistry {
     final readingAgentContext = Prefs().readingAgentBetaEnabled && isReading
         ? _formatReadingAgentContext(readingAgentRuntime.state)
         : '';
+    final readingSkillContext = readingSkill == null
+        ? ''
+        : '\n## Active Reading Method\n${readingSkill.promptContext()}';
+    final closureContext = closurePolicy == null
+        ? ''
+        : '\n## Reading Closure Policy\n'
+            'Closure: ${closurePolicy.title}\n'
+            'Closure guidance: ${closurePolicy.systemGuidance}';
     final guidance =
         '''You are "Anx Reader AI", an intelligent reading assistant integrated into the Anx Reader app.
 
@@ -210,6 +241,8 @@ Reading mode: ${readingMode.name}
 Mode guidance: ${profile.systemPrompt}
 Safety boundary: ${profile.safetyPrompt}
 $readingAgentContext
+$readingSkillContext
+$closureContext
 
 Use layered context. Start from the selection, adjacent paragraphs, chapter and book metadata. Read chapter text, table of contents, notes or other chapters only when needed through tools; never imply that the entire book or all notes were uploaded.
 

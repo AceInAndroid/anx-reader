@@ -6,9 +6,250 @@ enum ReaderProfileStatus { candidate, confirmed, rejected }
 
 enum AgentActionStatus { applied, undone, conflict }
 
-enum AgentActionType { goal, profile, note, difficulty, memory }
+enum AgentActionType { goal, profile, note, difficulty, memory, artifact }
 
 enum ReadingCheckpointStatus { pending, completed, skipped }
+
+enum BookReadingProfileMatchSource {
+  metadata,
+  localClassifier,
+  user,
+  legacyPreference,
+}
+
+/// Per-book reading experience selection. This row lives in the synchronized
+/// database; [primaryModuleId] is a stable registry id rather than a Dart enum.
+class BookReadingProfile {
+  const BookReadingProfile({
+    required this.bookId,
+    required this.primaryModuleId,
+    this.facets = const [],
+    this.confidence = 0,
+    this.pinned = false,
+    this.matchSource = BookReadingProfileMatchSource.metadata,
+    this.schemaVersion = 1,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final int bookId;
+  final String primaryModuleId;
+  final List<String> facets;
+  final double confidence;
+  final bool pinned;
+  final BookReadingProfileMatchSource matchSource;
+  final int schemaVersion;
+  final int createdAt;
+  final int updatedAt;
+
+  BookReadingProfile copyWith({
+    String? primaryModuleId,
+    List<String>? facets,
+    double? confidence,
+    bool? pinned,
+    BookReadingProfileMatchSource? matchSource,
+    int? schemaVersion,
+    int? updatedAt,
+  }) =>
+      BookReadingProfile(
+        bookId: bookId,
+        primaryModuleId: primaryModuleId ?? this.primaryModuleId,
+        facets: facets ?? this.facets,
+        confidence: confidence ?? this.confidence,
+        pinned: pinned ?? this.pinned,
+        matchSource: matchSource ?? this.matchSource,
+        schemaVersion: schemaVersion ?? this.schemaVersion,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object?> toDb() => {
+        'book_id': bookId,
+        'primary_module_id': primaryModuleId,
+        'facets_json': jsonEncode(facets),
+        'confidence': confidence.clamp(0, 1),
+        'pinned': pinned ? 1 : 0,
+        'match_source': matchSource.name,
+        'schema_version': schemaVersion,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+
+  factory BookReadingProfile.fromDb(Map<String, dynamic> row) =>
+      BookReadingProfile(
+        bookId: _asInt(row['book_id']),
+        primaryModuleId: row['primary_module_id']?.toString() ?? '',
+        facets: _stringList(row['facets_json']),
+        confidence: _asDouble(row['confidence']),
+        pinned: _asInt(row['pinned']) == 1,
+        matchSource: _enumByName(
+          BookReadingProfileMatchSource.values,
+          row['match_source'],
+          BookReadingProfileMatchSource.metadata,
+        ),
+        schemaVersion: _asInt(row['schema_version']),
+        createdAt: _asInt(row['created_at']),
+        updatedAt: _asInt(row['updated_at']),
+      );
+}
+
+enum ReadingArtifactEpistemicStatus {
+  textFact,
+  userReflection,
+  agentInference,
+  externalFact,
+}
+
+enum ReadingArtifactStatus { active, resolved, retracted }
+
+abstract final class ReadingArtifactKinds {
+  static const character = 'fiction.character';
+  static const relationship = 'fiction.relationship';
+  static const mystery = 'fiction.mystery';
+  static const clue = 'fiction.clue';
+  static const scene = 'fiction.scene';
+  static const resumeContext = 'fiction.resume_context';
+}
+
+/// Versioned, source-traceable outcome used by genre modules.
+///
+/// [discoveredProgress] is the enforceable spoiler boundary. A caller must not
+/// expose this artifact before the reader reaches that progress.
+class ReadingArtifact {
+  const ReadingArtifact({
+    required this.id,
+    required this.bookId,
+    required this.moduleId,
+    required this.kind,
+    this.schemaVersion = 1,
+    this.payload = const {},
+    this.epistemicStatus = ReadingArtifactEpistemicStatus.textFact,
+    this.status = ReadingArtifactStatus.active,
+    this.sourceStartCfi,
+    this.sourceEndCfi,
+    this.sourceTextSnapshot = '',
+    this.chapterHref,
+    this.chapterTitle,
+    this.discoveredAtCfi,
+    this.discoveredProgress = 0,
+    this.sessionId,
+    this.createdBy = 'user',
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final int bookId;
+  final String moduleId;
+  final String kind;
+  final int schemaVersion;
+  final Map<String, dynamic> payload;
+  final ReadingArtifactEpistemicStatus epistemicStatus;
+  final ReadingArtifactStatus status;
+  final String? sourceStartCfi;
+  final String? sourceEndCfi;
+  final String sourceTextSnapshot;
+  final String? chapterHref;
+  final String? chapterTitle;
+  final String? discoveredAtCfi;
+  final double discoveredProgress;
+  final String? sessionId;
+  final String createdBy;
+  final int createdAt;
+  final int updatedAt;
+
+  bool isVisibleAtProgress(double progress) =>
+      discoveredProgress <= progress.clamp(0, 1) + 0.000001;
+
+  ReadingArtifact copyWith({
+    Map<String, dynamic>? payload,
+    ReadingArtifactEpistemicStatus? epistemicStatus,
+    ReadingArtifactStatus? status,
+    String? sourceStartCfi,
+    String? sourceEndCfi,
+    String? sourceTextSnapshot,
+    String? chapterHref,
+    String? chapterTitle,
+    String? discoveredAtCfi,
+    double? discoveredProgress,
+    String? sessionId,
+    String? createdBy,
+    int? updatedAt,
+  }) =>
+      ReadingArtifact(
+        id: id,
+        bookId: bookId,
+        moduleId: moduleId,
+        kind: kind,
+        schemaVersion: schemaVersion,
+        payload: payload ?? this.payload,
+        epistemicStatus: epistemicStatus ?? this.epistemicStatus,
+        status: status ?? this.status,
+        sourceStartCfi: sourceStartCfi ?? this.sourceStartCfi,
+        sourceEndCfi: sourceEndCfi ?? this.sourceEndCfi,
+        sourceTextSnapshot: sourceTextSnapshot ?? this.sourceTextSnapshot,
+        chapterHref: chapterHref ?? this.chapterHref,
+        chapterTitle: chapterTitle ?? this.chapterTitle,
+        discoveredAtCfi: discoveredAtCfi ?? this.discoveredAtCfi,
+        discoveredProgress: discoveredProgress ?? this.discoveredProgress,
+        sessionId: sessionId ?? this.sessionId,
+        createdBy: createdBy ?? this.createdBy,
+        createdAt: createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+      );
+
+  Map<String, Object?> toDb() => {
+        'id': id,
+        'book_id': bookId,
+        'module_id': moduleId,
+        'artifact_kind': kind,
+        'schema_version': schemaVersion,
+        'payload_json': jsonEncode(payload),
+        'epistemic_status': epistemicStatus.name,
+        'status': status.name,
+        'source_start_cfi': sourceStartCfi,
+        'source_end_cfi': sourceEndCfi,
+        'source_text_snapshot': sourceTextSnapshot,
+        'chapter_href': chapterHref,
+        'chapter_title': chapterTitle,
+        'discovered_at_cfi': discoveredAtCfi,
+        'discovered_progress': discoveredProgress.clamp(0, 1),
+        'session_id': sessionId,
+        'created_by': createdBy,
+        'created_at': createdAt,
+        'updated_at': updatedAt,
+      };
+
+  factory ReadingArtifact.fromDb(Map<String, dynamic> row) => ReadingArtifact(
+        id: row['id']?.toString() ?? '',
+        bookId: _asInt(row['book_id']),
+        moduleId: row['module_id']?.toString() ?? '',
+        kind: row['artifact_kind']?.toString() ?? '',
+        schemaVersion: _asInt(row['schema_version']),
+        payload: _map(row['payload_json']),
+        epistemicStatus: _enumByName(
+          ReadingArtifactEpistemicStatus.values,
+          row['epistemic_status'],
+          ReadingArtifactEpistemicStatus.textFact,
+        ),
+        status: _enumByName(
+          ReadingArtifactStatus.values,
+          row['status'],
+          ReadingArtifactStatus.active,
+        ),
+        sourceStartCfi: row['source_start_cfi']?.toString(),
+        sourceEndCfi: row['source_end_cfi']?.toString(),
+        sourceTextSnapshot: row['source_text_snapshot']?.toString() ?? '',
+        chapterHref: row['chapter_href']?.toString(),
+        chapterTitle: row['chapter_title']?.toString(),
+        discoveredAtCfi: row['discovered_at_cfi']?.toString(),
+        discoveredProgress: _asDouble(row['discovered_progress']),
+        sessionId: row['session_id']?.toString(),
+        createdBy: row['created_by']?.toString() ?? 'user',
+        createdAt: _asInt(row['created_at']),
+        updatedAt: _asInt(row['updated_at']),
+      );
+}
 
 class ReadingChapterCheckpoint {
   const ReadingChapterCheckpoint({

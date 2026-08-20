@@ -6,6 +6,8 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/book.dart' as book_dao;
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/service/md5_service.dart';
+import 'package:anx_reader/service/convert_to_epub/markdown/convert_from_markdown.dart';
+import 'package:anx_reader/service/convert_to_epub/txt/convert_from_txt.dart';
 import 'package:anx_reader/utils/get_path/get_base_path.dart';
 import 'package:anx_reader/utils/get_path/get_temp_dir.dart';
 import 'package:anx_reader/utils/log/common.dart';
@@ -31,6 +33,8 @@ class WirelessTransferServer {
     'epub',
     'pdf',
     'txt',
+    'md',
+    'markdown',
     'mobi',
     'azw3',
     'fb2',
@@ -543,7 +547,14 @@ class WirelessTransferServer {
   }
 
   Future<void> _saveBookToFile(File tempFile, String title, String? md5) async {
-    final extension = tempFile.path.split('.').last;
+    final sourceExtension = tempFile.path.split('.').last.toLowerCase();
+    File fileToSave = tempFile;
+    if (sourceExtension == 'txt') {
+      fileToSave = await convertFromTxt(tempFile);
+    } else if (sourceExtension == 'md' || sourceExtension == 'markdown') {
+      fileToSave = await convertFromMarkdown(tempFile);
+    }
+    final extension = fileToSave.path.split('.').last;
     final safeTitle = title
         .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
         .replaceAll('\n', '')
@@ -555,7 +566,10 @@ class WirelessTransferServer {
     final dbFilePath = 'file/$bookName.$extension';
     final filePath = getBasePath(dbFilePath);
 
-    await tempFile.copy(filePath);
+    await fileToSave.copy(filePath);
+    if (fileToSave.path != tempFile.path) {
+      await fileToSave.delete();
+    }
     await tempFile.delete();
 
     final existingBook =

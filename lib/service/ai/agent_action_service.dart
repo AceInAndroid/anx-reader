@@ -159,6 +159,14 @@ class AgentActionService {
     return mutation;
   }
 
+  Future<AgentMutation<ReadingArtifact>> saveArtifact(
+      ReadingArtifact artifact) async {
+    final mutation =
+        await _repository.saveArtifact(artifact, sessionId: _sessionId);
+    _runtime.actionApplied(mutation.action);
+    return mutation;
+  }
+
   Future<AgentMutation<ReaderProfileItem>?> recordProfileEvidence({
     required String key,
     required Map<String, dynamic> value,

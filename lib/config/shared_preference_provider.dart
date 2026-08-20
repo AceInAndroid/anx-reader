@@ -40,6 +40,8 @@ import 'package:anx_reader/widgets/statistic/dashboard_tiles/dashboard_tile_regi
 import 'package:anx_reader/models/window_info.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/reading_closure_policy.dart';
+import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:anx_reader/service/ai/web_search.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/utils/get_current_language_code.dart';
@@ -1849,6 +1851,83 @@ class Prefs extends ChangeNotifier {
     values['$bookId'] = mode.name;
     prefs.setString('readingAiModesByBook', jsonEncode(values));
     notifyListeners();
+  }
+
+  ReadingSkillId? readingSkillForBook(int bookId) {
+    final raw = prefs.getString('readingSkillsByBook');
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      return ReadingSkillId.fromJson(values['$bookId']?.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void setReadingSkillForBook(int bookId, ReadingSkillId? skill) {
+    final raw = prefs.getString('readingSkillsByBook');
+    Map<String, dynamic> values = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      } catch (_) {}
+    }
+    if (skill == null) {
+      values.remove('$bookId');
+    } else {
+      values['$bookId'] = skill.name;
+    }
+    prefs.setString('readingSkillsByBook', jsonEncode(values));
+    notifyListeners();
+  }
+
+  // ignore: deprecated_member_use_from_same_package
+  ReadingClosureType? readingClosureTypeForBook(int bookId) {
+    // ignore: deprecated_member_use_from_same_package
+    return ReadingClosureType.fromJson(readingClosureIdForBook(bookId));
+  }
+
+  /// Legacy v17 preference. New writes belong in tb_book_reading_profiles;
+  /// this getter is retained only for lazy migration on first book open.
+  String? readingClosureIdForBook(int bookId) {
+    final raw = prefs.getString('readingClosureTypesByBook');
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      return ReadingClosureIds.normalize(values['$bookId']?.toString());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ignore: deprecated_member_use_from_same_package
+  void setReadingClosureTypeForBook(int bookId, ReadingClosureType? type) {
+    final raw = prefs.getString('readingClosureTypesByBook');
+    Map<String, dynamic> values = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      } catch (_) {}
+    }
+    if (type == null) {
+      values.remove('$bookId');
+    } else {
+      values['$bookId'] = type.name;
+    }
+    prefs.setString('readingClosureTypesByBook', jsonEncode(values));
+    notifyListeners();
+  }
+
+  void removeLegacyReadingClosureForBook(int bookId) {
+    final raw = prefs.getString('readingClosureTypesByBook');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      if (values.remove('$bookId') != null) {
+        prefs.setString('readingClosureTypesByBook', jsonEncode(values));
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   ReadingAnalysisDepth get defaultReadingAnalysisDepth =>

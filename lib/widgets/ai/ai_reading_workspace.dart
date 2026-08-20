@@ -7,6 +7,7 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/page/settings_page/ai.dart';
+import 'package:anx_reader/page/reading_agent_help_page.dart';
 import 'package:anx_reader/providers/ai_history.dart';
 import 'package:anx_reader/providers/ai_chat.dart';
 import 'package:anx_reader/providers/ai_workspace.dart';
@@ -17,7 +18,9 @@ import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_frameworks.dart';
+import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:anx_reader/service/ai/reading_coach_policy.dart';
+import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 import 'package:anx_reader/service/ai/reading_coach_phase2.dart';
 import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/models/reading_coach.dart';
@@ -52,6 +55,7 @@ class AiReadingWorkspace extends ConsumerStatefulWidget {
     this.onNavigateChapter,
     this.onDifficultySaved,
     this.onDifficultyResolved,
+    this.closureRegistry = const ReadingClosurePolicyRegistry(),
     this.sendImmediate = false,
   });
 
@@ -70,6 +74,7 @@ class AiReadingWorkspace extends ConsumerStatefulWidget {
   final ValueChanged<String>? onNavigateChapter;
   final ValueChanged<ReadingDifficulty>? onDifficultySaved;
   final ValueChanged<ReadingDifficulty>? onDifficultyResolved;
+  final ReadingClosurePolicyRegistry closureRegistry;
   final bool sendImmediate;
 
   @override
@@ -189,6 +194,8 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
     return Column(
       children: [
         if (widget.controller.suggestedMode != null) _buildModeSuggestion(),
+        _buildReadingClosureBar(),
+        _buildReadingSkillBar(),
         _buildCurrentAgentTrace(),
         if (pending != null) _buildSelectionCard(pending),
         Expanded(
@@ -210,6 +217,198 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
         ),
       ],
     );
+  }
+
+  ReadingSkillSelection _currentReadingSkill() =>
+      const ReadingSkillMatcher().match(
+        mode: widget.controller.mode,
+        title: widget.bookTitle,
+        author: widget.bookAuthor,
+        description: widget.bookDescription ?? '',
+        chapterTitle: widget.controller.pendingSelection?.chapterTitle ?? '',
+        pinnedSkill: widget.controller.pinnedReadingSkill,
+      );
+
+  ReadingClosurePolicyDefinition _currentClosurePolicy() =>
+      ReadingClosurePolicyMatcher(registry: widget.closureRegistry).match(
+        mode: widget.controller.mode,
+        title: widget.bookTitle,
+        author: widget.bookAuthor,
+        description: widget.bookDescription ?? '',
+        pinnedId: widget.controller.pinnedClosureId,
+      );
+
+  Widget _buildReadingClosureBar() {
+    final closure = _currentClosurePolicy();
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: InkWell(
+        onTap: _showClosurePolicyPicker,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Row(
+            children: [
+              const Icon(Icons.all_inclusive, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '阅读闭环 · ${closure.title}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                widget.controller.pinnedClosureId == null ? '自动匹配' : '本书固定',
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.chevron_right, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showClosurePolicyPicker() async {
+    final selected = await showModalBottomSheet<String?>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          children: [
+            Text('选择本书阅读闭环', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            const Text('闭环决定目标、章节回顾、成果指标和介入强度；不会改变书籍内容。'),
+            const SizedBox(height: 12),
+            ListTile(
+              leading: Icon(widget.controller.pinnedClosureId == null
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked),
+              title: const Text('自动匹配'),
+              subtitle: const Text('根据阅读模式与书籍信息在本地选择'),
+              onTap: () {
+                widget.controller.setClosureModule(null);
+                Navigator.pop(context);
+              },
+            ),
+            for (final closure in widget.closureRegistry.definitions)
+              ListTile(
+                leading: Icon(widget.controller.pinnedClosureId == closure.id
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked),
+                title: Text(closure.title),
+                subtitle: Text(closure.description),
+                onTap: () => Navigator.pop(context, closure.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) widget.controller.setClosureModule(selected);
+  }
+
+  Widget _buildReadingSkillBar() {
+    final selection = _currentReadingSkill();
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: InkWell(
+        onTap: _showReadingSkillPicker,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_stories_outlined, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '阅读方法 · ${selection.primary.title}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                selection.pinned ? '本书固定' : '自动匹配',
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Reading Skill 使用方法',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const ReadingSkillHelpPage(),
+                  ),
+                ),
+                icon: const Icon(Icons.help_outline, size: 19),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showReadingSkillPicker() async {
+    final current = widget.controller.pinnedReadingSkill;
+    final selected = await showModalBottomSheet<ReadingSkillId?>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SafeArea(
+        child: DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.72,
+          maxChildSize: 0.92,
+          builder: (context, scrollController) => ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+            children: [
+              Text('选择阅读方法', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 4),
+              const Text('阅读方法决定 AI 如何陪你读。只有发起分析、回顾或明确调用时才加载完整方法。'),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const ReadingSkillHelpPage(),
+                    ),
+                  ),
+                  icon: const Icon(Icons.help_outline),
+                  label: const Text('查看使用方法'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: Icon(current == null
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked),
+                title: const Text('自动匹配'),
+                subtitle: const Text('根据书籍主题和本次任务选择一个主方法'),
+                onTap: () {
+                  widget.controller.setReadingSkill(null);
+                  Navigator.pop(context);
+                },
+              ),
+              for (final skill in ReadingSkillRegistry.definitions)
+                ListTile(
+                  leading: Icon(current == skill.id
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked),
+                  title: Text(skill.title),
+                  subtitle: Text(skill.description),
+                  onTap: () => Navigator.pop(context, skill.id),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (selected != null) {
+      widget.controller.setReadingSkill(selected);
+    }
   }
 
   Widget _buildCoach() {

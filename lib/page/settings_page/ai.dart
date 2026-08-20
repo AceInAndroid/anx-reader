@@ -6,6 +6,7 @@ import 'package:anx_reader/enums/ai_panel_width_ratio.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/page/settings_page/ai_provider_list_page.dart';
+import 'package:anx_reader/page/reading_agent_help_page.dart';
 import 'package:anx_reader/providers/ai_cache_count.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/providers/user_prompts.dart';
@@ -246,12 +247,32 @@ class _AISettingsState extends ConsumerState<AISettings> {
               '主动建议需确认，明确要求的写入可撤销并保留 30 天记录。',
             ),
           ),
+          SettingsTile.navigation(
+            leading: const Icon(Icons.help_outline),
+            title: const Text('阅读 Agent 使用方法'),
+            description: const Text('了解阅读闭环、模型调用、写入权限和撤销'),
+            onPressed: (context) => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const ReadingAgentHelpPage(),
+              ),
+            ),
+          ),
         ],
       ),
       SettingsSection(
         title: const Text('阅读模式'),
         tiles: [
           _readingModeTile(),
+          SettingsTile.navigation(
+            leading: const Icon(Icons.auto_stories_outlined),
+            title: const Text('Reading Skill 使用方法'),
+            description: const Text('了解自动匹配、渐进加载和全部阅读方法'),
+            onPressed: (context) => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const ReadingSkillHelpPage(),
+              ),
+            ),
+          ),
         ],
       ),
       SettingsSection(

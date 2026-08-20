@@ -1,4 +1,5 @@
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 
 enum ReadingIntervention { none, passiveCapsule }
 
@@ -11,8 +12,17 @@ class ReadingInterventionPolicy {
     required ReadingWorldState state,
     required bool controlsVisible,
     required bool dismissedForSession,
+    ReadingClosurePolicyDefinition? closurePolicy,
+    bool resumeContextAvailable = false,
   }) {
-    if (!controlsVisible || dismissedForSession || !state.hasCapsuleState) {
+    final checkpointVisible = closurePolicy?.checkpointTriggersCapsule ?? true;
+    final hasVisibleState = state.activeGoal != null ||
+        state.unresolvedDifficultyCount > 0 ||
+        state.pendingProfileCount > 0 ||
+        state.lastAgentAction != null ||
+        (checkpointVisible && state.pendingCheckpointCount > 0) ||
+        resumeContextAvailable;
+    if (!controlsVisible || dismissedForSession || !hasVisibleState) {
       return ReadingIntervention.none;
     }
     return ReadingIntervention.passiveCapsule;

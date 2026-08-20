@@ -3,22 +3,33 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_frameworks.dart';
+import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
+import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:flutter/foundation.dart';
 
 enum AiWorkspaceView { chat, coach, history, sessionDetail, agentsAndSources }
 
 class AiWorkspaceController extends ChangeNotifier {
-  AiWorkspaceController({required this.bookId})
-      : mode = Prefs().readingAiModeForBook(bookId),
+  AiWorkspaceController({
+    required this.bookId,
+    this.onClosureModuleChanged,
+  })  : mode = Prefs().readingAiModeForBook(bookId),
         analysisDepth = Prefs().readingAnalysisDepthForBook(bookId),
-        outputTemplate = Prefs().readingOutputTemplateForBook(bookId);
+        outputTemplate = Prefs().readingOutputTemplateForBook(bookId),
+        readingProfile = readingExperienceProfileService.cached(bookId);
 
   final int bookId;
+  final Future<void> Function(String? moduleId)? onClosureModuleChanged;
   AiWorkspaceView view = AiWorkspaceView.chat;
   ReadingAiMode mode;
   ReadingAnalysisDepth analysisDepth;
   ReadingOutputTemplate outputTemplate;
   ReadingAiMode? suggestedMode;
+  ReadingSkillId? get pinnedReadingSkill => Prefs().readingSkillForBook(bookId);
+  BookReadingProfile? readingProfile;
+  String? get pinnedClosureId =>
+      readingProfile?.pinned == true ? readingProfile!.primaryModuleId : null;
   ReadingContextSnapshot? pendingSelection;
   ReadingContextSnapshot? lastSelection;
   AiChatHistoryEntry? selectedSession;
@@ -93,6 +104,22 @@ class AiWorkspaceController extends ChangeNotifier {
     Prefs().clearReadingAnalysisConfigForBook(bookId);
     analysisDepth = Prefs().defaultReadingAnalysisDepth;
     outputTemplate = Prefs().defaultReadingOutputTemplate;
+    notifyListeners();
+  }
+
+  void setReadingSkill(ReadingSkillId? value) {
+    Prefs().setReadingSkillForBook(bookId, value);
+    notifyListeners();
+  }
+
+  void setReadingProfile(BookReadingProfile value) {
+    readingProfile = value;
+    notifyListeners();
+  }
+
+  Future<void> setClosureModule(String? value) async {
+    await onClosureModuleChanged?.call(value);
+    readingProfile = readingExperienceProfileService.cached(bookId);
     notifyListeners();
   }
 

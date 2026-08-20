@@ -8,6 +8,7 @@ import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/reading_agent_orchestrator.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
+import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:anx_reader/utils/ai_reasoning_parser.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -76,6 +77,21 @@ class AiChat extends _$AiChat {
             : Prefs().readingAiModeForBook(book.id));
     final analysisRequest = _analysisRequestOverride;
     _analysisRequestOverride = null;
+    final readingSkill = book == null
+        ? null
+        : const ReadingSkillMatcher().match(
+            mode: readingMode,
+            title: book.title,
+            author: book.author,
+            description: book.description ?? '',
+            chapterTitle: reading.chapterTitle ?? '',
+            query: message,
+            pinnedSkill: Prefs().readingSkillForBook(book.id),
+            deepAnalysis: analysisRequest != null,
+            chapterClosure: RegExp(r'章节结束|章节检查|本章回顾|总结本章|chapter review',
+                    caseSensitive: false)
+                .hasMatch(message),
+          );
 
     List<ChatMessage> messages = [
       ...state.whenOrNull(data: (data) => data) ?? [],
@@ -163,6 +179,7 @@ class AiChat extends _$AiChat {
         useAgent: true,
         ref: widgetRef,
         readingMode: readingMode,
+        readingSkill: readingSkill,
       )) {
         assistantResponse = chunk;
 

@@ -10,6 +10,7 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_time.dart';
 import 'package:anx_reader/models/tag.dart';
+import 'package:anx_reader/page/reading_outcomes_page.dart';
 import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/providers/book_list.dart';
 import 'package:anx_reader/providers/tags.dart';
@@ -482,6 +483,30 @@ class _BookDetailState extends ConsumerState<BookDetail> {
       );
     }
 
+    Widget buildReadingOutcomesEntry() {
+      return FilledContainer(
+        width: MediaQuery.of(context).size.width,
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(12),
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(
+            Icons.auto_graph_outlined,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          title: const Text('本书阅读成果'),
+          subtitle: const Text('目标、章节掌握度、未解决问题、复习卡片与记忆'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ReadingOutcomesPage(book: _book),
+            ),
+          ),
+        ),
+      );
+    }
+
     Widget buildTagEditor() {
       return FilledContainer(
         width: MediaQuery.of(context).size.width,
@@ -824,6 +849,7 @@ class _BookDetailState extends ConsumerState<BookDetail> {
                                     buildEditButton(),
                                     const SizedBox(height: 5),
                                     buildBookStatistics(),
+                                    buildReadingOutcomesEntry(),
                                   ],
                                 ),
                               ),
@@ -846,6 +872,7 @@ class _BookDetailState extends ConsumerState<BookDetail> {
                               buildEditButton(),
                               const SizedBox(height: 5),
                               buildBookStatistics(),
+                              buildReadingOutcomesEntry(),
                               const SizedBox(height: 15),
                               buildMoreDetail(),
                             ],

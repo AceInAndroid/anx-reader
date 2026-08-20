@@ -351,8 +351,7 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
 
   void memoryAdded(String title) {
     if (title.trim().isEmpty) return;
-    final titles = [title.trim(), ..._state.markdownMemorySummary]
-        .toSet()
+    final titles = <String>{title.trim(), ..._state.markdownMemorySummary}
         .take(5)
         .toList(growable: false);
     _state = _state.copyWith(markdownMemorySummary: titles);

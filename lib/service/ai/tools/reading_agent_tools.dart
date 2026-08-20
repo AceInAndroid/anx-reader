@@ -8,6 +8,8 @@ import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/agent_action_service.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
+import 'package:anx_reader/service/ai/reading_closure_policy.dart';
+import 'package:anx_reader/service/ai/fiction_reading_service.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:anx_reader/service/ai/tools/base_tool.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,6 +22,8 @@ const readingAgentToolIds = {
   'reading_goal_set',
   'reading_memory_append',
   'reading_memory_recall',
+  'fiction_artifact_save',
+  'fiction_character_recall',
 };
 
 class ReaderNavigateTool extends RepositoryTool<JsonMap, Map<String, dynamic>> {
@@ -456,6 +460,161 @@ class ReadingMemoryRecallTool
   }
 }
 
+class FictionArtifactSaveTool
+    extends RepositoryTool<JsonMap, Map<String, dynamic>> {
+  FictionArtifactSaveTool(this._ref)
+      : super(
+          name: 'fiction_artifact_save',
+          description:
+              'Save a source-backed fiction character or mystery at the current spoiler boundary. Explicit requests may write; proactive suggestions only return a preview.',
+          inputJsonSchema: const {
+            'type': 'object',
+            'required': ['kind', 'title', 'userInitiated'],
+            'properties': {
+              'kind': {
+                'type': 'string',
+                'enum': ['character', 'mystery'],
+              },
+              'title': {'type': 'string'},
+              'summary': {'type': 'string'},
+              'aliases': {
+                'type': 'array',
+                'items': {'type': 'string'},
+              },
+              'relationships': {
+                'type': 'array',
+                'items': {'type': 'string'},
+              },
+              'sourceText': {'type': 'string'},
+              'cfi': {'type': 'string'},
+              'userInitiated': {'type': 'boolean'},
+            },
+          },
+        );
+
+  final WidgetRef _ref;
+
+  @override
+  JsonMap parseInput(Map<String, dynamic> json) => json;
+
+  @override
+  Future<Map<String, dynamic>> run(JsonMap input) async {
+    final reading = _ref.read(currentReadingProvider);
+    final book = reading.book;
+    if (!reading.isReading || book == null) {
+      throw StateError('No active reading session');
+    }
+    final state = readingAgentRuntime.state;
+    final kind = input['kind']?.toString();
+    final title = input['title']?.toString().trim() ?? '';
+    final cfi = (state.selection?.cfi ?? input['cfi']?.toString() ?? state.cfi)
+            ?.trim() ??
+        '';
+    final sourceText =
+        (state.selection?.text ?? input['sourceText']?.toString() ?? '').trim();
+    if (!{'character', 'mystery'}.contains(kind) ||
+        title.isEmpty ||
+        (!_isValidCfi(cfi) && (state.chapterHref?.isEmpty ?? true))) {
+      throw ArgumentError('A valid fiction artifact and source are required');
+    }
+    final payload = kind == 'character'
+        ? <String, dynamic>{
+            'name': title,
+            'summary': input['summary']?.toString().trim() ?? '',
+            'aliases': _stringValues(input['aliases']),
+            'relationships': _stringValues(input['relationships']),
+          }
+        : <String, dynamic>{
+            'question': title,
+            'currentTheory': input['summary']?.toString().trim() ?? '',
+          };
+    final preview = {
+      'kind': kind,
+      'payload': payload,
+      'sourceText': sourceText,
+      'cfi': cfi,
+      'chapterHref': state.chapterHref,
+      'discoveredProgress': state.totalProgress,
+    };
+    if (input['userInitiated'] != true) {
+      return {'requiresConfirmation': true, 'preview': preview};
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final mutation = await agentActionService.saveArtifact(ReadingArtifact(
+      id: const Uuid().v4(),
+      bookId: book.id,
+      moduleId: ReadingClosureIds.fictionImmersion,
+      kind: kind == 'character'
+          ? ReadingArtifactKinds.character
+          : ReadingArtifactKinds.mystery,
+      payload: payload,
+      epistemicStatus: ReadingArtifactEpistemicStatus.agentInference,
+      sourceStartCfi: cfi.isEmpty ? null : cfi,
+      sourceTextSnapshot: sourceText,
+      chapterHref: state.chapterHref,
+      chapterTitle: state.chapterTitle,
+      discoveredAtCfi: cfi.isEmpty ? null : cfi,
+      discoveredProgress: state.totalProgress,
+      createdBy: 'agent',
+      createdAt: now,
+      updatedAt: now,
+    ));
+    return {
+      'saved': true,
+      'artifactId': mutation.value.id,
+      'actionId': mutation.action.id,
+      'undoAvailableUntil': mutation.action.expiresAt,
+    };
+  }
+}
+
+class FictionCharacterRecallTool
+    extends RepositoryTool<JsonMap, Map<String, dynamic>> {
+  FictionCharacterRecallTool(this._ref)
+      : super(
+          name: 'fiction_character_recall',
+          description:
+              'Recall a saved fiction character using only artifacts visible at the current reading progress. This never writes or calls another model.',
+          inputJsonSchema: const {
+            'type': 'object',
+            'required': ['query'],
+            'properties': {
+              'query': {'type': 'string'},
+            },
+          },
+        );
+
+  final WidgetRef _ref;
+
+  @override
+  JsonMap parseInput(Map<String, dynamic> json) => json;
+
+  @override
+  Future<Map<String, dynamic>> run(JsonMap input) async {
+    final reading = _ref.read(currentReadingProvider);
+    final book = reading.book;
+    if (!reading.isReading || book == null) {
+      throw StateError('No active reading session');
+    }
+    final result = await fictionReadingService.recallCharacter(
+      bookId: book.id,
+      query: input['query']?.toString() ?? '',
+      currentProgress: readingAgentRuntime.state.totalProgress,
+    );
+    if (result == null) return {'found': false};
+    return {
+      'found': true,
+      'name': result.name,
+      'summary': result.summary,
+      'aliases': result.aliases,
+      'relationships': result.relationships,
+      'epistemicStatus': result.epistemicStatus.name,
+      'sourceCfi': result.source.sourceStartCfi,
+      'discoveredProgress': result.source.discoveredProgress,
+    };
+  }
+}
+
 final readerNavigateToolDefinition = AiToolDefinition(
   id: 'reader_navigate',
   displayNameBuilder: (L10n _) => '阅读器导航',
@@ -498,5 +657,26 @@ final readingMemoryRecallToolDefinition = AiToolDefinition(
   build: (context) => ReadingMemoryRecallTool(context.ref).tool,
 );
 
+final fictionArtifactSaveToolDefinition = AiToolDefinition(
+  id: 'fiction_artifact_save',
+  displayNameBuilder: (L10n _) => '保存小说人物或悬念',
+  descriptionBuilder: (L10n _) => '保存带来源、剧透边界且可撤销的小说档案',
+  build: (context) => FictionArtifactSaveTool(context.ref).tool,
+);
+
+final fictionCharacterRecallToolDefinition = AiToolDefinition(
+  id: 'fiction_character_recall',
+  displayNameBuilder: (L10n _) => '回忆小说人物',
+  descriptionBuilder: (L10n _) => '只读取当前位置之前已保存的人物档案',
+  build: (context) => FictionCharacterRecallTool(context.ref).tool,
+);
+
 bool _isValidCfi(String value) =>
     value.startsWith('epubcfi(') && value.endsWith(')');
+
+List<String> _stringValues(Object? value) => value is List
+    ? value
+        .map((item) => item.toString().trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false)
+    : const [];

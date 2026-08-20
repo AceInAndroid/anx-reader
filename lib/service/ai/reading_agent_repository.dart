@@ -42,8 +42,22 @@ class ReadingAgentRepository {
       _dao.masteryStates(bookId);
   Future<List<KnowledgeCard>> dueKnowledgeCards(int bookId) =>
       _dao.dueKnowledgeCards(bookId, _clock());
+  Future<List<KnowledgeCard>> knowledgeCards(int bookId) =>
+      _dao.knowledgeCards(bookId);
   Future<List<ReadingMemoryDocument>> memoryDocuments(int bookId) =>
       _dao.memoryDocuments(bookId);
+  Future<List<ReadingArtifact>> artifacts(
+    int bookId, {
+    String? kind,
+    ReadingArtifactStatus? status,
+    double? visibleAtProgress,
+  }) =>
+      _dao.artifacts(
+        bookId,
+        kind: kind,
+        status: status,
+        visibleAtProgress: visibleAtProgress,
+      );
 
   Future<ReadingChapterCheckpoint> upsertCheckpoint(
       ReadingChapterCheckpoint checkpoint) async {
@@ -108,6 +122,59 @@ class ReadingAgentRepository {
       await _insertAction(txn, action, now);
       return AgentMutation(value: document, action: action);
     });
+  }
+
+  Future<AgentMutation<ReadingArtifact>> saveArtifact(
+    ReadingArtifact artifact, {
+    required String sessionId,
+  }) async {
+    if (artifact.id.isEmpty ||
+        artifact.bookId <= 0 ||
+        artifact.moduleId.trim().isEmpty ||
+        artifact.kind.trim().isEmpty ||
+        artifact.payload.isEmpty) {
+      throw ArgumentError('Reading artifact requires identity and payload');
+    }
+    if ((artifact.discoveredAtCfi?.trim().isEmpty ?? true) &&
+        (artifact.chapterHref?.trim().isEmpty ?? true) &&
+        artifact.sourceTextSnapshot.trim().isEmpty) {
+      throw ArgumentError('Reading artifact requires a traceable source');
+    }
+    final now = _clock();
+    return _dao.write((txn) async {
+      final before =
+          await _queryOne(txn, 'tb_reading_artifacts', 'id = ?', [artifact.id]);
+      await txn.insert('tb_reading_artifacts', artifact.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      final action = _action(
+        type: AgentActionType.artifact,
+        targetId: artifact.id,
+        bookId: artifact.bookId,
+        sessionId: sessionId,
+        before: before,
+        after: artifact.toDb(),
+        now: now,
+      );
+      await _insertAction(txn, action, now);
+      return AgentMutation(value: artifact, action: action);
+    });
+  }
+
+  /// Persists deterministic local reader state (for example the last settled
+  /// fiction location). This is not AI-authored content and therefore does not
+  /// create an Agent undo entry.
+  Future<ReadingArtifact> saveSystemArtifact(ReadingArtifact artifact) async {
+    if (artifact.id.isEmpty ||
+        artifact.bookId <= 0 ||
+        artifact.payload.isEmpty) {
+      throw ArgumentError('System artifact requires identity and payload');
+    }
+    await _dao.write((txn) => txn.insert(
+          'tb_reading_artifacts',
+          artifact.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        ));
+    return artifact;
   }
 
   /// Location-derived progress is not a separate Agent action. Advance the
@@ -475,6 +542,9 @@ class ReadingAgentRepository {
       case AgentActionType.memory:
         return _queryOne(
             txn, 'tb_reading_memory_documents', 'id = ?', [action.targetId]);
+      case AgentActionType.artifact:
+        return _queryOne(
+            txn, 'tb_reading_artifacts', 'id = ?', [action.targetId]);
     }
   }
 
@@ -530,6 +600,17 @@ class ReadingAgentRepository {
           await txn.insert('tb_reading_memory_documents',
               Map<String, Object?>.from(action.beforeSnapshot!),
               conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+        return;
+      case AgentActionType.artifact:
+        await txn.delete('tb_reading_artifacts',
+            where: 'id = ?', whereArgs: [action.targetId]);
+        if (action.beforeSnapshot != null) {
+          await txn.insert(
+            'tb_reading_artifacts',
+            Map<String, Object?>.from(action.beforeSnapshot!),
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
         }
         return;
     }

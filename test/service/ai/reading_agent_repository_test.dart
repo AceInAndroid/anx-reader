@@ -33,6 +33,7 @@ void main() {
       createReadingNoteAiOrganizerSQL,
       createReadingAgentSQL,
       createReadingClosureSQL,
+      createReadingExperienceModulesSQL,
     ]) {
       for (final statement in sql
           .split(';')
@@ -311,5 +312,29 @@ void main() {
         contains('# Argument'));
     expect(await repository.undo(memory.action.id), UndoResult.undone);
     expect(await repository.memoryDocuments(1), isEmpty);
+  });
+
+  test('source-backed artifact is progress-bounded and undoable', () async {
+    final mutation = await repository.saveArtifact(
+      ReadingArtifact(
+        id: 'character',
+        bookId: 1,
+        moduleId: 'fiction.immersion',
+        kind: ReadingArtifactKinds.character,
+        payload: const {'name': '林先生', 'summary': '在车站出现'},
+        sourceStartCfi: 'epubcfi(/6/4)',
+        sourceTextSnapshot: '林先生站在月台上。',
+        discoveredAtCfi: 'epubcfi(/6/4)',
+        discoveredProgress: .4,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      sessionId: 'session',
+    );
+
+    expect(await repository.artifacts(1, visibleAtProgress: .39), isEmpty);
+    expect(await repository.artifacts(1, visibleAtProgress: .4), hasLength(1));
+    expect(await repository.undo(mutation.action.id), UndoResult.undone);
+    expect(await repository.artifacts(1), isEmpty);
   });
 }

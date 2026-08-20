@@ -91,6 +91,8 @@ class AiToolRegistry {
     readingGoalSetToolDefinition,
     readingMemoryAppendToolDefinition,
     readingMemoryRecallToolDefinition,
+    fictionArtifactSaveToolDefinition,
+    fictionCharacterRecallToolDefinition,
   ];
 
   static final Map<String, AiToolDefinition> _definitionMap = {

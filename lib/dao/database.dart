@@ -13,7 +13,7 @@ import 'package:path/path.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 17;
+const int currentDbVersion = 18;
 
 const createBookSQL = '''
 CREATE TABLE tb_books (
@@ -416,6 +416,53 @@ CREATE TABLE IF NOT EXISTS tb_reading_memory_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_reading_memory_book
 ON tb_reading_memory_documents(book_id, updated_at DESC)
+''';
+
+const createReadingExperienceModulesSQL = '''
+ALTER TABLE tb_agent_actions RENAME TO tb_agent_actions_v17;
+CREATE TABLE tb_agent_actions (
+  id TEXT PRIMARY KEY, action_type TEXT NOT NULL, target_id TEXT NOT NULL,
+  book_id INTEGER, before_snapshot TEXT, after_snapshot TEXT,
+  after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
+  session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL, undone_at INTEGER,
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory', 'artifact')),
+  CHECK(status IN ('applied', 'undone', 'conflict'))
+);
+INSERT INTO tb_agent_actions SELECT * FROM tb_agent_actions_v17;
+DROP TABLE tb_agent_actions_v17;
+CREATE INDEX IF NOT EXISTS idx_agent_actions_recent
+ON tb_agent_actions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_actions_target
+ON tb_agent_actions(action_type, target_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS tb_book_reading_profiles (
+  book_id INTEGER PRIMARY KEY, primary_module_id TEXT NOT NULL,
+  facets_json TEXT NOT NULL DEFAULT '[]', confidence REAL NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0, match_source TEXT NOT NULL DEFAULT 'metadata',
+  schema_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK(confidence >= 0 AND confidence <= 1), CHECK(pinned IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_book_reading_profiles_module
+ON tb_book_reading_profiles(primary_module_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS tb_reading_artifacts (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, module_id TEXT NOT NULL,
+  artifact_kind TEXT NOT NULL, schema_version INTEGER NOT NULL DEFAULT 1,
+  payload_json TEXT NOT NULL DEFAULT '{}', epistemic_status TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active', source_start_cfi TEXT,
+  source_end_cfi TEXT, source_text_snapshot TEXT NOT NULL DEFAULT '',
+  chapter_href TEXT, chapter_title TEXT, discovered_at_cfi TEXT,
+  discovered_progress REAL NOT NULL DEFAULT 0, session_id TEXT,
+  created_by TEXT NOT NULL DEFAULT 'user', created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK(epistemic_status IN ('textFact', 'userReflection', 'agentInference', 'externalFact')),
+  CHECK(status IN ('active', 'resolved', 'retracted')),
+  CHECK(discovered_progress >= 0 AND discovered_progress <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_reading_artifacts_book_kind
+ON tb_reading_artifacts(book_id, artifact_kind, status, discovered_progress);
+CREATE INDEX IF NOT EXISTS idx_reading_artifacts_module_updated
+ON tb_reading_artifacts(module_id, updated_at DESC)
 ''';
 
 class DBHelper {
@@ -851,6 +898,12 @@ class DBHelper {
       case16Migration:
       case 16:
         for (final statement in createReadingClosureSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case17Migration;
+      case17Migration:
+      case 17:
+        for (final statement in createReadingExperienceModulesSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
     }

@@ -5,6 +5,25 @@ import 'package:sqflite/sqflite.dart';
 class ReadingAgentDao extends BaseDao {
   ReadingAgentDao({super.databaseProvider});
 
+  Future<BookReadingProfile?> bookReadingProfile(int bookId) => querySingle(
+        'tb_book_reading_profiles',
+        mapper: BookReadingProfile.fromDb,
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+      );
+
+  Future<void> saveBookReadingProfile(BookReadingProfile profile) => insert(
+        'tb_book_reading_profiles',
+        profile.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+
+  Future<void> deleteBookReadingProfile(int bookId) => delete(
+        'tb_book_reading_profiles',
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+      );
+
   Future<ReadingGoal?> activeGoal(int bookId) => querySingle(
         'tb_reading_goals',
         mapper: ReadingGoal.fromDb,
@@ -114,12 +133,49 @@ class ReadingAgentDao extends BaseDao {
       whereArgs: [bookId, now],
       orderBy: 'due_at ASC');
 
+  Future<List<KnowledgeCard>> knowledgeCards(int bookId) => queryList(
+        'tb_knowledge_cards',
+        mapper: KnowledgeCard.fromDb,
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+        orderBy: 'updated_at DESC',
+      );
+
   Future<List<ReadingMemoryDocument>> memoryDocuments(int bookId) =>
       queryList('tb_reading_memory_documents',
           mapper: ReadingMemoryDocument.fromDb,
           where: 'book_id = ?',
           whereArgs: [bookId],
           orderBy: 'updated_at DESC');
+
+  Future<List<ReadingArtifact>> artifacts(
+    int bookId, {
+    String? kind,
+    ReadingArtifactStatus? status,
+    double? visibleAtProgress,
+  }) {
+    final where = <String>['book_id = ?'];
+    final args = <Object?>[bookId];
+    if (kind != null) {
+      where.add('artifact_kind = ?');
+      args.add(kind);
+    }
+    if (status != null) {
+      where.add('status = ?');
+      args.add(status.name);
+    }
+    if (visibleAtProgress != null) {
+      where.add('discovered_progress <= ?');
+      args.add(visibleAtProgress.clamp(0, 1));
+    }
+    return queryList(
+      'tb_reading_artifacts',
+      mapper: ReadingArtifact.fromDb,
+      where: where.join(' AND '),
+      whereArgs: args,
+      orderBy: 'updated_at DESC',
+    );
+  }
 
   Future<R> write<R>(Future<R> Function(Transaction txn) operation) =>
       transaction(operation);
