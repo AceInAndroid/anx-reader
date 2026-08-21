@@ -1,11 +1,7 @@
-import 'dart:io';
-
 import 'package:anx_reader/dao/database.dart';
 import 'package:anx_reader/models/reading_agent_sync.dart';
+import 'package:anx_reader/service/sync/reading_agent_sync_transport.dart';
 import 'package:anx_reader/service/sync/sync_client_base.dart';
-import 'package:anx_reader/utils/get_path/get_cache_dir.dart';
-import 'package:anx_reader/utils/log/common.dart';
-import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 /// Merges Reading Agent records independently of the legacy whole-database
@@ -14,7 +10,6 @@ import 'package:sqflite/sqflite.dart';
 class ReadingAgentSyncService {
   ReadingAgentSyncService({required this.deviceId});
 
-  static const remoteRoot = '/anx/data/reading-agent';
   final String deviceId;
 
   static const _bookTables = <String>[
@@ -429,63 +424,25 @@ class ReadingAgentSyncService {
   Future<void> synchronize(
     SyncClientBase client, {
     required List<ReadingAgentBookDelta> localBeforeDatabaseSync,
+  }) =>
+      synchronizeWithTransport(
+        WebDavReadingAgentSyncTransport(client: client, deviceId: deviceId),
+        localBeforeDatabaseSync: localBeforeDatabaseSync,
+      );
+
+  Future<void> synchronizeWithTransport(
+    ReadingAgentSyncTransport transport, {
+    List<ReadingAgentBookDelta>? localBeforeDatabaseSync,
   }) async {
-    final remote = await _downloadRemotePackages(client);
-    final localPositions = await merge([...localBeforeDatabaseSync, ...remote]);
+    final local = localBeforeDatabaseSync ?? await capture();
+    await transport.ping();
+    final remote = await transport.downloadPackages(
+      local.map((package) => package.bookKey),
+    );
+    final localPositions = await merge([...local, ...remote]);
     await _restoreLocalBookPositions(localPositions);
     final mergedPackages = await capture();
-    await _uploadPackages(client, mergedPackages);
-  }
-
-  Future<List<ReadingAgentBookDelta>> _downloadRemotePackages(
-      SyncClientBase client) async {
-    final packages = <ReadingAgentBookDelta>[];
-    final cache = await getAnxCacheDir();
-    final bookDirs = await client.safeReadDir(remoteRoot);
-    for (final dir in bookDirs.where((file) => file.isDir == true)) {
-      final name = dir.name;
-      if (name == null || name.isEmpty) continue;
-      final files = await client.safeReadDir('$remoteRoot/$name');
-      for (final file in files.where((entry) => entry.isDir != true)) {
-        if (file.name?.endsWith('.json') != true) continue;
-        final tempPath = p.join(cache.path,
-            'reading_agent_sync_${DateTime.now().microsecondsSinceEpoch}.json');
-        try {
-          await client.downloadFile('$remoteRoot/$name/${file.name}', tempPath);
-          final package =
-              ReadingAgentBookDelta.decode(await File(tempPath).readAsString());
-          packages.add(package);
-        } catch (error) {
-          AnxLog.warning('Ignored invalid Reading Agent sync package: $error');
-        } finally {
-          final temp = File(tempPath);
-          if (await temp.exists()) await temp.delete();
-        }
-      }
-    }
-    return packages;
-  }
-
-  Future<void> _uploadPackages(
-      SyncClientBase client, Iterable<ReadingAgentBookDelta> packages) async {
-    final cache = await getAnxCacheDir();
-    for (final package in packages) {
-      final dir = '$remoteRoot/${_pathSegment(package.bookKey)}';
-      await client.mkdirAll(dir);
-      final tempPath = p.join(cache.path,
-          'reading_agent_upload_${DateTime.now().microsecondsSinceEpoch}.json');
-      final temp = File(tempPath);
-      try {
-        await temp.writeAsString(package.encode(), flush: true);
-        await client.uploadFile(
-          tempPath,
-          '$dir/${_pathSegment(deviceId)}.json',
-          replace: true,
-        );
-      } finally {
-        if (await temp.exists()) await temp.delete();
-      }
-    }
+    await transport.uploadPackages(mergedPackages);
   }
 
   Future<void> _restoreLocalBookPositions(
@@ -510,9 +467,6 @@ class ReadingAgentSyncService {
     final normalized = md5?.trim().toLowerCase();
     return normalized == null || normalized.isEmpty ? 'id-$bookId' : normalized;
   }
-
-  static String _pathSegment(String value) =>
-      value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
 
   static Map<String, dynamic> _withBookId(
           Map<String, dynamic> row, int bookId) =>

@@ -308,3 +308,30 @@ legacy `readingCoach` or its MaterialBanner behavior.
   difficulties, Markdown memories, and Artifacts. Action logs are device-local:
   remote state can be consumed on every device, but cross-device undo is not
   promised in this phase.
+
+## CloudBase Reading Agent Sync
+
+CloudBase is an optional transport for Reading Agent state, not a replacement
+for WebDAV whole-database or book-file sync. Each device uploads an independent
+`ReadingAgentBookDelta`. The local `ReadingAgentSyncService` remains the source
+of truth for tombstones, per-device positions, coverage, goals and Artifact
+merge rules; the server only isolates and returns packages.
+
+- Flutter never contains a CloudBase administrator API Key. The normal flow
+  keeps only an account session token. Legacy sync-space IDs and recovery codes
+  are deliberately unsupported; users sign in with the same account on every
+  device.
+- The account session token is excluded from normal preferences backup/import.
+- CloudBase PG stores only hashes of account sessions and scrypt password
+  hashes. Tables deny direct
+  `anon` and `authenticated` access; the HTTP Function is the only data path.
+- The HTTP Function does not return headers, environment variables or CloudBase
+  context, caps request bodies at 2 MiB, and validates package/path identities.
+- Automatic CloudBase sync is silent. Failures are logged and do not block
+  reading or WebDAV; explicit manual sync reports success or failure.
+- CloudBase sync never invokes an AI model and does not broaden the Reading
+  Agent's spoiler boundary or artifact coverage.
+- New CloudBase sync accounts no longer require an invitation. Registration
+  creates one account-owned sync space, and any number of devices can sign in
+  to that account. Passwords are scrypt-hashed in the function's PG boundary;
+  the account session is the only sync credential exposed to Flutter.

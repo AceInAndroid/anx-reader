@@ -54,6 +54,8 @@ const String prefsBackupVersionKey = '__prefsBackupVersion';
 const int prefsBackupSchemaVersion = 1;
 const String _prefsBackupEntryTypeKey = 'type';
 const String _prefsBackupEntryValueKey = 'value';
+const String defaultCloudBaseSyncEndpoint =
+    'https://mytripmap-d3gxxk1psd0b28d72-1257836777.ap-shanghai.app.tcloudbase.com/v1/anx-reading-sync';
 
 const Set<String> _prefsImportSkipKeys = {
   'iapPurchaseStatus',
@@ -61,6 +63,9 @@ const Set<String> _prefsImportSkipKeys = {
   // Installation identity must never be cloned by backup restore; otherwise
   // two physical devices would overwrite the same Reading Agent sync branch.
   'readingAgentSyncDeviceId',
+  // The bearer token grants access to a private CloudBase sync space. Users
+  // authenticate each device directly, so a backup must never clone it.
+  'cloudBaseSyncAccountToken',
 };
 
 class Prefs extends ChangeNotifier {
@@ -325,6 +330,44 @@ class Prefs extends ChangeNotifier {
 
   bool get webdavStatus {
     return prefs.getBool('webdavStatus') ?? false;
+  }
+
+  bool get cloudBaseSyncEnabled =>
+      prefs.getBool('cloudBaseSyncEnabled') ?? false;
+
+  set cloudBaseSyncEnabled(bool value) {
+    prefs.setBool('cloudBaseSyncEnabled', value);
+    notifyListeners();
+  }
+
+  String get cloudBaseSyncEndpoint =>
+      prefs.getString('cloudBaseSyncEndpoint') ?? defaultCloudBaseSyncEndpoint;
+
+  set cloudBaseSyncEndpoint(String value) {
+    prefs.setString('cloudBaseSyncEndpoint', value.trim());
+    notifyListeners();
+  }
+
+  String get cloudBaseSyncAccountUsername =>
+      prefs.getString('cloudBaseSyncAccountUsername') ?? '';
+
+  set cloudBaseSyncAccountUsername(String value) {
+    prefs.setString('cloudBaseSyncAccountUsername', value.trim());
+    notifyListeners();
+  }
+
+  String get cloudBaseSyncAccountToken =>
+      prefs.getString('cloudBaseSyncAccountToken') ?? '';
+
+  set cloudBaseSyncAccountToken(String value) {
+    prefs.setString('cloudBaseSyncAccountToken', value.trim());
+    notifyListeners();
+  }
+
+  void clearCloudBaseSyncAccount() {
+    prefs.remove('cloudBaseSyncAccountUsername');
+    prefs.remove('cloudBaseSyncAccountToken');
+    notifyListeners();
   }
 
   void saveClearLogWhenStart(bool status) {

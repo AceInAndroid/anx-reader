@@ -107,8 +107,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     AnxToast.init(context);
     checkUpdate(false);
     InitializationCheck.check();
-    if (Prefs().webdavStatus) {
-      await Sync().init();
+    if (Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled) {
+      if (Prefs().webdavStatus) await Sync().init();
       await Sync().syncData(SyncDirection.both, ref, trigger: SyncTrigger.auto);
     }
     loadDefaultFont();

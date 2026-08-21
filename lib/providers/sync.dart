@@ -13,6 +13,7 @@ import 'package:anx_reader/providers/tb_groups.dart';
 import 'package:anx_reader/service/sync/sync_client_factory.dart';
 import 'package:anx_reader/service/sync/sync_client_base.dart';
 import 'package:anx_reader/service/sync/reading_agent_sync_service.dart';
+import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
 import 'package:anx_reader/service/ai/reading_device_identity.dart';
 import 'package:anx_reader/service/database_sync_manager.dart';
 import 'package:anx_reader/dao/database.dart';
@@ -243,13 +244,30 @@ class Sync extends _$Sync {
     WidgetRef? ref, {
     SyncTrigger trigger = SyncTrigger.auto,
   }) async {
-    final client = _syncClient;
-    if (client == null) {
-      AnxLog.info('No sync client configured');
+    if (trigger == SyncTrigger.auto && !Prefs().autoSync) {
       return;
     }
 
-    if (trigger == SyncTrigger.auto && !Prefs().autoSync) {
+    if (Prefs().cloudBaseSyncEnabled) {
+      try {
+        final wifiAllowed = !Prefs().onlySyncWhenWifi ||
+            (await Connectivity().checkConnectivity())
+                .contains(ConnectivityResult.wifi);
+        if (wifiAllowed) {
+          await const CloudBaseReadingSyncCoordinator().synchronize();
+        }
+      } catch (error, stackTrace) {
+        AnxLog.warning(
+          'CloudBase Reading Sync failed: $error\n$stackTrace',
+        );
+        if (trigger == SyncTrigger.manual) {
+          AnxToast.show('CloudBase 阅读同步失败：$error');
+        }
+      }
+    }
+
+    final client = _syncClient;
+    if (!Prefs().webdavStatus || client == null) {
       return;
     }
 

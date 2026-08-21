@@ -163,7 +163,7 @@ class _MyAppState extends ConsumerState<MyApp>
   Future<void> didChangeAppLifecycleState(AppLifecycleState state) async {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      if (Prefs().webdavStatus) {
+      if (Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled) {
         ref
             .read(syncProvider.notifier)
             .syncData(SyncDirection.both, ref, trigger: SyncTrigger.auto);
