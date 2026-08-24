@@ -3,6 +3,7 @@ import 'package:anx_reader/models/reading_note.dart';
 import 'package:anx_reader/models/reading_note_ai.dart';
 import 'package:anx_reader/providers/reading_note_workspace.dart';
 import 'package:anx_reader/service/ai/index.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/reading_note/reading_note_ai_batch_repository.dart';
 import 'package:anx_reader/service/reading_note/reading_note_ai_organizer_service.dart';
 import 'package:anx_reader/service/reading_note/reading_note_repository.dart';
@@ -135,8 +136,10 @@ class ReadingNoteAiOrganizerController
           .toList(),
     );
     try {
-      var generated =
-          await aiGenerateTextWithMetadata([ChatMessage.humanText(prompt)]);
+      var generated = await aiGenerateTextWithMetadata(
+        [ChatMessage.humanText(prompt)],
+        task: AiContextTask.noteOrganizer,
+      );
       List<ReadingNoteAiParsedSuggestion> parsed;
       try {
         parsed = _service.parse(
@@ -148,7 +151,7 @@ class ReadingNoteAiOrganizerController
         generated = await aiGenerateTextWithMetadata([
           ChatMessage.humanText(
               _service.correctionPrompt(prompt, generated.value))
-        ]);
+        ], task: AiContextTask.noteOrganizer);
         parsed = _service.parse(
           generated.value,
           allowedSourceIds: inputs.map((item) => item.sourceId).toSet(),

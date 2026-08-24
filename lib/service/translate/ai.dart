@@ -4,6 +4,7 @@ import 'package:anx_reader/enums/lang_list.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/service/ai/index.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/config/config_item.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/service/translate/translation_ai_provider_resolver.dart';
@@ -227,7 +228,12 @@ Stream<String> _defaultStreamGenerator(
   List<ChatMessage> messages, {
   String? identifier,
 }) {
-  return aiGenerateStream(messages, identifier: identifier, regenerate: false);
+  return aiGenerateStream(
+    messages,
+    identifier: identifier,
+    regenerate: false,
+    task: AiContextTask.translation,
+  );
 }
 
 Future<String> _defaultTextGenerator(
@@ -240,6 +246,7 @@ Future<String> _defaultTextGenerator(
     identifier: identifier,
     regenerate: false,
     allowFallback: allowFallback,
+    task: AiContextTask.translation,
   );
 }
 

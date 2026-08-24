@@ -20,7 +20,8 @@ flowchart TD
   Entry --> Chat[aiGenerateStream/Text]
   Entry --> Runtime[ReadingAgentRuntime]
   Entry --> Outcomes[Closure & Story Atlas 查询]
-  Chat --> Orchestrator[ReadingAgentOrchestrator]
+  Chat --> Context[ContextAssembler 预算 / 摘要 / 缓存]
+  Context --> Orchestrator[ReadingAgentOrchestrator]
   Runtime --> World[ReadingWorldState + 事件总线]
   Orchestrator --> Skill[Reading Skill 注册表]
   Orchestrator --> Policy[Reading Closure Policy]
@@ -57,8 +58,9 @@ flowchart TD
 1. `AiChat.sendMessageStream` 捕获当前书、章节、CFI、进度和会话。
 2. 阅读中由 `ReadingAgentOrchestrator.prepare` 判断是否需要专家；简单任务直接交给主助手，复杂任务最多并行两个专家。
 3. `ReadingSkillMatcher` 选择当前 Reading Skill；普通请求只加载 summary，深度分析或明确方法意图才加载 full guidance。
-4. `aiGenerateStream` 进入统一 LangChain runner，完成 provider 选择、队列、RPM、超时、重试、取消和流式输出。
-5. runner 把服务端 usage 或估算 usage 交给 `AiTokenUsageService`，会话和 trace/citation 写回 AI history。
+4. `ContextAssembler` 在不改写本地完整历史的前提下，为发送给 provider 的副本应用任务预算、最近消息窗口和本地滚动摘要，并合并重复的 Skill/Closure/System 片段。
+5. `aiGenerateStream` 进入统一 LangChain runner，完成 provider 选择、队列、RPM、超时、重试、取消和流式输出。
+6. runner 把服务端 usage 或估算 usage 交给 `AiTokenUsageService`，会话和 trace/citation 写回 AI history。
 
 ### 明确写入与撤销
 
@@ -124,6 +126,18 @@ Artifact 的剧透字段必须保持分离：`sourceProgress` 是内容发生位
 
 AI 设置中的 Token 用量面板展示本月输入、输出、合计和请求数。统一 runner 记录聊天、阅读 Agent、翻译和小说回填等入口；服务端真实 usage 优先，缺失时使用本地估算并标记为估算。按自然月自动切换，数据默认只保存在本机，不参与偏好备份或阅读同步。日志可用于定位 provider、模型、重试和失败，但不得记录 API Key 或不必要的全文正文。
 
+### 上下文预算层
+
+`AiContextAssembler` 位于所有 `aiGenerate*` 公共入口和 provider runner 之间。任务按 `general`、`readingChat`、`translation`、`chapterReview`、`fictionBackfill`、`noteOrganizer` 使用不同的输入上限、预留输出、最近消息数和摘要预算。调用方应显式传入最接近的任务类型；未声明时使用 `general`。
+
+- 本地会话继续保存完整消息；预算只作用于临时 provider prompt 副本。
+- 长会话保留最近消息，较早消息以本地确定性摘要压缩，不为摘要额外调用模型。
+- 最新显式用户消息永远完整保留；单条请求超过预算时允许本次估算超限，而不是静默截断。
+- 输出预算同时映射到 OpenAI/Claude 的 `maxTokens` 与 Gemini 的 `maxOutputTokens`，用户设置更低时保留较低值，更高时按任务上限限制。
+- Skill、Closure、World State 片段按规范化内容去重；Tool Catalog 不再复制到 system prompt，工具 schema 仍由 runner 单独传递。
+- 静态 prompt、World State 和滚动摘要使用小型 LRU；内容 fingerprint 变化自然失效，阅读会话开始/结束时显式清理对应书籍的 World State scope。
+- Token 用量基于最终发送的压缩 prompt 记录；日志只记录估算数量和压缩条数，不记录全文。
+
 ## 11. 安全、隐私与低打扰边界
 
 - API Key 仅从配置读取，不写入 AI history、Artifact 或同步包。
@@ -162,7 +176,7 @@ AI 设置中的 Token 用量面板展示本月输入、输出、合计和请求�
 
 | 主题 | 文件 |
 |---|---|
-| AI 公共入口与供应商 | `lib/service/ai/index.dart`, `langchain_registry.dart`, `langchain_runner.dart`, `langchain_ai_config.dart` |
+| AI 公共入口、上下文与供应商 | `lib/service/ai/index.dart`, `ai_context_assembler.dart`, `langchain_registry.dart`, `langchain_runner.dart`, `langchain_ai_config.dart` |
 | 聊天与历史 | `lib/providers/ai_chat.dart`, `lib/service/ai/ai_history.dart`, `lib/dao/ai_session.dart` |
 | 阅读运行时 | `lib/service/ai/reading_agent_runtime.dart`, `lib/models/reading_agent.dart`, `reading_agent_repository.dart` |
 | 方法与闭环 | `lib/service/ai/reading_skills.dart`, `reading_closure_policy.dart`, `reading_experience_profile_service.dart` |

@@ -1,5 +1,6 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/service/ai/index.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_frameworks.dart';
 import 'package:anx_reader/service/ai/web_search.dart';
@@ -73,12 +74,10 @@ class ReadingAgentOrchestrator {
     final results = await Future.wait(
       tasks.map((task) => _runTask(task, query, mode, ref)),
     );
-    final traces = results
-        .map((result) => result.trace)
-        .toList(growable: false);
-    final citations = results
-        .expand((result) => result.citations)
-        .toList(growable: false);
+    final traces =
+        results.map((result) => result.trace).toList(growable: false);
+    final citations =
+        results.expand((result) => result.citations).toList(growable: false);
     final useful = results
         .where((result) => result.output.trim().isNotEmpty)
         .map((result) => '### ${result.label}\n${result.output}')
@@ -219,30 +218,26 @@ $useful
       );
       final response = await WebSearchService(config: modeConfig).search(query);
       if (response.isSuccess) {
-        sourceContext = response.results
-            .map((result) {
-              sourceUrls.add(result.url.toString());
-              citations.add({
-                'title': result.title,
-                'url': result.url.toString(),
-                'snippet': result.snippet,
-                if (result.publishedAt != null)
-                  'publishedAt': result.publishedAt,
-                'accessedAt': DateTime.fromMillisecondsSinceEpoch(
-                  result.accessedAt ?? DateTime.now().millisecondsSinceEpoch,
-                ).toIso8601String(),
-              });
-              return '- ${result.title}: ${result.snippet} (${result.url})';
-            })
-            .join('\n');
+        sourceContext = response.results.map((result) {
+          sourceUrls.add(result.url.toString());
+          citations.add({
+            'title': result.title,
+            'url': result.url.toString(),
+            'snippet': result.snippet,
+            if (result.publishedAt != null) 'publishedAt': result.publishedAt,
+            'accessedAt': DateTime.fromMillisecondsSinceEpoch(
+              result.accessedAt ?? DateTime.now().millisecondsSinceEpoch,
+            ).toIso8601String(),
+          });
+          return '- ${result.title}: ${result.snippet} (${result.url})';
+        }).join('\n');
       } else {
         degradedDetail = response.detail ?? '未完成联网核查';
       }
     }
 
     try {
-      final prompt =
-          '''你是${task.label}，服务于阅读主助手。只完成一个有边界的专家任务。
+      final prompt = '''你是${task.label}，服务于阅读主助手。只完成一个有边界的专家任务。
 阅读模式：${mode.name}
 用户问题：$query
 ${task.instruction.isEmpty ? '' : '任务方法：${task.instruction}'}
@@ -253,6 +248,7 @@ ${sourceContext.isEmpty ? '联网来源：不可用。请仅使用已有知识�
         useAgent: false,
         ref: ref,
         readingMode: mode,
+        task: AiContextTask.readingChat,
       );
       final failed = output.startsWith('Error:');
       return _AgentResult(
@@ -269,8 +265,8 @@ ${sourceContext.isEmpty ? '联网来源：不可用。请仅使用已有知识�
           status: failed
               ? AgentRunStatus.failed
               : degradedDetail.isNotEmpty
-              ? AgentRunStatus.degraded
-              : AgentRunStatus.completed,
+                  ? AgentRunStatus.degraded
+                  : AgentRunStatus.completed,
           output: failed ? null : output,
           sourceUrls: sourceUrls,
           detail: failed ? output : degradedDetail,

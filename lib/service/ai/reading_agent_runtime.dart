@@ -4,6 +4,7 @@ import 'package:anx_reader/dao/reading_coach.dart' as coach_dao;
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/book_note.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:flutter/foundation.dart';
 import 'package:anx_reader/utils/log/common.dart';
@@ -182,6 +183,7 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
 
   Future<void> start({required int bookId, required String bookTitle}) async {
     await finish();
+    aiContextAssembler.cache.invalidateScope('reading-world:$bookId');
     final now = DateTime.now();
     final sessionId = '$bookId-${now.microsecondsSinceEpoch}';
     final results = await Future.wait<dynamic>([
@@ -382,6 +384,7 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
     _pendingChapterHref = null;
     _pendingCheckpoint = null;
     if (!isActive) return;
+    final bookId = _state.bookId;
     // Flush only the last observed position so goal progress survives exit;
     // intermediate page turns remain memory-only.
     _settleLocation();
@@ -391,6 +394,9 @@ class ReadingAgentRuntimeController extends ChangeNotifier {
     });
     _pendingLocation = null;
     _state = const ReadingWorldState();
+    if (bookId != null) {
+      aiContextAssembler.cache.invalidateScope('reading-world:$bookId');
+    }
     notifyListeners();
   }
 

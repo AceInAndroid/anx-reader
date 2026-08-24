@@ -34,6 +34,7 @@ import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
 import 'package:anx_reader/service/ai/agent_action_service.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/reading_intervention_policy.dart';
 import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
@@ -1681,6 +1682,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           [ChatMessage.humanText(prompt)],
           ref: ref,
           readingMode: ReadingAiMode.general,
+          task: AiContextTask.fictionBackfill,
         ),
         sessionId: sessionId,
         ingestedAt: now,

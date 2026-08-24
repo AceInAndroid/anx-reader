@@ -7,6 +7,7 @@ import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/ai_token_usage_service.dart';
 import 'package:anx_reader/service/ai/langchain_ai_config.dart';
 import 'package:anx_reader/service/ai/langchain_registry.dart';
@@ -105,6 +106,7 @@ Stream<String> aiGenerateStream(
   ReadingAiMode? readingMode,
   ReadingSkillSelection? readingSkill,
   bool allowFallback = true,
+  AiContextTask task = AiContextTask.general,
 }) async* {
   if (useAgent) {
     assert(ref != null, 'ref must be provided when useAgent is true');
@@ -122,6 +124,7 @@ Stream<String> aiGenerateStream(
     regenerate: regenerate,
     useAgent: useAgent,
     registry: registry,
+    task: task,
   );
 
   await for (final chunk in primary.stream) {
@@ -147,6 +150,7 @@ Stream<String> aiGenerateStream(
     regenerate: regenerate,
     useAgent: useAgent,
     registry: registry,
+    task: task,
   );
 
   await for (final chunk in fallback.stream) {
@@ -164,6 +168,7 @@ Future<String> aiGenerateText(
   ReadingAiMode? readingMode,
   ReadingSkillSelection? readingSkill,
   bool allowFallback = true,
+  AiContextTask task = AiContextTask.general,
 }) async {
   String? lastResult;
   await for (final chunk in aiGenerateStream(
@@ -176,6 +181,7 @@ Future<String> aiGenerateText(
     readingMode: readingMode,
     readingSkill: readingSkill,
     allowFallback: allowFallback,
+    task: task,
   )) {
     lastResult = chunk;
   }
@@ -188,6 +194,7 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
   Map<String, String>? config,
   bool regenerate = false,
   WidgetRef? ref,
+  AiContextTask task = AiContextTask.general,
 }) async {
   final registry = LangchainAiRegistry(ref);
   var execution = await _generateStream(
@@ -197,6 +204,7 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
     regenerate: regenerate,
     useAgent: false,
     registry: registry,
+    task: task,
   );
   var value = await _consumeExecution(execution);
   var usedFallback = false;
@@ -214,6 +222,7 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
         regenerate: regenerate,
         useAgent: false,
         registry: registry,
+        task: task,
       );
       value = await _consumeExecution(execution);
     }
@@ -291,6 +300,7 @@ Future<_AiExecutionResult> _generateStream({
   required bool regenerate,
   required bool useAgent,
   required LangchainAiRegistry registry,
+  required AiContextTask task,
 }) async {
   AnxLog.info('aiGenerateStream called identifier: $identifier');
   final sanitizedMessages = _sanitizeMessagesForPrompt(messages);
@@ -311,13 +321,16 @@ Future<_AiExecutionResult> _generateStream({
         final apiKey = AiKeyRotator.getNextKey(provider);
         if (apiKey != null) {
           resolvedProviderId = provider.id;
-          config = LangchainAiConfig.fromProvider(
-            providerId: provider.id,
-            model: provider.model,
-            apiKey: apiKey,
-            url: provider.url,
-            reasoningEffort: provider.reasoningEffort,
-            requestTimeoutSeconds: provider.requestTimeoutSeconds,
+          config = aiContextAssembler.applyOutputBudget(
+            LangchainAiConfig.fromProvider(
+              providerId: provider.id,
+              model: provider.model,
+              apiKey: apiKey,
+              url: provider.url,
+              reasoningEffort: provider.reasoningEffort,
+              requestTimeoutSeconds: provider.requestTimeoutSeconds,
+            ),
+            task,
           );
 
           AnxLog.info(
@@ -340,6 +353,7 @@ Future<_AiExecutionResult> _generateStream({
             registry: registry,
             config: config,
             protocol: provider.protocol,
+            task: task,
           );
 
           result.onSuccess = () {
@@ -390,13 +404,16 @@ Future<_AiExecutionResult> _generateStream({
           final apiKey = AiKeyRotator.getNextKey(provider);
           if (apiKey != null) {
             resolvedProviderId = provider.id;
-            config = LangchainAiConfig.fromProvider(
-              providerId: provider.id,
-              model: provider.model,
-              apiKey: apiKey,
-              url: provider.url,
-              reasoningEffort: provider.reasoningEffort,
-              requestTimeoutSeconds: provider.requestTimeoutSeconds,
+            config = aiContextAssembler.applyOutputBudget(
+              LangchainAiConfig.fromProvider(
+                providerId: provider.id,
+                model: provider.model,
+                apiKey: apiKey,
+                url: provider.url,
+                reasoningEffort: provider.reasoningEffort,
+                requestTimeoutSeconds: provider.requestTimeoutSeconds,
+              ),
+              task,
             );
 
             AnxLog.info(
@@ -419,6 +436,7 @@ Future<_AiExecutionResult> _generateStream({
               registry: registry,
               config: config,
               protocol: provider.protocol,
+              task: task,
             );
 
             result.onSuccess = () {
@@ -493,6 +511,7 @@ Future<_AiExecutionResult> _generateStream({
     );
     config = mergeConfigs(config, override);
   }
+  config = aiContextAssembler.applyOutputBudget(config, task);
 
   AnxLog.info(
     'aiGenerateStream (legacy): $selectedIdentifier, model: ${config.model}, baseUrl: ${config.baseUrl}',
@@ -509,6 +528,7 @@ Future<_AiExecutionResult> _generateStream({
     useAgent: useAgent,
     registry: registry,
     config: config,
+    task: task,
   );
   return result;
 }
@@ -523,6 +543,7 @@ Future<_AiExecutionResult> _executeStream({
   required LangchainAiRegistry registry,
   required LangchainAiConfig config,
   AiProtocol? protocol,
+  required AiContextTask task,
 }) async {
   const maxRetries = 3;
   late final _AiExecutionResult result;
@@ -541,6 +562,7 @@ Future<_AiExecutionResult> _executeStream({
             pipeline: currentPipeline,
             sanitizedMessages: sanitizedMessages,
             useAgent: useAgent,
+            task: task,
           ).timeout(timeout);
 
           await for (final chunk in stream) {
@@ -602,15 +624,31 @@ Stream<String> _createStream({
   required LangchainPipeline pipeline,
   required List<ChatMessage> sanitizedMessages,
   required bool useAgent,
+  required AiContextTask task,
 }) async* {
   final runner = CancelableLangchainRunner(
     onTokenUsage: aiTokenUsageService.record,
   );
   _activeRunners.add(runner);
   try {
+    final assembly = aiContextAssembler.assemble(
+      sanitizedMessages,
+      task: task,
+      systemMessage: pipeline.systemMessage,
+      cacheScope: 'ai:${task.name}',
+    );
+    final promptMessages = assembly.messages;
+    if (assembly.summarizedMessages > 0 || assembly.droppedMessages > 0) {
+      AnxLog.info(
+        'AI context ${task.name}: ${assembly.estimatedInputTokens}/'
+        '${assembly.budget.maxInputTokens} estimated tokens, '
+        '${assembly.summarizedMessages} summarized, '
+        '${assembly.droppedMessages} dropped',
+      );
+    }
     late final Stream<String> stream;
     if (useAgent) {
-      final inputMessage = _latestUserMessage(sanitizedMessages);
+      final inputMessage = _latestUserMessage(promptMessages);
       if (inputMessage == null) {
         yield 'No user input provided';
         return;
@@ -620,15 +658,15 @@ Stream<String> _createStream({
       if (tools.isEmpty) {
         final directMessages = <ChatMessage>[
           if (pipeline.systemMessage != null) pipeline.systemMessage!,
-          ...sanitizedMessages,
+          ...promptMessages,
         ];
         stream = runner.stream(
           model: model,
           prompt: PromptValue.chat(directMessages),
         );
       } else {
-        final historyMessages = sanitizedMessages
-            .sublist(0, sanitizedMessages.length - 1)
+        final historyMessages = promptMessages
+            .sublist(0, promptMessages.length - 1)
             .toList(growable: false);
         stream = runner.streamAgent(
           model: model,
@@ -641,7 +679,7 @@ Stream<String> _createStream({
     } else {
       stream = runner.stream(
         model: model,
-        prompt: PromptValue.chat(sanitizedMessages),
+        prompt: PromptValue.chat(promptMessages),
       );
     }
 
