@@ -182,6 +182,7 @@ class BookReadingCoverage {
 abstract final class ReadingArtifactKinds {
   static const character = 'fiction.character';
   static const relationship = 'fiction.relationship';
+  static const event = 'fiction.event';
   static const mystery = 'fiction.mystery';
   static const clue = 'fiction.clue';
   static const scene = 'fiction.scene';

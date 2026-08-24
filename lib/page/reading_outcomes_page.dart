@@ -3,6 +3,9 @@ import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/page/reading_agent_help_page.dart';
+import 'package:anx_reader/page/fiction_character_graph_page.dart';
+import 'package:anx_reader/page/fiction_story_timeline_page.dart';
+import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_closure_policy.dart';
@@ -25,6 +28,7 @@ class ReadingOutcomesPage extends ConsumerStatefulWidget {
     this.closureTypeOverride,
     this.closureIdOverride,
     this.closureRegistry = const ReadingClosurePolicyRegistry(),
+    this.onOrganizeStoryArchive,
   });
 
   final Book book;
@@ -37,6 +41,7 @@ class ReadingOutcomesPage extends ConsumerStatefulWidget {
   final ReadingClosureType? closureTypeOverride;
   final String? closureIdOverride;
   final ReadingClosurePolicyRegistry closureRegistry;
+  final Future<void> Function()? onOrganizeStoryArchive;
 
   @override
   ConsumerState<ReadingOutcomesPage> createState() =>
@@ -106,6 +111,16 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
         (widget.service ?? readingOutcomesService).load(widget.book.id);
     setState(() => _snapshot = next);
     await next;
+  }
+
+  Future<void> _organizeStoryArchive() async {
+    final callback = widget.onOrganizeStoryArchive;
+    if (callback == null) {
+      AnxToast.show('请从阅读页打开本书阅读成果后整理已读章节');
+      return;
+    }
+    await callback();
+    if (mounted) await _reload();
   }
 
   Future<void> _openLocation(String cfi) async {
@@ -206,6 +221,10 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
       description: widget.book.description ?? '',
       pinnedId: pinnedClosureId,
     );
+    final atlas = fictionStoryAtlasService.fromArtifacts(
+      state.artifacts,
+      visibleAtProgress: widget.book.readingPercentage,
+    );
     return RefreshIndicator(
       onRefresh: _reload,
       child: ListView(
@@ -255,6 +274,10 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
             ),
           ),
           const SizedBox(height: 16),
+          if (closure.supports(ReadingClosureCapability.storyAtlas)) ...[
+            _buildStoryAtlasCard(atlas),
+            const SizedBox(height: 16),
+          ],
           if (state.isEmpty) _buildEmptyState(),
           for (final section in closure.outcomeSections)
             if (section.visibleWhenEmpty ||
@@ -268,6 +291,89 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
         ],
       ),
     );
+  }
+
+  Widget _buildStoryAtlasCard(FictionStoryAtlas atlas) {
+    final unresolved = atlas.timeline.where((event) => event.isMystery).length;
+    final coverage = atlas.coverageStart == null
+        ? '尚未建档'
+        : '${(atlas.coverageStart! * 100).round()}%～${(atlas.coverageEnd! * 100).round()}%';
+    final lastUpdated = atlas.lastIngestedAt == null
+        ? '尚未整理'
+        : _shortDate(atlas.lastIngestedAt!);
+    return Card.filled(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(Icons.menu_book_outlined,
+                color: Theme.of(context).colorScheme.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text('小说故事档案',
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            Text('安全边界 ${(widget.book.readingPercentage * 100).round()}%',
+                style: Theme.of(context).textTheme.labelMedium),
+          ]),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            _AtlasMetric(label: '人物', value: atlas.characters.length),
+            _AtlasMetric(label: '关系', value: atlas.relationships.length),
+            _AtlasMetric(label: '事件', value: atlas.timeline.length),
+            _AtlasMetric(label: '未解', value: unresolved),
+          ]),
+          const SizedBox(height: 12),
+          Text('档案覆盖 $coverage · 最近整理 $lastUpdated',
+              style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 14),
+          Wrap(spacing: 8, runSpacing: 8, children: [
+            FilledButton.tonalIcon(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => FictionCharacterGraphPage(
+                  book: widget.book,
+                  initialAtlas: atlas,
+                  onOpenLocation: _openLocation,
+                  onRequestOrganize: widget.onOrganizeStoryArchive == null
+                      ? null
+                      : _organizeStoryArchive,
+                ),
+              )),
+              icon: const Icon(Icons.hub_outlined),
+              label: const Text('人物关系图'),
+            ),
+            FilledButton.tonalIcon(
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => FictionStoryTimelinePage(
+                  book: widget.book,
+                  initialAtlas: atlas,
+                  onOpenLocation: _openLocation,
+                  onRequestOrganize: widget.onOrganizeStoryArchive == null
+                      ? null
+                      : _organizeStoryArchive,
+                ),
+              )),
+              icon: const Icon(Icons.timeline),
+              label: const Text('故事时间线'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _organizeStoryArchive,
+              icon: const Icon(Icons.auto_awesome_outlined),
+              label: const Text('整理/更新故事档案'),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          Text('打开图谱不会调用 AI；只有确认整理已读范围后才会读取正文。',
+              style: Theme.of(context).textTheme.bodySmall),
+        ]),
+      ),
+    );
+  }
+
+  String _shortDate(int timestamp) {
+    final date = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
+    return '${date.month}月${date.day}日';
   }
 
   int _outcomeCount(
@@ -422,6 +528,22 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
       ),
     );
   }
+}
+
+class _AtlasMetric extends StatelessWidget {
+  const _AtlasMetric({required this.label, required this.value});
+  final String label;
+  final int value;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Text('$label $value'),
+      );
 }
 
 class _OutcomeHero extends StatelessWidget {

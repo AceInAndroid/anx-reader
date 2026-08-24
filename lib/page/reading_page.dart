@@ -1516,7 +1516,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
   }
 
-  List<FictionBackfillChapter> _eligibleBackfillChapters(double boundary) {
+  List<FictionBackfillChapter> _eligibleBackfillChapters(
+    double boundary, {
+    double fromProgress = 0,
+  }) {
     final result = <FictionBackfillChapter>[];
     void addItems(List<TocItem> items) {
       for (final item in items) {
@@ -1550,7 +1553,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
               index + 1 < unique.length ? unique[index + 1].startProgress : 1,
         ),
     ]
-        .where((chapter) => chapter.endProgress! <= boundary + .000001)
+        .where((chapter) =>
+            chapter.startProgress >= fromProgress - .000001 &&
+            chapter.endProgress! <= boundary + .000001)
         .toList(growable: false);
   }
 
@@ -1614,14 +1619,25 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   }
 
   Future<void> _confirmAndBackfill(BookReadingCoverage coverage) async {
-    final chapters = _eligibleBackfillChapters(coverage.safeKnowledgeBoundary);
+    // Pending setup means the reader explicitly chose to backfill the already
+    // read prefix. After "from here", the persisted coverage start is the
+    // lower bound, so a fresh device never treats unseen earlier chapters as
+    // locally read just because another device has a farther position.
+    final fromProgress = coverage.setupPending
+        ? 0.0
+        : coverage.artifactCoverageStart.clamp(0, 1).toDouble();
+    final chapters = _eligibleBackfillChapters(
+      coverage.safeKnowledgeBoundary,
+      fromProgress: fromProgress,
+    );
     final percent = (coverage.safeKnowledgeBoundary * 100).round();
+    final fromPercent = (fromProgress * 100).round();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('确认整理已读部分'),
         content: Text(
-          '将读取 $percent% 之前已完整读完的 ${chapters.length} 个目录章节并调用 AI 建立人物、关系和悬念档案。为避免越过边界，当前尚未读完的章节不会读取。\n\n生成内容属于 Agent 推断，可在动作记录中撤销。',
+          '将读取 $fromPercent%～$percent% 内已完整读完的 ${chapters.length} 个目录章节并调用 AI 建立人物、关系和悬念档案。为避免越过边界，当前尚未读完的章节不会读取。\n\n生成内容属于 Agent 推断，可在动作记录中撤销。',
         ),
         actions: [
           TextButton(
@@ -1639,6 +1655,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       final now = DateTime.now().millisecondsSinceEpoch;
       final sessionId = readingAgentRuntime.state.sessionId;
       if (sessionId == null) throw StateError('阅读会话尚未开始');
+      final existingArtifacts =
+          await readingAgentRepository.artifacts(_book.id);
       final artifacts = await fictionBackfillService.build(
         bookId: _book.id,
         moduleId: ReadingClosureIds.fictionImmersion,
@@ -1654,6 +1672,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         ),
         sessionId: sessionId,
         ingestedAt: now,
+        fromProgress: fromProgress,
+        existingArtifacts: existingArtifacts,
       );
       for (final artifact in artifacts) {
         await agentActionService.saveArtifact(artifact);
@@ -2280,6 +2300,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       MaterialPageRoute(
         builder: (_) => ReadingOutcomesPage(
           book: _book,
+          onOrganizeStoryArchive: () async {
+            Navigator.of(context).pop();
+            final coverage = _readingCoverage;
+            if (coverage != null) await _confirmAndBackfill(coverage);
+          },
           onOpenLocation: (target) async {
             if (!mounted) return;
             Navigator.of(context).pop();
@@ -2389,6 +2414,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   ),
                   actions: [
                     if (EnvVar.enableAIFeature) aiButton,
+                    IconButton(
+                      tooltip: '本书阅读成果',
+                      onPressed: _showReadingOutcomes,
+                      icon: const Icon(Icons.auto_graph_outlined),
+                    ),
                     if (Prefs().cloudBaseSyncEnabled)
                       IconButton(
                         tooltip:
@@ -2450,7 +2480,40 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                         Navigator.push(
                           context,
                           CupertinoPageRoute(
-                            builder: (context) => BookDetail(book: widget.book),
+                            builder: (context) => BookDetail(
+                              book: widget.book,
+                              onOrganizeStoryArchive: () async {
+                                final readerRoute = ModalRoute.of(context);
+                                if (readerRoute != null) {
+                                  Navigator.of(context).popUntil(
+                                    (route) => route == readerRoute,
+                                  );
+                                }
+                                final coverage = _readingCoverage;
+                                if (coverage != null) {
+                                  await _confirmAndBackfill(coverage);
+                                }
+                              },
+                              onOpenReadingLocation: (target) async {
+                                final readerRoute = ModalRoute.of(context);
+                                if (readerRoute != null) {
+                                  Navigator.of(context).popUntil(
+                                    (route) => route == readerRoute,
+                                  );
+                                }
+                                if (target.startsWith('epubcfi(')) {
+                                  ReaderCommandGateway.instance.navigateToCfi(
+                                    bookId: _book.id,
+                                    cfi: target,
+                                  );
+                                } else {
+                                  ReaderCommandGateway.instance.navigateToHref(
+                                    bookId: _book.id,
+                                    href: target,
+                                  );
+                                }
+                              },
+                            ),
                           ),
                         );
                       },

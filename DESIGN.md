@@ -258,6 +258,35 @@ legacy `readingCoach` or its MaterialBanner behavior.
   page turn or session start. On the next session, availability is shown only
   in the passive controls-attached capsule; details open after the reader taps.
 
+### Fiction Story Atlas
+
+- The character graph and story timeline are projections of synchronized
+  Reading Artifacts, not new database truth sources. `fiction.character`,
+  `fiction.relationship`, and `fiction.event` remain forward-compatible kinds;
+  unknown kinds are preserved by sync and safely ignored by these views.
+- Both views filter with `visibleFromProgress` at the book's current position.
+  Relationship history is ordered by source position and the latest visible
+  revision becomes the current edge. Returning to an earlier position hides
+  later characters, events, and relationship revisions.
+- Timeline order is narrative encounter order (`sourceProgress`, source CFI,
+  then creation order). `storyTimeLabel` is display-only; missing story time is
+  shown as unknown rather than inferred into a false calendar date.
+- Opening an atlas page never invokes a model. Organizing or updating is only
+  available from an active reader, previews the completed safe chapter range,
+  and calls AI after explicit confirmation. Stable content-derived Artifact
+  ids make repeated organization idempotent and every accepted write remains
+  in the Agent action/undo path.
+- Backfill uses the persisted Artifact coverage start as its lower bound after
+  the reader chooses “from here”. A first-run “整理已读部分” explicitly opts
+  into the 0% prefix. Synced Artifacts can therefore restore work from another
+  device without treating this device's unseen prefix as locally read; only
+  the missing range inside the confirmed safe boundary is considered.
+- Character nodes use local first-character avatars only. No portrait is
+  generated or downloaded. Phones use a zoomable graph with bottom details and
+  a vertical timeline; wide layouts reserve a details rail and use a horizontal
+  alternating timeline. Entry visibility is capability-driven (`storyAtlas`),
+  not a hard-coded closure id.
+
 ### Mid-book Reading Agent activation
 
 - `currentPosition`, `safeKnowledgeBoundary`, and Artifact coverage are three

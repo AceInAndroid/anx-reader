@@ -51,6 +51,7 @@ enum ReadingClosureCapability {
   readingArtifacts,
   spoilerBoundary,
   resumeContext,
+  storyAtlas,
 }
 
 enum ReadingOutcomeSource {
@@ -286,6 +287,7 @@ class ReadingClosurePolicyRegistry {
       ReadingClosureCapability.readingArtifacts,
       ReadingClosureCapability.spoilerBoundary,
       ReadingClosureCapability.resumeContext,
+      ReadingClosureCapability.storyAtlas,
     },
     heroUnresolvedLabel: '未解悬念',
     immersive: true,

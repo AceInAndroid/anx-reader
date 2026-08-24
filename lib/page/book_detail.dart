@@ -32,9 +32,16 @@ import 'package:flutter_rating_bar/flutter_rating_bar.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class BookDetail extends ConsumerStatefulWidget {
-  const BookDetail({super.key, required this.book});
+  const BookDetail({
+    super.key,
+    required this.book,
+    this.onOrganizeStoryArchive,
+    this.onOpenReadingLocation,
+  });
 
   final Book book;
+  final Future<void> Function()? onOrganizeStoryArchive;
+  final Future<void> Function(String target)? onOpenReadingLocation;
 
   @override
   ConsumerState<BookDetail> createState() => _BookDetailState();
@@ -63,6 +70,20 @@ class _BookDetailState extends ConsumerState<BookDetail> {
 
   @override
   Widget build(BuildContext context) {
+    Future<void> organizeStoryArchive() async {
+      final callback = widget.onOrganizeStoryArchive;
+      if (callback == null) return;
+      Navigator.of(context).pop();
+      await callback();
+    }
+
+    Future<void> openReadingLocation(String target) async {
+      final callback = widget.onOpenReadingLocation;
+      if (callback == null) return;
+      Navigator.of(context).pop();
+      await callback(target);
+    }
+
     Widget buildBackground() {
       var bg = ShaderMask(
         shaderCallback: (rect) {
@@ -500,7 +521,15 @@ class _BookDetailState extends ConsumerState<BookDetail> {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => ReadingOutcomesPage(book: _book),
+              builder: (context) => ReadingOutcomesPage(
+                book: _book,
+                onOrganizeStoryArchive: widget.onOrganizeStoryArchive == null
+                    ? null
+                    : organizeStoryArchive,
+                onOpenLocation: widget.onOpenReadingLocation == null
+                    ? null
+                    : openReadingLocation,
+              ),
             ),
           ),
         ),

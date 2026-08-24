@@ -201,6 +201,9 @@ void main() {
     );
 
     expect(find.text('小说沉浸闭环'), findsOneWidget);
+    expect(find.text('小说故事档案'), findsOneWidget);
+    expect(find.text('人物关系图'), findsOneWidget);
+    expect(find.text('故事时间线'), findsOneWidget);
     expect(find.text('故事记忆'), findsOneWidget);
     expect(find.text('未解悬念'), findsWidgets);
     expect(find.text('章节掌握度'), findsNothing);
