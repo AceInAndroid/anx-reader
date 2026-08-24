@@ -46,6 +46,7 @@ class SyncSetting extends ConsumerStatefulWidget {
 class _SyncSettingState extends ConsumerState<SyncSetting> {
   @override
   Widget build(BuildContext context) {
+    final isSyncing = ref.watch(syncProvider).isSyncing;
     return settingsSections(
       sections: [
         SettingsSection(
@@ -87,8 +88,8 @@ class _SyncSettingState extends ConsumerState<SyncSetting> {
             SettingsTile.navigation(
                 title: Text(L10n.of(context).settingsSyncWebdavSyncNow),
                 leading: const Icon(Icons.sync_alt),
-                // value: Text(Prefs().syncDirection),
-                enabled: Prefs().webdavStatus,
+                value: isSyncing ? Text(L10n.of(context).webdavSyncing) : null,
+                enabled: Prefs().webdavStatus && !isSyncing,
                 onPressed: (context) {
                   chooseDirection(ref);
                 }),
