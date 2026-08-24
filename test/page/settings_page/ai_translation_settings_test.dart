@@ -35,6 +35,9 @@ void main() {
         findsOneWidget);
     expect(find.byKey(const ValueKey('ai-fallback-provider-card')),
         findsOneWidget);
+    expect(find.text('Token 用量'), findsOneWidget);
+    expect(find.text('输入'), findsOneWidget);
+    expect(find.text('输出'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

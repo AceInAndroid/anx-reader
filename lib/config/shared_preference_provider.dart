@@ -70,6 +70,9 @@ const Set<String> _prefsImportSkipKeys = {
   // reader explicitly chose "from here" and must not be imported as another
   // device's local reading history.
   'readingAgentLocalBackfillStarts',
+  // Usage counters are device-local diagnostics. Importing them would merge
+  // unrelated devices and make the displayed monthly total misleading.
+  'aiTokenUsageMonthly',
 };
 
 class Prefs extends ChangeNotifier {

@@ -11,6 +11,7 @@ import 'package:anx_reader/providers/ai_cache_count.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/providers/user_prompts.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
+import 'package:anx_reader/service/ai/ai_token_usage_service.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/web_search.dart';
 import 'package:anx_reader/widgets/common/anx_button.dart';
@@ -222,6 +223,7 @@ class _AISettingsState extends ConsumerState<AISettings> {
           rpmTile: _AiRpmTile(setState: () => setState(() {})),
         ),
       ),
+      _tokenUsageSection(),
       SettingsSection(
         title: Text(L10n.of(context).settingsAiChatDisplay),
         tiles: [
@@ -395,6 +397,98 @@ class _AISettingsState extends ConsumerState<AISettings> {
         ],
       ),
     ]);
+  }
+
+  SettingsSection _tokenUsageSection() {
+    final usage = aiTokenUsageService.snapshot();
+    final since = DateTime.fromMillisecondsSinceEpoch(usage.startedAt);
+    final estimateText = usage.containsEstimates
+        ? '其中 ${usage.estimatedRequests} 次因供应商未返回 usage，使用本地估算'
+        : '当前记录均来自供应商返回的 usage';
+    return SettingsSection(
+      title: const Text('Token 用量'),
+      tiles: [
+        CustomSettingsTile(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${usage.month} 本月累计',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 24,
+                  runSpacing: 12,
+                  children: [
+                    _TokenUsageValue(
+                      label: '输入',
+                      value: _formatTokenCount(usage.inputTokens),
+                    ),
+                    _TokenUsageValue(
+                      label: '输出',
+                      value: _formatTokenCount(usage.outputTokens),
+                    ),
+                    _TokenUsageValue(
+                      label: '合计',
+                      value: _formatTokenCount(usage.totalTokens),
+                    ),
+                    _TokenUsageValue(
+                      label: '请求',
+                      value: '${usage.requests} 次',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  '$estimateText。统计始于 ${since.year}-${since.month.toString().padLeft(2, '0')}-${since.day.toString().padLeft(2, '0')}，仅保存在本机。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ),
+        SettingsTile.navigation(
+          leading: const Icon(Icons.restart_alt),
+          title: const Text('重置本月统计'),
+          description: const Text('只清除本机 Token 计数，不影响 AI 配置和聊天记录'),
+          onPressed: (_) async {
+            final confirmed = await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('重置 Token 用量？'),
+                content: const Text('本机保存的本月输入、输出和请求次数将归零。'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: Text(L10n.of(context).commonCancel),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: Text(L10n.of(context).commonConfirm),
+                  ),
+                ],
+              ),
+            );
+            if (confirmed != true) return;
+            aiTokenUsageService.reset();
+            if (mounted) setState(() {});
+          },
+        ),
+      ],
+    );
+  }
+
+  String _formatTokenCount(int value) {
+    final digits = value.toString();
+    final buffer = StringBuffer();
+    for (var index = 0; index < digits.length; index++) {
+      if (index > 0 && (digits.length - index) % 3 == 0) buffer.write(',');
+      buffer.write(digits[index]);
+    }
+    return buffer.toString();
   }
 
   AbstractSettingsTile _readingModeTile() {
@@ -1663,4 +1757,24 @@ class _AiRpmTileState extends State<_AiRpmTile> {
       ),
     );
   }
+}
+
+class _TokenUsageValue extends StatelessWidget {
+  const _TokenUsageValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: 88,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 2),
+            Text(value, style: Theme.of(context).textTheme.titleMedium),
+          ],
+        ),
+      );
 }

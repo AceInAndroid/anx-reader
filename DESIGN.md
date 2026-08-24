@@ -1,5 +1,11 @@
 # Anx Reader Product Design Decisions
 
+## AI 架构索引
+
+当前 AI 分层、调用链、持久化归属、同步边界、Token 用量统计和扩展契约见
+[`docs/architecture/ai-architecture.md`](docs/architecture/ai-architecture.md)。
+本文继续作为产品行为、权限、剧透边界和低打扰交互的事实来源。
+
 ## Reading Agent Beta — Phase 1
 
 ### Intent

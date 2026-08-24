@@ -7,6 +7,7 @@ import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
+import 'package:anx_reader/service/ai/ai_token_usage_service.dart';
 import 'package:anx_reader/service/ai/langchain_ai_config.dart';
 import 'package:anx_reader/service/ai/langchain_registry.dart';
 import 'package:anx_reader/service/ai/langchain_runner.dart';
@@ -602,7 +603,9 @@ Stream<String> _createStream({
   required List<ChatMessage> sanitizedMessages,
   required bool useAgent,
 }) async* {
-  final runner = CancelableLangchainRunner();
+  final runner = CancelableLangchainRunner(
+    onTokenUsage: aiTokenUsageService.record,
+  );
   _activeRunners.add(runner);
   try {
     late final Stream<String> stream;

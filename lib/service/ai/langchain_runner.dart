@@ -5,8 +5,17 @@ import 'package:anx_reader/utils/ai_reasoning_parser.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:langchain/langchain.dart';
 
+typedef AiTokenUsageRecorder = void Function({
+  required int inputTokens,
+  required int outputTokens,
+  required bool estimated,
+});
+
 class CancelableLangchainRunner {
+  CancelableLangchainRunner({this.onTokenUsage});
+
   static const String thinkTag = '<think/>';
+  final AiTokenUsageRecorder? onTokenUsage;
   StreamSubscription<ChatResult>? _subscription;
   StreamController<String>? _controller;
   BaseChatModel? _activeModel;
@@ -39,6 +48,7 @@ class CancelableLangchainRunner {
     String answerBuffer = '';
     bool reasoningDetected = false;
     bool answerPhaseStarted = false;
+    LanguageModelUsage? usage;
 
     late StreamController<String> controller;
     controller = StreamController<String>(
@@ -46,6 +56,7 @@ class CancelableLangchainRunner {
         final source = model.stream(prompt);
         _subscription = source.listen(
           (event) {
+            usage = _mergeUsage(usage, event.usage);
             final rawChunk = event.output.content;
             final reasoningChunk = event.output.reasoningContent;
             if (rawChunk.isEmpty && reasoningChunk.isEmpty) {
@@ -94,6 +105,11 @@ class CancelableLangchainRunner {
             }
           },
           onDone: () async {
+            _recordUsage(
+              usage,
+              prompt: prompt.toChatMessages(),
+              response: '$thinkBuffer$answerBuffer',
+            );
             await _closeModel(model);
             if (!controller.isClosed) {
               await controller.close();
@@ -271,6 +287,12 @@ class CancelableLangchainRunner {
           }
 
           final message = aggregated!.output;
+          _recordUsage(
+            aggregated!.usage,
+            prompt: promptMessages,
+            response:
+                '${message.reasoningContent}${message.content}${message.toolCalls}',
+          );
           final hydratedMessage = _hydrateToolArguments(message);
           final actions = await parser.parseChatMessage(hydratedMessage);
 
@@ -368,6 +390,65 @@ class CancelableLangchainRunner {
     });
 
     return controller.stream;
+  }
+
+  LanguageModelUsage? _mergeUsage(
+    LanguageModelUsage? current,
+    LanguageModelUsage next,
+  ) {
+    if (!_hasUsage(next)) return current;
+    return current == null ? next : current.concat(next);
+  }
+
+  bool _hasUsage(LanguageModelUsage usage) =>
+      (usage.promptTokens ?? 0) > 0 ||
+      (usage.responseTokens ?? 0) > 0 ||
+      (usage.totalTokens ?? 0) > 0;
+
+  void _recordUsage(
+    LanguageModelUsage? usage, {
+    required List<ChatMessage> prompt,
+    required String response,
+  }) {
+    final recorder = onTokenUsage;
+    if (recorder == null) return;
+    if (usage != null && _hasUsage(usage)) {
+      final total = usage.totalTokens;
+      final reportedInput = usage.promptTokens;
+      final reportedOutput = usage.responseTokens;
+      if (reportedInput != null || reportedOutput != null) {
+        final input = reportedInput ??
+            ((total ?? reportedOutput ?? 0) - (reportedOutput ?? 0))
+                .clamp(0, 1 << 62);
+        final output = reportedOutput ??
+            ((total ?? reportedInput ?? 0) - (reportedInput ?? 0))
+                .clamp(0, 1 << 62);
+        recorder(inputTokens: input, outputTokens: output, estimated: false);
+        return;
+      }
+    }
+    recorder(
+      inputTokens: _estimateTokens(
+        prompt.map((message) => message.contentAsString).join('\n'),
+      ),
+      outputTokens: _estimateTokens(response),
+      estimated: true,
+    );
+  }
+
+  int _estimateTokens(String text) {
+    if (text.isEmpty) return 0;
+    var cjk = 0;
+    var other = 0;
+    for (final rune in text.runes) {
+      if ((rune >= 0x3400 && rune <= 0x9fff) ||
+          (rune >= 0xf900 && rune <= 0xfaff)) {
+        cjk++;
+      } else {
+        other++;
+      }
+    }
+    return cjk + (other / 4).ceil();
   }
 
   ChatResult _normalizeThinkChunk(ChatResult chunk) {
