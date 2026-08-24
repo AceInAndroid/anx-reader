@@ -98,7 +98,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 20);
+    expect(currentDbVersion, 21);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -319,7 +319,7 @@ void main() {
     );
   });
 
-  test('database migration from version 7 through version 20 succeeds',
+  test('database migration from version 7 through current version succeeds',
       () async {
     final db = await openTempDb('upgrade_v7_to_v15.db');
     addTearDown(db.close);
@@ -424,6 +424,33 @@ void main() {
     expect(
       positionColumns.map((row) => row['name']).toSet(),
       containsAll({'book_id', 'device_id', 'cfi', 'progress', 'updated_at'}),
+    );
+  });
+
+  test('version 21 creates durable reading tasks', () async {
+    final db = await openTempDb('reading_tasks_v21.db');
+    addTearDown(db.close);
+
+    await helper.onUpgradeDatabase(db, 20, currentDbVersion);
+
+    final tables = await db.rawQuery('''
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'tb_reading_tasks'
+    ''');
+    expect(tables, hasLength(1));
+    final columns = await db.rawQuery('PRAGMA table_info(tb_reading_tasks)');
+    expect(
+      columns.map((row) => row['name']).toSet(),
+      containsAll({
+        'id',
+        'task_type',
+        'priority',
+        'persistence',
+        'status',
+        'payload_json',
+        'checkpoint_json',
+        'progress',
+      }),
     );
   });
 }

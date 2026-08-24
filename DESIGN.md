@@ -6,6 +6,28 @@
 [`docs/architecture/ai-architecture.md`](docs/architecture/ai-architecture.md)。
 本文继续作为产品行为、权限、剧透边界和低打扰交互的事实来源。
 
+## Reading Task Runtime — P1
+
+- AI and reading work uses one stable task lifecycle: `queued`, `running`,
+  `paused`, `completed`, `failed`, or `cancelled`. Terminal tasks cannot be
+  silently restarted; failed tasks require an explicit retry.
+- Priorities are `background`, `normal`, `userInitiated`, and `critical`.
+  Higher-priority work may cooperatively preempt pausable work. Equal priority
+  remains FIFO. The scheduler runs one task at a time so provider limits and
+  persistent writes stay predictable.
+- Pause, cancel, and preemption take effect only at declared safe points
+  between chapter loads, model calls, and database writes. A transaction or an
+  in-flight provider response is never force-killed midway.
+- Durable tasks persist immutable input payload, progress, resumable
+  checkpoint, attempt count, timestamps, and error. Ephemeral tasks remain
+  memory-only.
+- After process restart, formerly queued or running durable tasks restore as
+  `paused`. They never resume a cloud request automatically. The owning
+  feature must register its executor again and the user must resume it.
+- Fiction backfill is the first durable workload using the scheduler. Its
+  existing per-batch Artifact checkpoints remain the data-level source of
+  truth, while `ReadingTask` tracks scheduling state and visible progress.
+
 ## Reading Agent Beta — Phase 1
 
 ### Intent

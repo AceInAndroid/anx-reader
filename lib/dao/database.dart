@@ -16,7 +16,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 20;
+const int currentDbVersion = 21;
 
 String _canonicalHash(Object? value) => sha256
     .convert(utf8.encode(jsonEncode(_canonicalDatabaseValue(value))))
@@ -557,6 +557,27 @@ CREATE INDEX IF NOT EXISTS idx_reading_sync_tombstones_book
 ON tb_reading_sync_tombstones(book_id, deleted_at DESC)
 ''';
 
+const createReadingTasksSQL = '''
+CREATE TABLE IF NOT EXISTS tb_reading_tasks (
+  id TEXT PRIMARY KEY, task_type TEXT NOT NULL, book_id INTEGER,
+  priority TEXT NOT NULL DEFAULT 'normal',
+  persistence TEXT NOT NULL DEFAULT 'ephemeral',
+  status TEXT NOT NULL DEFAULT 'queued', payload_json TEXT NOT NULL DEFAULT '{}',
+  checkpoint_json TEXT NOT NULL DEFAULT '{}', progress REAL NOT NULL DEFAULT 0,
+  can_pause INTEGER NOT NULL DEFAULT 1, attempts INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  started_at INTEGER, finished_at INTEGER, error TEXT,
+  CHECK(priority IN ('background', 'normal', 'userInitiated', 'critical')),
+  CHECK(persistence IN ('ephemeral', 'durable')),
+  CHECK(status IN ('queued', 'running', 'paused', 'completed', 'failed', 'cancelled')),
+  CHECK(progress >= 0 AND progress <= 1), CHECK(can_pause IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_reading_tasks_schedulable
+ON tb_reading_tasks(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_reading_tasks_book_updated
+ON tb_reading_tasks(book_id, updated_at DESC)
+''';
+
 class DBHelper {
   static final DBHelper _instance = DBHelper._internal();
   static Database? _database;
@@ -1009,6 +1030,12 @@ class DBHelper {
       case19Migration:
       case 19:
         for (final statement in createReadingAgentSyncSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
+        continue case20Migration;
+      case20Migration:
+      case 20:
+        for (final statement in createReadingTasksSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
     }

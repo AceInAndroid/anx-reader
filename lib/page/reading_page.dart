@@ -18,6 +18,7 @@ import 'package:anx_reader/providers/reading_coach.dart';
 import 'package:anx_reader/service/ai/reading_coach_policy.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/models/reading_task.dart';
 import 'package:anx_reader/models/selection_snapshot.dart';
 import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/page/book_detail.dart';
@@ -33,6 +34,7 @@ import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/reading_task_scheduler.dart';
 import 'package:anx_reader/service/ai/agent_action_service.dart';
 import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/reading_intervention_policy.dart';
@@ -1670,47 +1672,105 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       if (sessionId == null) throw StateError('阅读会话尚未开始');
       final existingArtifacts =
           await readingAgentRepository.artifacts(_book.id);
-      final artifacts = await fictionBackfillService.build(
-        bookId: _book.id,
-        moduleId: ReadingClosureIds.fictionImmersion,
-        safeBoundary: currentProgress,
-        chapters: chapters,
-        loadChapter: (href) =>
-            epubPlayerKey.currentState?.chapterContentByHref(href) ??
-            Future.value(''),
-        generate: (prompt) => aiGenerateText(
-          [ChatMessage.humanText(prompt)],
-          ref: ref,
-          readingMode: ReadingAiMode.general,
-          task: AiContextTask.fictionBackfill,
-        ),
-        sessionId: sessionId,
-        ingestedAt: now,
-        fromProgress: fromProgress,
-        batchSize: 6,
-        concurrency: 2,
-        maxInputCharacters: 24000,
-        onBatchCompleted: ({
-          required artifacts,
-          required checkpoints,
-          required completedChapters,
-          required totalChapters,
-        }) async {
-          for (final artifact in artifacts) {
-            await agentActionService.saveArtifact(artifact);
-          }
-          for (final checkpoint in checkpoints) {
-            await readingAgentRepository.saveSystemArtifact(checkpoint);
-          }
-          SmartDialog.showLoading(
-            msg: '正在整理已读章节 $completedChapters/$totalChapters…',
-          );
-        },
-        existingArtifacts: existingArtifacts,
+      await readingTaskScheduler.restore();
+      final restoredTask = readingTaskScheduler.tasks
+          .where((task) =>
+              task.type == 'fiction.backfill' &&
+              task.bookId == _book.id &&
+              task.status == ReadingTaskStatus.paused)
+          .firstOrNull;
+      final effectiveFromProgress = restoredTask == null
+          ? fromProgress
+          : ((restoredTask.payload['fromProgress'] as num?)?.toDouble() ??
+                  fromProgress)
+              .clamp(0, currentProgress)
+              .toDouble();
+      final effectiveSafeBoundary = restoredTask == null
+          ? currentProgress
+          : ((restoredTask.payload['safeBoundary'] as num?)?.toDouble() ??
+                  currentProgress)
+              .clamp(effectiveFromProgress, currentProgress)
+              .toDouble();
+      final effectiveChapters = _eligibleBackfillChapters(
+        effectiveSafeBoundary,
+        fromProgress: effectiveFromProgress,
       );
+
+      Future<List<ReadingArtifact>> executeBackfill(
+        ReadingTaskExecutionContext execution,
+      ) async {
+        return fictionBackfillService.build(
+          bookId: _book.id,
+          moduleId: ReadingClosureIds.fictionImmersion,
+          safeBoundary: effectiveSafeBoundary,
+          chapters: effectiveChapters,
+          loadChapter: (href) =>
+              epubPlayerKey.currentState?.chapterContentByHref(href) ??
+              Future.value(''),
+          generate: (prompt) => aiGenerateText(
+            [ChatMessage.humanText(prompt)],
+            ref: ref,
+            readingMode: ReadingAiMode.general,
+            task: AiContextTask.fictionBackfill,
+          ),
+          sessionId: sessionId,
+          ingestedAt: now,
+          fromProgress: effectiveFromProgress,
+          batchSize: 6,
+          concurrency: 2,
+          maxInputCharacters: 24000,
+          onBatchCompleted: ({
+            required artifacts,
+            required checkpoints,
+            required completedChapters,
+            required totalChapters,
+          }) async {
+            execution.safePoint();
+            for (final artifact in artifacts) {
+              await agentActionService.saveArtifact(artifact);
+            }
+            for (final checkpoint in checkpoints) {
+              await readingAgentRepository.saveSystemArtifact(checkpoint);
+            }
+            await execution.update(
+              progress:
+                  totalChapters == 0 ? 1 : completedChapters / totalChapters,
+              checkpoint: {'completedChapters': completedChapters},
+            );
+            SmartDialog.showLoading(
+              msg: '正在整理已读章节 $completedChapters/$totalChapters…',
+            );
+          },
+          existingArtifacts: existingArtifacts,
+        );
+      }
+
+      final artifacts = restoredTask != null
+          ? await readingTaskScheduler.resumeWith<List<ReadingArtifact>>(
+              restoredTask.id,
+              executeBackfill,
+            )
+          : await readingTaskScheduler.submit<List<ReadingArtifact>>(
+              ReadingTask(
+                id: 'fiction-backfill-${_book.id}-$sessionId',
+                type: 'fiction.backfill',
+                bookId: _book.id,
+                priority: ReadingTaskPriority.userInitiated,
+                persistence: ReadingTaskPersistence.durable,
+                status: ReadingTaskStatus.queued,
+                payload: {
+                  'fromProgress': fromProgress,
+                  'safeBoundary': currentProgress,
+                  'chapterCount': chapters.length,
+                },
+                createdAt: now,
+                updatedAt: now,
+              ),
+              executeBackfill,
+            );
       final updated = await readingCoverageService.markBackfilled(
         coverage,
-        throughProgress: currentProgress,
+        throughProgress: effectiveSafeBoundary,
       );
       if (mounted) {
         setState(() => _readingCoverage = updated);

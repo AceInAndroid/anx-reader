@@ -19,10 +19,12 @@ flowchart TD
   UI[阅读页 / AI 工作台 / 阅读成果 / 设置] --> Entry{入口}
   Entry --> Chat[aiGenerateStream/Text]
   Entry --> Runtime[ReadingAgentRuntime]
+  Entry --> Tasks[ReadingTaskScheduler]
   Entry --> Outcomes[Closure & Story Atlas 查询]
   Chat --> Context[ContextAssembler 预算 / 摘要 / 缓存]
   Context --> Orchestrator[ReadingAgentOrchestrator]
   Runtime --> World[ReadingWorldState + 事件总线]
+  Tasks --> TaskDb[(tb_reading_tasks)]
   Orchestrator --> Skill[Reading Skill 注册表]
   Orchestrator --> Policy[Reading Closure Policy]
   Orchestrator --> Tools[AI Tool Registry]
@@ -101,7 +103,7 @@ flowchart TD
 
 ## 8. 持久化真相层
 
-SQLite 是本地真相源，当前数据库版本为 20。主要表按职责分为：
+SQLite 是本地真相源，当前数据库版本为 21。主要表按职责分为：
 
 - 会话：`tb_ai_sessions`。
 - 阅读状态：`tb_reading_goals`、`tb_reading_checkpoints`、`tb_reading_mastery`、`tb_reading_difficulties`、`tb_knowledge_cards`。
@@ -137,6 +139,12 @@ AI 设置中的 Token 用量面板展示本月输入、输出、合计和请求�
 - Skill、Closure、World State 片段按规范化内容去重；Tool Catalog 不再复制到 system prompt，工具 schema 仍由 runner 单独传递。
 - 静态 prompt、World State 和滚动摘要使用小型 LRU；内容 fingerprint 变化自然失效，阅读会话开始/结束时显式清理对应书籍的 World State scope。
 - Token 用量基于最终发送的压缩 prompt 记录；日志只记录估算数量和压缩条数，不记录全文。
+
+## 10.1 统一任务状态机
+
+`ReadingTaskScheduler` 为阅读 AI 工作提供单一状态机和优先级队列。任务状态为 `queued/running/paused/completed/failed/cancelled`，优先级为 `background/normal/userInitiated/critical`；同优先级 FIFO，高优先级在下一个安全点协作式抢占可暂停任务。暂停、取消与恢复不直接杀死数据库事务或正在返回的 provider 响应。
+
+短任务可以是内存态，长任务使用 `tb_reading_tasks` 保存输入 payload、checkpoint、进度、尝试次数和错误。进程重启后，原 queued/running 任务统一恢复为 paused，避免应用启动时自动调用云模型；任务类型重新注册 executor 并经用户恢复后才继续。小说档案回填已接入此调度层，Artifact 批次 checkpoint 继续承担幂等数据恢复。
 
 ## 11. 安全、隐私与低打扰边界
 
@@ -177,6 +185,7 @@ AI 设置中的 Token 用量面板展示本月输入、输出、合计和请求�
 | 主题 | 文件 |
 |---|---|
 | AI 公共入口、上下文与供应商 | `lib/service/ai/index.dart`, `ai_context_assembler.dart`, `langchain_registry.dart`, `langchain_runner.dart`, `langchain_ai_config.dart` |
+| 任务状态与调度 | `lib/models/reading_task.dart`, `lib/service/ai/reading_task_scheduler.dart`, `lib/dao/reading_task.dart` |
 | 聊天与历史 | `lib/providers/ai_chat.dart`, `lib/service/ai/ai_history.dart`, `lib/dao/ai_session.dart` |
 | 阅读运行时 | `lib/service/ai/reading_agent_runtime.dart`, `lib/models/reading_agent.dart`, `reading_agent_repository.dart` |
 | 方法与闭环 | `lib/service/ai/reading_skills.dart`, `reading_closure_policy.dart`, `reading_experience_profile_service.dart` |
