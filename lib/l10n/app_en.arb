@@ -1125,5 +1125,16 @@
   "bookLargeFileTitle": "Large book file",
   "bookLargeFileMessage": "This book is {sizeMiB} MiB and may require substantial memory while parsing. You can continue or return to the shelf.",
   "@bookLargeFileMessage": {"placeholders": {"sizeMiB": {"type": "String"}}},
-  "bookLargeFileContinue": "Continue opening"
+  "bookLargeFileContinue": "Continue opening",
+  "readingRemoteProgressTitle": "Progress found on another device",
+  "readingRemoteProgressMessage": "Another device has reached {remotePercent}%. You are currently at {localPercent}%.",
+  "@readingRemoteProgressMessage": {"placeholders": {"remotePercent": {"type": "int"}, "localPercent": {"type": "int"}}},
+  "readingRemoteProgressStay": "Continue here",
+  "readingRemoteProgressJump": "Jump to {percent}%",
+  "@readingRemoteProgressJump": {"placeholders": {"percent": {"type": "int"}}},
+  "readingRemoteProgressSyncTooltip": "Sync reading progress from other devices",
+  "readingRemoteProgressSyncDisabled": "Enable CloudBase Reading Sync in Sync settings first",
+  "readingRemoteProgressSyncFailed": "Could not sync reading progress: {error}",
+  "@readingRemoteProgressSyncFailed": {"placeholders": {"error": {"type": "String"}}},
+  "readingRemoteProgressNotFound": "No farther progress was found on another device"
 }

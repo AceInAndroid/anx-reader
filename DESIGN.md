@@ -296,6 +296,12 @@ legacy `readingCoach` or its MaterialBanner behavior.
   global farthest progress is derived with `MAX(progress)` and may advance the
   spoiler-safe knowledge boundary, but it must never force another device to
   jump forward.
+- After the reader is ready, a valid position from another device that is more
+  than one percentage point ahead may produce one session-scoped choice:
+  continue locally (the emphasized default) or explicitly jump to the remote
+  CFI. Dismissing the dialog keeps the local position. A cloud-sync control
+  beside the AI entry lets the reader repeat this check manually; it reports
+  when no farther position exists and never navigates without confirmation.
 - Records with stable ids use last-write-wins. Equal-time lifecycle conflicts
   prefer terminal states so completed, resolved, or retracted work is not
   accidentally reopened. Artifact conflicts retain the later/more
@@ -329,6 +335,10 @@ merge rules; the server only isolates and returns packages.
   context, caps request bodies at 2 MiB, and validates package/path identities.
 - Automatic CloudBase sync is silent. Failures are logged and do not block
   reading or WebDAV; explicit manual sync reports success or failure.
+- CloudBase settings use explicit actions: register/sign in, test connection,
+  and sign out. There is no separate Save button. Registration/sign-in saves
+  the endpoint and session immediately; a successful connection test saves a
+  newly entered endpoint, while dismissing the dialog leaves it unchanged.
 - CloudBase sync never invokes an AI model and does not broaden the Reading
   Agent's spoiler boundary or artifact coverage.
 - New CloudBase sync accounts no longer require an invitation. Registration

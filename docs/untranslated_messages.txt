@@ -230,7 +230,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "de": [
@@ -464,7 +472,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "es": [
@@ -698,7 +714,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "fr": [
@@ -932,7 +956,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "it": [
@@ -1166,7 +1198,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "ja": [
@@ -1400,7 +1440,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "ko": [
@@ -1634,7 +1682,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "pt": [
@@ -1868,7 +1924,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "ro": [
@@ -2102,7 +2166,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "ru": [
@@ -2336,7 +2408,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "tr": [
@@ -2570,7 +2650,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "zh": [
@@ -2784,7 +2872,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "zh_LZH": [
@@ -3015,7 +3111,15 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ],
 
   "zh_TW": [
@@ -3246,6 +3350,14 @@
     "bookLoadExportLog",
     "bookLargeFileTitle",
     "bookLargeFileMessage",
-    "bookLargeFileContinue"
+    "bookLargeFileContinue",
+    "readingRemoteProgressTitle",
+    "readingRemoteProgressMessage",
+    "readingRemoteProgressStay",
+    "readingRemoteProgressJump",
+    "readingRemoteProgressSyncTooltip",
+    "readingRemoteProgressSyncDisabled",
+    "readingRemoteProgressSyncFailed",
+    "readingRemoteProgressNotFound"
   ]
 }

@@ -402,6 +402,9 @@ class _SyncSettingState extends ConsumerState<SyncSetting> {
                           endpoint: endpoint.text,
                           accessToken: accountToken,
                         ).ping();
+                        // A successful test confirms the endpoint and makes
+                        // it the active endpoint without a second Save action.
+                        Prefs().cloudBaseSyncEndpoint = endpoint.text.trim();
                         if (context.mounted) {
                           AnxToast.show(L10n.of(context).commonSuccess);
                         }
@@ -418,15 +421,6 @@ class _SyncSettingState extends ConsumerState<SyncSetting> {
                       }
                     },
               child: Text(L10n.of(context).settingsSyncWebdavTestConnection),
-            ),
-            FilledButton(
-              onPressed: busy
-                  ? null
-                  : () {
-                      Prefs().cloudBaseSyncEndpoint = endpoint.text.trim();
-                      Navigator.pop(dialogContext);
-                    },
-              child: Text(L10n.of(context).commonSave),
             ),
           ],
         ),

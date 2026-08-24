@@ -1,4 +1,5 @@
 import 'package:anx_reader/dao/database.dart';
+import 'package:anx_reader/dao/reading_agent_sync.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/models/reading_agent_sync.dart';
 import 'package:anx_reader/service/sync/reading_agent_sync_service.dart';
@@ -102,6 +103,42 @@ void main() {
     expect(coverage['safe_knowledge_boundary'], .70);
     expect(coverage['artifact_coverage_start'], .10);
     expect(coverage['setup_status'], 'backfilled');
+  });
+
+  test('finds only a navigable farthest position from another device',
+      () async {
+    final dao = ReadingAgentSyncDao(databaseProvider: () async => db);
+    for (final row in [
+      {
+        'book_id': 1,
+        'device_id': 'device-a',
+        'cfi': 'local-20',
+        'progress': .20,
+        'updated_at': 100,
+      },
+      {
+        'book_id': 1,
+        'device_id': 'device-b',
+        'cfi': 'remote-26',
+        'progress': .26,
+        'updated_at': 200,
+      },
+      {
+        'book_id': 1,
+        'device_id': 'device-c',
+        'cfi': '',
+        'progress': .30,
+        'updated_at': 300,
+      },
+    ]) {
+      await db.insert('tb_book_device_positions', row);
+    }
+
+    final remote = await dao.farthestOtherPosition(1, 'device-a');
+
+    expect(remote?.deviceId, 'device-b');
+    expect(remote?.cfi, 'remote-26');
+    expect(remote?.progress, .26);
   });
 
   test('artifact keeps conservative spoiler boundary across equal conflicts',

@@ -26,6 +26,7 @@ import 'package:anx_reader/page/reading_outcomes_page.dart';
 import 'package:anx_reader/page/reading_agent_help_page.dart';
 import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/providers/book_toc.dart';
+import 'package:anx_reader/dao/reading_agent_sync.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
@@ -39,6 +40,8 @@ import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
 import 'package:anx_reader/service/ai/fiction_reading_service.dart';
 import 'package:anx_reader/service/ai/fiction_backfill_service.dart';
 import 'package:anx_reader/service/ai/reading_coverage_service.dart';
+import 'package:anx_reader/service/ai/reading_device_identity.dart';
+import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
 import 'package:anx_reader/dao/book_note.dart';
 import 'package:langchain_core/chat_models.dart';
 import 'package:anx_reader/utils/env_var.dart';
@@ -118,6 +121,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   BookReadingProfile? _readingProfile;
   BookReadingCoverage? _readingCoverage;
   bool _resumeContextAvailable = false;
+  bool _remoteProgressPromptShown = false;
+  bool _syncingRemoteProgress = false;
+  bool _checkingRemoteProgress = false;
 
   ReadingClosurePolicyDefinition get _closurePolicy =>
       ReadingClosurePolicyMatcher(registry: widget.closureRegistry).match(
@@ -688,6 +694,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         cfi: difficulty.cfi,
       );
     }
+    unawaited(_offerRemoteProgressIfAvailable());
     if (FeatureFlags.readingCoach &&
         !_inspectionReminderShown &&
         coach.guide.status == InspectionGuideStatus.notStarted) {
@@ -755,6 +762,93 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         },
       );
     }
+  }
+
+  Future<void> _offerRemoteProgressIfAvailable({
+    bool manual = false,
+  }) async {
+    if (!mounted || (!manual && widget.cfi != null)) return;
+    if (!manual && _remoteProgressPromptShown) return;
+    if (_checkingRemoteProgress) return;
+    if (!Prefs().cloudBaseSyncEnabled) {
+      if (manual) {
+        AnxToast.show(L10n.of(context).readingRemoteProgressSyncDisabled);
+      }
+      return;
+    }
+
+    // CloudBase sync is normally completed when the shelf initializes. A
+    // second silent pull here covers opening a book directly from a deep link
+    // without making the reader wait for synchronization.
+    _checkingRemoteProgress = true;
+    if (manual) setState(() => _syncingRemoteProgress = true);
+    try {
+      await const CloudBaseReadingSyncCoordinator().synchronize();
+    } catch (error) {
+      if (manual && mounted) {
+        AnxToast.show(
+          L10n.of(context).readingRemoteProgressSyncFailed(error.toString()),
+        );
+      }
+      // A sync outage must never block opening or reading a book.
+      _checkingRemoteProgress = false;
+      return;
+    } finally {
+      if (manual && mounted) setState(() => _syncingRemoteProgress = false);
+    }
+
+    final deviceId = await ReadingDeviceIdentity().getOrCreate();
+    final current = await readingAgentSyncDao.position(_book.id, deviceId);
+    final localProgress = current?.progress ?? _book.readingPercentage;
+    final remote = await readingAgentSyncDao.farthestOtherPosition(
+      _book.id,
+      deviceId,
+    );
+    if (!mounted || remote == null || remote.progress <= localProgress + .01) {
+      if (manual && mounted) {
+        AnxToast.show(L10n.of(context).readingRemoteProgressNotFound);
+      }
+      _checkingRemoteProgress = false;
+      return;
+    }
+
+    _remoteProgressPromptShown = true;
+    final jump = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        final localPercent = (localProgress * 100).round();
+        final remotePercent = (remote.progress * 100).round();
+        return AlertDialog(
+          title: Text(L10n.of(dialogContext).readingRemoteProgressTitle),
+          content: Text(
+            L10n.of(dialogContext).readingRemoteProgressMessage(
+              remotePercent,
+              localPercent,
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(
+                L10n.of(dialogContext).readingRemoteProgressStay,
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(
+                L10n.of(dialogContext).readingRemoteProgressJump(
+                  remotePercent,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    _checkingRemoteProgress = false;
+    if (jump != true || !mounted) return;
+    epubPlayerKey.currentState?.goToCfi(remote.cfi);
   }
 
   List<Widget> _buildAiChatTrailing(BuildContext context) {
@@ -2295,6 +2389,24 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   ),
                   actions: [
                     if (EnvVar.enableAIFeature) aiButton,
+                    if (Prefs().cloudBaseSyncEnabled)
+                      IconButton(
+                        tooltip:
+                            L10n.of(context).readingRemoteProgressSyncTooltip,
+                        onPressed: _syncingRemoteProgress
+                            ? null
+                            : () => _offerRemoteProgressIfAvailable(
+                                  manual: true,
+                                ),
+                        icon: _syncingRemoteProgress
+                            ? const SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.cloud_sync_outlined),
+                      ),
                     IconButton(
                       icon: const Icon(Icons.copy),
                       tooltip: L10n.of(context).readingPageCopyChapterContent,

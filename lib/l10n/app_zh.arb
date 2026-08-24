@@ -981,5 +981,16 @@
     "bookLargeFileTitle": "书籍文件较大",
     "bookLargeFileMessage": "这本书大小为 {sizeMiB} MiB，解析时可能占用较多内存。你可以继续打开或返回书架。",
     "@bookLargeFileMessage": {"placeholders": {"sizeMiB": {"type": "String"}}},
-    "bookLargeFileContinue": "继续打开"
+    "bookLargeFileContinue": "继续打开",
+    "readingRemoteProgressTitle": "发现其他设备的阅读进度",
+    "readingRemoteProgressMessage": "发现其他设备已读到 {remotePercent}%，你当前在 {localPercent}%。",
+    "@readingRemoteProgressMessage": {"placeholders": {"remotePercent": {"type": "int"}, "localPercent": {"type": "int"}}},
+    "readingRemoteProgressStay": "继续当前位置",
+    "readingRemoteProgressJump": "跳转到 {percent}%",
+    "@readingRemoteProgressJump": {"placeholders": {"percent": {"type": "int"}}},
+    "readingRemoteProgressSyncTooltip": "同步其他设备阅读进度",
+    "readingRemoteProgressSyncDisabled": "请先在同步设置中开启 CloudBase 阅读同步",
+    "readingRemoteProgressSyncFailed": "同步阅读进度失败：{error}",
+    "@readingRemoteProgressSyncFailed": {"placeholders": {"error": {"type": "String"}}},
+    "readingRemoteProgressNotFound": "没有发现更远的其他设备进度"
 }

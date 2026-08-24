@@ -35,6 +35,23 @@ class ReadingAgentSyncDao extends BaseDao {
     );
     return ((row?['progress'] as num?)?.toDouble() ?? 0).clamp(0, 1);
   }
+
+  /// Returns the furthest position recorded by another installation. A
+  /// position is only a candidate for navigation when it also has a CFI; a
+  /// progress number alone cannot safely restore a reader location.
+  Future<BookDeviceReadingPosition?> farthestOtherPosition(
+    int bookId,
+    String deviceId,
+  ) async {
+    final positions = await queryList(
+      'tb_book_device_positions',
+      mapper: BookDeviceReadingPosition.fromDb,
+      where: 'book_id = ? AND device_id != ? AND TRIM(cfi) != ?',
+      whereArgs: [bookId, deviceId, ''],
+      orderBy: 'progress DESC, updated_at DESC',
+    );
+    return positions.isEmpty ? null : positions.first;
+  }
 }
 
 final readingAgentSyncDao = ReadingAgentSyncDao();
