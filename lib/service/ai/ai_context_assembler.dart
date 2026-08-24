@@ -13,6 +13,7 @@ enum AiContextTask {
   chapterReview,
   fictionBackfill,
   noteOrganizer,
+  expertAnalysis,
 }
 
 class AiContextBudget {
@@ -131,6 +132,12 @@ class AiContextAssembler {
       reservedOutputTokens: 4000,
       recentMessages: 4,
       summaryTokens: 500,
+    ),
+    AiContextTask.expertAnalysis: AiContextBudget(
+      maxInputTokens: 6000,
+      reservedOutputTokens: 1200,
+      recentMessages: 2,
+      summaryTokens: 300,
     ),
   };
 

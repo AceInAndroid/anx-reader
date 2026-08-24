@@ -417,3 +417,25 @@ merge rules; the server only isolates and returns packages.
   creates one account-owned sync space, and any number of devices can sign in
   to that account. Passwords are scrypt-hashed in the function's PG boundary;
   the account session is the only sync credential exposed to Flutter.
+
+## Specialist orchestration P1
+
+- A reading turn captures one immutable, token-bounded expert context snapshot.
+  Every selected specialist receives that same snapshot; specialists must not
+  independently rebuild or expand the complete chat history.
+- Specialist work has a separate budget from the primary answer: at most two
+  specialists, 5,000 estimated input tokens and 1,200 reserved output tokens
+  per specialist, and at most four Evidence Objects per result. The primary
+  assistant still owns the final answer.
+- Specialist output crosses the orchestration boundary only as an
+  `EvidenceObject`: attributable claim, short support, uncertainty, confidence,
+  and source URLs. URLs not present in the retrieved source set are discarded.
+  Raw verbose specialist prose is not appended to the user request or stored
+  as the authoritative answer.
+- Search, provider, timeout, malformed JSON, and individual specialist failures
+  degrade independently. Available evidence from other specialists remains
+  usable; when no valid evidence remains, the original messages continue to
+  the primary assistant without an error dialog or invented citation.
+- Evidence is persisted inside the existing Agent trace. It is explicitly an
+  inference draft, not a source fact, Reader Profile item, or permission to
+  perform a write action.

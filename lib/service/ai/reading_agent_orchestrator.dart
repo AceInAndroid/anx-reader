@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/ai_context_assembler.dart';
@@ -12,11 +14,93 @@ class ReadingAgentTurn {
     required this.messages,
     this.traces = const [],
     this.citations = const [],
+    this.evidence = const [],
   });
 
   final List<ChatMessage> messages;
   final List<AgentRunTrace> traces;
   final List<Map<String, dynamic>> citations;
+  final List<EvidenceObject> evidence;
+}
+
+class ReadingExpertBudget {
+  const ReadingExpertBudget({
+    this.maxExperts = 2,
+    this.maxInputTokens = 5000,
+    this.maxOutputTokens = 1200,
+    this.maxEvidence = 4,
+    this.maxClaimCharacters = 360,
+    this.maxSupportCharacters = 480,
+    this.timeout = const Duration(seconds: 45),
+  });
+
+  final int maxExperts;
+  final int maxInputTokens;
+  final int maxOutputTokens;
+  final int maxEvidence;
+  final int maxClaimCharacters;
+  final int maxSupportCharacters;
+  final Duration timeout;
+}
+
+/// Immutable context captured once per turn and shared by all specialists.
+/// Specialists receive this bounded projection instead of independently
+/// rebuilding the full conversation and reading context.
+class ReadingExpertContextSnapshot {
+  const ReadingExpertContextSnapshot({
+    required this.query,
+    required this.mode,
+    required this.context,
+    required this.estimatedTokens,
+    required this.capturedAt,
+  });
+
+  final String query;
+  final ReadingAiMode mode;
+  final String context;
+  final int estimatedTokens;
+  final int capturedAt;
+
+  static ReadingExpertContextSnapshot capture({
+    required List<ChatMessage> messages,
+    required ReadingAiMode mode,
+    ReadingExpertBudget budget = const ReadingExpertBudget(),
+    AiContextAssembler? assembler,
+    int? capturedAt,
+  }) {
+    final contextAssembler = assembler ?? aiContextAssembler;
+    final assembly = contextAssembler.assemble(
+      messages,
+      task: AiContextTask.expertAnalysis,
+      cacheScope: 'reading-expert:${mode.name}',
+    );
+    var query = '';
+    final lines = <String>[];
+    for (final message in assembly.messages) {
+      if (message is HumanChatMessage) query = message.contentAsString;
+      final role = switch (message) {
+        HumanChatMessage _ => '用户',
+        AIChatMessage _ => '主助手',
+        SystemChatMessage _ => '阅读上下文',
+        _ => '上下文',
+      };
+      lines.add('$role：${message.contentAsString.trim()}');
+    }
+    var context = lines.join('\n\n');
+    while (contextAssembler.estimateTokens(context) > budget.maxInputTokens &&
+        context.length > 800) {
+      context = context.substring(context.length ~/ 5);
+      final boundary = context.indexOf('\n\n');
+      if (boundary >= 0) context = context.substring(boundary + 2);
+    }
+    return ReadingExpertContextSnapshot(
+      query: query,
+      mode: mode,
+      context: context,
+      estimatedTokens: contextAssembler.estimateTokens(context),
+      capturedAt: capturedAt ?? DateTime.now().millisecondsSinceEpoch,
+    );
+  }
 }
 
 class ReadingAgentPlan {
@@ -26,7 +110,11 @@ class ReadingAgentPlan {
 }
 
 class ReadingAgentOrchestrator {
-  const ReadingAgentOrchestrator();
+  const ReadingAgentOrchestrator({
+    this.expertBudget = const ReadingExpertBudget(),
+  });
+
+  final ReadingExpertBudget expertBudget;
 
   ReadingAgentPlan plan(
     String query,
@@ -34,9 +122,13 @@ class ReadingAgentOrchestrator {
     ReadingAnalysisRequest? analysisRequest,
   }) {
     if (analysisRequest != null) {
+      final expertCount =
+          analysisRequest.depth.maxExperts < expertBudget.maxExperts
+              ? analysisRequest.depth.maxExperts
+              : expertBudget.maxExperts;
       return ReadingAgentPlan(
         _selectTasks(query, mode, analysisRequest: analysisRequest)
-            .take(analysisRequest.depth.maxExperts)
+            .take(expertCount)
             .map((task) => task.id)
             .toList(growable: false),
       );
@@ -46,7 +138,10 @@ class ReadingAgentOrchestrator {
       _selectTasks(
         query,
         mode,
-      ).take(2).map((task) => task.id).toList(growable: false),
+      )
+          .take(expertBudget.maxExperts)
+          .map((task) => task.id)
+          .toList(growable: false),
     );
   }
 
@@ -71,24 +166,32 @@ class ReadingAgentOrchestrator {
       mode,
       analysisRequest: analysisRequest,
     ).where((task) => selectedIds.contains(task.id)).toList(growable: false);
+    final snapshot = ReadingExpertContextSnapshot.capture(
+      messages: messages,
+      mode: mode,
+      budget: expertBudget,
+    );
     final results = await Future.wait(
-      tasks.map((task) => _runTask(task, query, mode, ref)),
+      tasks.map((task) => _runTask(task, snapshot, ref)),
     );
     final traces =
         results.map((result) => result.trace).toList(growable: false);
     final citations =
         results.expand((result) => result.citations).toList(growable: false);
-    final useful = results
-        .where((result) => result.output.trim().isNotEmpty)
-        .map((result) => '### ${result.label}\n${result.output}')
-        .join('\n\n');
-    if (useful.isEmpty) {
+    final evidence = results
+        .expand((result) => result.evidence)
+        .take(expertBudget.maxEvidence * tasks.length)
+        .toList(growable: false);
+    if (evidence.isEmpty) {
       return ReadingAgentTurn(
         messages: messages,
         traces: traces,
         citations: citations,
+        evidence: evidence,
       );
     }
+
+    final useful = evidence.map(_formatEvidence).join('\n');
 
     final enriched = List<ChatMessage>.from(messages);
     for (var i = enriched.length - 1; i >= 0; i--) {
@@ -106,6 +209,7 @@ $useful
       messages: enriched,
       traces: traces,
       citations: citations,
+      evidence: evidence,
     );
   }
 
@@ -194,8 +298,7 @@ $useful
 
   Future<_AgentResult> _runTask(
     _AgentTask task,
-    String query,
-    ReadingAiMode mode,
+    ReadingExpertContextSnapshot snapshot,
     WidgetRef ref,
   ) async {
     final startedAt = DateTime.now().millisecondsSinceEpoch;
@@ -203,84 +306,110 @@ $useful
     final citations = <Map<String, dynamic>>[];
     var sourceContext = '';
     var degradedDetail = '';
-    if (task.search) {
-      final configured = Prefs().readingWebSearchConfig;
-      final modeConfig = WebSearchProviderConfig(
-        provider: configured.provider,
-        enabled: configured.enabled,
-        apiKey: configured.apiKey,
-        endpoint: configured.endpoint,
-        headers: configured.headers,
-        queryParameter: configured.queryParameter,
-        maxResults: configured.maxResults,
-        timeout: configured.timeout,
-        trustedSources: Prefs().readingTrustedSourcePack(mode),
-      );
-      final response = await WebSearchService(config: modeConfig).search(query);
-      if (response.isSuccess) {
-        sourceContext = response.results.map((result) {
-          sourceUrls.add(result.url.toString());
-          citations.add({
-            'title': result.title,
-            'url': result.url.toString(),
-            'snippet': result.snippet,
-            if (result.publishedAt != null) 'publishedAt': result.publishedAt,
-            'accessedAt': DateTime.fromMillisecondsSinceEpoch(
-              result.accessedAt ?? DateTime.now().millisecondsSinceEpoch,
-            ).toIso8601String(),
-          });
-          return '- ${result.title}: ${result.snippet} (${result.url})';
-        }).join('\n');
-      } else {
-        degradedDetail = response.detail ?? '未完成联网核查';
-      }
-    }
-
     try {
+      if (task.search) {
+        try {
+          final configured = Prefs().readingWebSearchConfig;
+          final modeConfig = WebSearchProviderConfig(
+            provider: configured.provider,
+            enabled: configured.enabled,
+            apiKey: configured.apiKey,
+            endpoint: configured.endpoint,
+            headers: configured.headers,
+            queryParameter: configured.queryParameter,
+            maxResults: configured.maxResults,
+            timeout: configured.timeout,
+            trustedSources: Prefs().readingTrustedSourcePack(snapshot.mode),
+          );
+          final response =
+              await WebSearchService(config: modeConfig).search(snapshot.query);
+          if (response.isSuccess) {
+            sourceContext = _limitTokens(
+                response.results.map((result) {
+                  sourceUrls.add(result.url.toString());
+                  citations.add({
+                    'title': result.title,
+                    'url': result.url.toString(),
+                    'snippet': result.snippet,
+                    if (result.publishedAt != null)
+                      'publishedAt': result.publishedAt,
+                    'accessedAt': DateTime.fromMillisecondsSinceEpoch(
+                      result.accessedAt ??
+                          DateTime.now().millisecondsSinceEpoch,
+                    ).toIso8601String(),
+                  });
+                  return '- ${result.title}: ${result.snippet} (${result.url})';
+                }).join('\n'),
+                600);
+          } else {
+            degradedDetail = response.detail ?? '未完成联网核查';
+          }
+        } catch (error) {
+          degradedDetail = '联网核查失败：$error';
+        }
+      }
+
       final prompt = '''你是${task.label}，服务于阅读主助手。只完成一个有边界的专家任务。
-阅读模式：${mode.name}
-用户问题：$query
+以下是本轮所有专家共享的只读上下文快照，不要把其中的模型陈述当作已证实事实：
+<shared_context>
+${snapshot.context}
+</shared_context>
+阅读模式：${snapshot.mode.name}
 ${task.instruction.isEmpty ? '' : '任务方法：${task.instruction}'}
 ${sourceContext.isEmpty ? '联网来源：不可用。请仅使用已有知识，并明确时效性和不确定性。' : '可信联网结果：\n$sourceContext'}
-输出简洁的证据、冲突点和不确定性，不直接对用户下最终结论。''';
+仅输出 JSON，不使用 Markdown：
+{"evidence":[{"claim":"一句可核查主张","support":"简短依据或冲突点","uncertainty":"不确定性，没有则空字符串","confidence":"low|medium|high","sourceUrls":[]}]}
+最多 ${expertBudget.maxEvidence} 条证据，输出预算不超过
+${expertBudget.maxOutputTokens} tokens，不直接对用户下最终结论。''';
       final output = await aiGenerateText(
         [ChatMessage.humanText(prompt)],
         useAgent: false,
         ref: ref,
-        readingMode: mode,
-        task: AiContextTask.readingChat,
-      );
+        readingMode: snapshot.mode,
+        task: AiContextTask.expertAnalysis,
+      ).timeout(expertBudget.timeout);
       final failed = output.startsWith('Error:');
+      final evidence = failed
+          ? const <EvidenceObject>[]
+          : parseEvidence(task.id, output, sourceUrls);
       return _AgentResult(
         label: task.label,
-        output: failed ? '' : output,
+        evidence: evidence,
         citations: citations,
         trace: AgentRunTrace(
           id: '$startedAt-${task.id}',
           agentId: task.id,
-          mode: mode,
+          mode: snapshot.mode,
           action: task.action,
           startedAt: startedAt,
           completedAt: DateTime.now().millisecondsSinceEpoch,
           status: failed
               ? AgentRunStatus.failed
-              : degradedDetail.isNotEmpty
+              : degradedDetail.isNotEmpty || evidence.isEmpty
                   ? AgentRunStatus.degraded
                   : AgentRunStatus.completed,
-          output: failed ? null : output,
+          input: {
+            'snapshotCapturedAt': snapshot.capturedAt,
+            'snapshotTokens': snapshot.estimatedTokens,
+            'maxInputTokens': expertBudget.maxInputTokens,
+            'maxOutputTokens': expertBudget.maxOutputTokens,
+            'maxEvidence': expertBudget.maxEvidence,
+          },
+          output: failed ? null : compressEvidence(evidence),
           sourceUrls: sourceUrls,
+          evidence: evidence,
           detail: failed ? output : degradedDetail,
         ),
       );
     } catch (error) {
       return _AgentResult(
         label: task.label,
-        output: '',
+        evidence: const [],
         citations: citations,
         trace: AgentRunTrace(
           id: '$startedAt-${task.id}',
           agentId: task.id,
-          mode: mode,
+          mode: snapshot.mode,
           action: task.action,
           startedAt: startedAt,
           completedAt: DateTime.now().millisecondsSinceEpoch,
@@ -290,6 +419,80 @@ ${sourceContext.isEmpty ? '联网来源：不可用。请仅使用已有知识�
         ),
       );
     }
+  }
+
+  List<EvidenceObject> parseEvidence(
+    String expertId,
+    String raw,
+    List<String> fallbackUrls,
+  ) {
+    try {
+      final cleaned = raw
+          .trim()
+          .replaceFirst(RegExp(r'^```(?:json)?\s*'), '')
+          .replaceFirst(RegExp(r'\s*```$'), '');
+      final decoded = jsonDecode(cleaned);
+      final values = decoded is Map ? decoded['evidence'] : null;
+      if (values is! List) return const [];
+      final result = <EvidenceObject>[];
+      for (final item in values.whereType<Map>()) {
+        final json = Map<String, dynamic>.from(item);
+        final claim = _limit(
+            json['claim']?.toString() ?? '', expertBudget.maxClaimCharacters);
+        if (claim.isEmpty) continue;
+        final urls = json['sourceUrls'] is List
+            ? (json['sourceUrls'] as List)
+                .map((value) => value.toString())
+                .where((url) => fallbackUrls.contains(url))
+                .toList(growable: false)
+            : const <String>[];
+        result.add(EvidenceObject(
+          id: '$expertId-${result.length + 1}',
+          expertId: expertId,
+          claim: claim,
+          support: _limit(json['support']?.toString() ?? '',
+              expertBudget.maxSupportCharacters),
+          uncertainty: _limit(json['uncertainty']?.toString() ?? '', 240),
+          confidence: EvidenceConfidence.fromJson(json['confidence']),
+          sourceUrls: urls,
+        ));
+        if (result.length >= expertBudget.maxEvidence) break;
+      }
+      return result;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  String compressEvidence(List<EvidenceObject> evidence) =>
+      evidence.map(_formatEvidence).join('\n');
+
+  String _formatEvidence(EvidenceObject item) =>
+      '- [${item.confidence.name}] ${item.claim}'
+      '${item.support.isEmpty ? '' : '；依据：${item.support}'}'
+      '${item.uncertainty.isEmpty ? '' : '；不确定性：${item.uncertainty}'}'
+      '${item.sourceUrls.isEmpty ? '' : '；来源：${item.sourceUrls.join(', ')}'}';
+
+  String _limit(String value, int maxCharacters) {
+    final compact = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (compact.length <= maxCharacters) return compact;
+    return '${compact.substring(0, maxCharacters)}…';
+  }
+
+  String _limitTokens(String value, int maxTokens) {
+    if (aiContextAssembler.estimateTokens(value) <= maxTokens) return value;
+    var low = 0;
+    var high = value.length;
+    while (low < high) {
+      final middle = (low + high + 1) ~/ 2;
+      if (aiContextAssembler.estimateTokens(value.substring(0, middle)) <=
+          maxTokens) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return '${value.substring(0, low).trimRight()}…';
   }
 
   String _latestUserText(List<ChatMessage> messages) {
@@ -319,12 +522,12 @@ class _AgentTask {
 class _AgentResult {
   const _AgentResult({
     required this.label,
-    required this.output,
+    required this.evidence,
     required this.trace,
     required this.citations,
   });
   final String label;
-  final String output;
+  final List<EvidenceObject> evidence;
   final AgentRunTrace trace;
   final List<Map<String, dynamic>> citations;
 }

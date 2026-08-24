@@ -61,6 +61,16 @@ void main() {
             completedAt: 150,
             status: AgentRunStatus.completed,
             sourceUrls: <String>['https://loc.gov/item/1'],
+            evidence: <EvidenceObject>[
+              EvidenceObject(
+                id: 'evidence-1',
+                expertId: 'reading-history',
+                claim: 'The dated source supports the chronology.',
+                support: 'Archive record',
+                confidence: EvidenceConfidence.high,
+                sourceUrls: <String>['https://loc.gov/item/1'],
+              ),
+            ],
           ),
         ],
       );
@@ -75,6 +85,8 @@ void main() {
       expect(restored.messages.last, 'A plain legacy message');
       expect(restored.context?.bookTitle, 'A History');
       expect(restored.traces.single.status, AgentRunStatus.completed);
+      expect(restored.traces.single.evidence.single.confidence,
+          EvidenceConfidence.high);
     });
 
     test('reads an AiChatHistoryEntry-shaped JSON payload', () {

@@ -568,6 +568,60 @@ class ReadingAgentProfile {
 
 enum AgentRunStatus { running, completed, degraded, failed }
 
+enum EvidenceConfidence {
+  low,
+  medium,
+  high;
+
+  static EvidenceConfidence fromJson(Object? value) => values.firstWhere(
+        (item) => item.name == value?.toString(),
+        orElse: () => EvidenceConfidence.low,
+      );
+}
+
+/// A compact, attributable unit passed from a specialist to the primary
+/// reading assistant. It is evidence to evaluate, not a final user-facing
+/// conclusion or a confirmed Reader Profile fact.
+class EvidenceObject {
+  const EvidenceObject({
+    required this.id,
+    required this.expertId,
+    required this.claim,
+    this.support = '',
+    this.uncertainty = '',
+    this.confidence = EvidenceConfidence.low,
+    this.sourceUrls = const <String>[],
+  });
+
+  final String id;
+  final String expertId;
+  final String claim;
+  final String support;
+  final String uncertainty;
+  final EvidenceConfidence confidence;
+  final List<String> sourceUrls;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        'expertId': expertId,
+        'claim': claim,
+        if (support.isNotEmpty) 'support': support,
+        if (uncertainty.isNotEmpty) 'uncertainty': uncertainty,
+        'confidence': confidence.name,
+        if (sourceUrls.isNotEmpty) 'sourceUrls': sourceUrls,
+      };
+
+  factory EvidenceObject.fromJson(Map<String, dynamic> json) => EvidenceObject(
+        id: _stringOrNull(json['id']) ?? '',
+        expertId: _stringOrNull(json['expertId']) ?? '',
+        claim: _stringOrNull(json['claim']) ?? '',
+        support: _stringOrNull(json['support']) ?? '',
+        uncertainty: _stringOrNull(json['uncertainty']) ?? '',
+        confidence: EvidenceConfidence.fromJson(json['confidence']),
+        sourceUrls: _stringList(json['sourceUrls']),
+      );
+}
+
 class AgentRunTrace {
   const AgentRunTrace({
     required this.id,
@@ -580,6 +634,7 @@ class AgentRunTrace {
     this.input = const <String, dynamic>{},
     this.output,
     this.sourceUrls = const <String>[],
+    this.evidence = const <EvidenceObject>[],
     this.detail,
   });
 
@@ -593,6 +648,7 @@ class AgentRunTrace {
   final Map<String, dynamic> input;
   final String? output;
   final List<String> sourceUrls;
+  final List<EvidenceObject> evidence;
   final String? detail;
 
   int? get durationMs => completedAt == null ? null : completedAt! - startedAt;
@@ -608,6 +664,8 @@ class AgentRunTrace {
         if (input.isNotEmpty) 'input': input,
         if (output != null) 'output': output,
         if (sourceUrls.isNotEmpty) 'sourceUrls': sourceUrls,
+        if (evidence.isNotEmpty)
+          'evidence': evidence.map((item) => item.toJson()).toList(),
         if (detail != null) 'detail': detail,
       };
 
@@ -627,6 +685,12 @@ class AgentRunTrace {
       input: _stringKeyedMap(json['input']),
       output: _stringOrNull(json['output']),
       sourceUrls: _stringList(json['sourceUrls']),
+      evidence: json['evidence'] is List
+          ? (json['evidence'] as List)
+              .whereType<Map>()
+              .map((item) => EvidenceObject.fromJson(_stringKeyedMap(item)))
+              .toList(growable: false)
+          : const <EvidenceObject>[],
       detail: _stringOrNull(json['detail']),
     );
   }

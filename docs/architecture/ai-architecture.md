@@ -58,11 +58,17 @@ flowchart TD
 ### 普通对话/阅读问答
 
 1. `AiChat.sendMessageStream` 捕获当前书、章节、CFI、进度和会话。
-2. 阅读中由 `ReadingAgentOrchestrator.prepare` 判断是否需要专家；简单任务直接交给主助手，复杂任务最多并行两个专家。
+2. 阅读中由 `ReadingAgentOrchestrator.prepare` 判断是否需要专家；简单任务直接交给主助手，复杂任务最多并行两个专家。编排器只组装一次受限的共享上下文快照，专家返回经过长度、数量和来源校验的 `EvidenceObject`，不再把完整专家长文塞回主对话。
 3. `ReadingSkillMatcher` 选择当前 Reading Skill；普通请求只加载 summary，深度分析或明确方法意图才加载 full guidance。
 4. `ContextAssembler` 在不改写本地完整历史的前提下，为发送给 provider 的副本应用任务预算、最近消息窗口和本地滚动摘要，并合并重复的 Skill/Closure/System 片段。
 5. `aiGenerateStream` 进入统一 LangChain runner，完成 provider 选择、队列、RPM、超时、重试、取消和流式输出。
 6. runner 把服务端 usage 或估算 usage 交给 `AiTokenUsageService`，会话和 trace/citation 写回 AI history。
+
+### 专家编排预算与降级
+
+专家调用使用独立的 `expertAnalysis` 上下文类别：单专家最多约 6,000 输入 Token、预留 1,200 输出 Token；共享快照再按专家策略限制为 5,000 Token，单专家最多输出 4 条证据。每条证据只保留主张、简短依据、不确定性、置信度和实际检索得到的来源 URL，压缩结果写入 Agent trace。
+
+联网搜索失败时，专家降级为仅基于共享快照分析；单个专家、超时或结构化输出失败不影响其他专家。若仍有有效 Evidence，主助手核对后使用；若全部失败，则原始对话直接进入主助手，既不阻塞回答，也不制造引用。
 
 ### 明确写入与撤销
 
