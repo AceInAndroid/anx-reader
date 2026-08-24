@@ -281,6 +281,21 @@ legacy `readingCoach` or its MaterialBanner behavior.
   into the 0% prefix. Synced Artifacts can therefore restore work from another
   device without treating this device's unseen prefix as locally read; only
   the missing range inside the confirmed safe boundary is considered.
+- A manual organize action always uses this device's current settled reading
+  position as its upper bound. The synchronized global farthest position is a
+  resume suggestion only and never authorizes AI to scan farther. Its lower
+  bound defaults to 0%; only a device-local, explicit “from here” choice raises
+  that bound. This local choice is excluded from preference backup/import.
+- Fiction backfill is incremental and resumable. Each successfully processed
+  chapter stores a synchronized `fiction.backfill_checkpoint` Artifact with a
+  content hash and extractor version. Unchanged completed chapters are skipped;
+  changed chapters are processed again. Checkpoints are emitted only after the
+  corresponding AI Artifacts have been persisted.
+- Initial backfill groups at most six chapters and 24,000 source characters per
+  model request, with at most two requests in flight. A failed concurrent batch
+  must not discard checkpoints from successful sibling batches. The default
+  extraction surface is deliberately limited to characters, relationships, and
+  important events to avoid token-heavy scene-by-scene summaries.
 - Character nodes use local first-character avatars only. No portrait is
   generated or downloaded. Phones use a zoomable graph with bottom details and
   a vertical timeline; wide layouts reserve a details rail and use a horizontal

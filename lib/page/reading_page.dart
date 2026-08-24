@@ -1586,6 +1586,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                 onTap: () async {
                   final updated =
                       await readingCoverageService.startFromHere(coverage);
+                  Prefs().setLocalReadingBackfillStart(
+                    _book.id,
+                    coverage.initializedAtProgress,
+                  );
                   if (!mounted) return;
                   setState(() => _readingCoverage = updated);
                   if (sheetContext.mounted) Navigator.pop(sheetContext);
@@ -1598,7 +1602,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                 subtitle: Text('确认后读取 0%～$percent% 内已完整读完的章节并调用 AI，不读取后文'),
                 onTap: () async {
                   Navigator.pop(sheetContext);
-                  await _confirmAndBackfill(coverage);
+                  await _confirmAndBackfill(coverage, fromProgressOverride: 0);
                 },
               ),
               ListTile(
@@ -1618,19 +1622,27 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
   }
 
-  Future<void> _confirmAndBackfill(BookReadingCoverage coverage) async {
-    // Pending setup means the reader explicitly chose to backfill the already
-    // read prefix. After "from here", the persisted coverage start is the
-    // lower bound, so a fresh device never treats unseen earlier chapters as
-    // locally read just because another device has a farther position.
-    final fromProgress = coverage.setupPending
-        ? 0.0
-        : coverage.artifactCoverageStart.clamp(0, 1).toDouble();
+  Future<void> _confirmAndBackfill(
+    BookReadingCoverage coverage, {
+    double? fromProgressOverride,
+  }) async {
+    final worldState = readingAgentRuntime.state;
+    final currentProgress =
+        worldState.bookId == _book.id && worldState.totalProgress > 0
+            ? worldState.totalProgress.clamp(0, 1).toDouble()
+            : _book.readingPercentage.clamp(0, 1).toDouble();
+    // This lower bound is installation-local. Synced Artifact coverage and a
+    // remote device's farthest position must not silently redefine what this
+    // device may scan. No local opt-out means the manual action starts at 0%.
+    final fromProgress =
+        (fromProgressOverride ?? Prefs().localReadingBackfillStart(_book.id))
+            .clamp(0, currentProgress)
+            .toDouble();
     final chapters = _eligibleBackfillChapters(
-      coverage.safeKnowledgeBoundary,
+      currentProgress,
       fromProgress: fromProgress,
     );
-    final percent = (coverage.safeKnowledgeBoundary * 100).round();
+    final percent = (currentProgress * 100).round();
     final fromPercent = (fromProgress * 100).round();
     final confirmed = await showDialog<bool>(
       context: context,
@@ -1660,7 +1672,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       final artifacts = await fictionBackfillService.build(
         bookId: _book.id,
         moduleId: ReadingClosureIds.fictionImmersion,
-        safeBoundary: coverage.safeKnowledgeBoundary,
+        safeBoundary: currentProgress,
         chapters: chapters,
         loadChapter: (href) =>
             epubPlayerKey.currentState?.chapterContentByHref(href) ??
@@ -1673,14 +1685,30 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         sessionId: sessionId,
         ingestedAt: now,
         fromProgress: fromProgress,
+        batchSize: 6,
+        concurrency: 2,
+        maxInputCharacters: 24000,
+        onBatchCompleted: ({
+          required artifacts,
+          required checkpoints,
+          required completedChapters,
+          required totalChapters,
+        }) async {
+          for (final artifact in artifacts) {
+            await agentActionService.saveArtifact(artifact);
+          }
+          for (final checkpoint in checkpoints) {
+            await readingAgentRepository.saveSystemArtifact(checkpoint);
+          }
+          SmartDialog.showLoading(
+            msg: '正在整理已读章节 $completedChapters/$totalChapters…',
+          );
+        },
         existingArtifacts: existingArtifacts,
       );
-      for (final artifact in artifacts) {
-        await agentActionService.saveArtifact(artifact);
-      }
       final updated = await readingCoverageService.markBackfilled(
         coverage,
-        throughProgress: coverage.safeKnowledgeBoundary,
+        throughProgress: currentProgress,
       );
       if (mounted) {
         setState(() => _readingCoverage = updated);

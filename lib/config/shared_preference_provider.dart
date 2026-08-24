@@ -66,6 +66,10 @@ const Set<String> _prefsImportSkipKeys = {
   // The bearer token grants access to a private CloudBase sync space. Users
   // authenticate each device directly, so a backup must never clone it.
   'cloudBaseSyncAccountToken',
+  // This is deliberately device-local. It records where this installation's
+  // reader explicitly chose "from here" and must not be imported as another
+  // device's local reading history.
+  'readingAgentLocalBackfillStarts',
 };
 
 class Prefs extends ChangeNotifier {
@@ -1975,6 +1979,30 @@ class Prefs extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {}
+  }
+
+  double localReadingBackfillStart(int bookId) {
+    final raw = prefs.getString('readingAgentLocalBackfillStarts');
+    if (raw == null || raw.isEmpty) return 0;
+    try {
+      final values = jsonDecode(raw) as Map<String, dynamic>;
+      final value = values['$bookId'];
+      return value is num ? value.toDouble().clamp(0, 1) : 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  void setLocalReadingBackfillStart(int bookId, double progress) {
+    final raw = prefs.getString('readingAgentLocalBackfillStarts');
+    Map<String, dynamic> values = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      } catch (_) {}
+    }
+    values['$bookId'] = progress.clamp(0, 1);
+    prefs.setString('readingAgentLocalBackfillStarts', jsonEncode(values));
   }
 
   ReadingAnalysisDepth get defaultReadingAnalysisDepth =>

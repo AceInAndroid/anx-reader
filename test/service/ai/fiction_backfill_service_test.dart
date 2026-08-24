@@ -139,4 +139,225 @@ void main() {
     expect(artifacts, hasLength(1));
     expect(artifacts.single.sourceProgress, .35);
   });
+
+  test('batches chapters and emits resumable checkpoints after success',
+      () async {
+    var requests = 0;
+    final completed = <String>[];
+    final savedCheckpoints = <ReadingArtifact>[];
+    final artifacts = await fictionBackfillService.build(
+      bookId: 1,
+      moduleId: 'fiction.immersion',
+      safeBoundary: .8,
+      batchSize: 2,
+      chapters: const [
+        FictionBackfillChapter(
+            href: 'one.xhtml', title: '一', startProgress: .1, endProgress: .2),
+        FictionBackfillChapter(
+            href: 'two.xhtml', title: '二', startProgress: .2, endProgress: .3),
+      ],
+      loadChapter: (_) async => '同一批正文',
+      generate: (_) async {
+        requests++;
+        return jsonEncode([
+          {
+            'chapterHref': 'one.xhtml',
+            'items': [
+              {
+                'kind': 'event',
+                'payload': {'title': '一中的事件'}
+              }
+            ]
+          },
+          {
+            'chapterHref': 'two.xhtml',
+            'items': [
+              {
+                'kind': 'event',
+                'payload': {'title': '二中的事件'}
+              }
+            ]
+          },
+        ]);
+      },
+      sessionId: 'session',
+      ingestedAt: 1,
+      onBatchCompleted: ({
+        required artifacts,
+        required checkpoints,
+        required completedChapters,
+        required totalChapters,
+      }) async {
+        savedCheckpoints.addAll(checkpoints);
+        completed.addAll(checkpoints.map((item) => item.chapterHref!));
+        expect(artifacts, hasLength(2));
+        expect(completedChapters, 2);
+        expect(totalChapters, 2);
+      },
+    );
+
+    expect(requests, 1);
+    expect(artifacts, hasLength(2));
+    expect(completed, ['one.xhtml', 'two.xhtml']);
+
+    final resumed = await fictionBackfillService.build(
+      bookId: 1,
+      moduleId: 'fiction.immersion',
+      safeBoundary: .8,
+      batchSize: 2,
+      chapters: const [
+        FictionBackfillChapter(
+            href: 'one.xhtml', title: '一', startProgress: .1, endProgress: .2),
+        FictionBackfillChapter(
+            href: 'two.xhtml', title: '二', startProgress: .2, endProgress: .3),
+      ],
+      loadChapter: (_) async => '同一批正文',
+      generate: (_) async {
+        requests++;
+        return '[]';
+      },
+      sessionId: 'session',
+      ingestedAt: 2,
+      existingArtifacts: savedCheckpoints,
+    );
+    expect(resumed, isEmpty);
+    expect(requests, 1);
+  });
+
+  test('persists successful concurrent batches before surfacing a failure',
+      () async {
+    final savedCheckpoints = <ReadingArtifact>[];
+    var requests = 0;
+    await expectLater(
+      fictionBackfillService.build(
+        bookId: 7,
+        moduleId: 'fiction.immersion',
+        safeBoundary: 1,
+        batchSize: 1,
+        concurrency: 2,
+        chapters: const [
+          FictionBackfillChapter(
+              href: 'one.xhtml',
+              title: '一',
+              startProgress: .1,
+              endProgress: .2),
+          FictionBackfillChapter(
+              href: 'two.xhtml',
+              title: '二',
+              startProgress: .2,
+              endProgress: .3),
+        ],
+        loadChapter: (_) async => '正文',
+        generate: (_) async {
+          requests++;
+          if (requests == 2) throw StateError('temporary failure');
+          return jsonEncode([
+            {
+              'chapterHref': 'one.xhtml',
+              'items': [
+                {
+                  'kind': 'event',
+                  'payload': {'title': '已完成'}
+                }
+              ]
+            }
+          ]);
+        },
+        sessionId: 'session',
+        ingestedAt: 1,
+        onBatchCompleted: ({
+          required artifacts,
+          required checkpoints,
+          required completedChapters,
+          required totalChapters,
+        }) async {
+          savedCheckpoints.addAll(checkpoints);
+        },
+      ),
+      throwsA(isA<StateError>()),
+    );
+    expect(savedCheckpoints, hasLength(1));
+    expect(savedCheckpoints.single.chapterHref, 'one.xhtml');
+  });
+
+  test('does not checkpoint an incomplete model batch', () async {
+    var callbackCalled = false;
+    await expectLater(
+      fictionBackfillService.build(
+        bookId: 1,
+        moduleId: 'fiction.immersion',
+        safeBoundary: 1,
+        batchSize: 2,
+        chapters: const [
+          FictionBackfillChapter(
+              href: 'one.xhtml',
+              title: '一',
+              startProgress: .1,
+              endProgress: .2),
+          FictionBackfillChapter(
+              href: 'two.xhtml',
+              title: '二',
+              startProgress: .2,
+              endProgress: .3),
+        ],
+        loadChapter: (_) async => '正文',
+        generate: (_) async => jsonEncode([
+          {'chapterHref': 'one.xhtml', 'items': []}
+        ]),
+        sessionId: 'session',
+        ingestedAt: 1,
+        onBatchCompleted: ({
+          required artifacts,
+          required checkpoints,
+          required completedChapters,
+          required totalChapters,
+        }) async {
+          callbackCalled = true;
+        },
+      ),
+      throwsFormatException,
+    );
+    expect(callbackCalled, isFalse);
+  });
+
+  test('reprocesses a checkpointed chapter when its content changes', () async {
+    final savedCheckpoints = <ReadingArtifact>[];
+    var requests = 0;
+
+    Future<void> build(String content,
+        {Iterable<ReadingArtifact> existing = const []}) async {
+      await fictionBackfillService.build(
+        bookId: 1,
+        moduleId: 'fiction.immersion',
+        safeBoundary: 1,
+        chapters: const [
+          FictionBackfillChapter(
+              href: 'one.xhtml',
+              title: '一',
+              startProgress: .1,
+              endProgress: .2),
+        ],
+        loadChapter: (_) async => content,
+        generate: (_) async {
+          requests++;
+          return '[]';
+        },
+        sessionId: 'session',
+        ingestedAt: 1,
+        existingArtifacts: existing,
+        onBatchCompleted: ({
+          required artifacts,
+          required checkpoints,
+          required completedChapters,
+          required totalChapters,
+        }) async {
+          savedCheckpoints.addAll(checkpoints);
+        },
+      );
+    }
+
+    await build('旧正文');
+    await build('新正文', existing: savedCheckpoints);
+    expect(requests, 2);
+  });
 }
