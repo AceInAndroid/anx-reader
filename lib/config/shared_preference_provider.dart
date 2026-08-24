@@ -22,6 +22,7 @@ import 'package:anx_reader/enums/ai_chat_display_mode.dart';
 import 'package:anx_reader/enums/bgimg_fit.dart';
 import 'package:anx_reader/enums/code_highlight_theme.dart';
 import 'package:anx_reader/enums/app_theme_mode.dart';
+import 'package:anx_reader/enums/device_display_profile.dart';
 import 'package:anx_reader/enums/long_press_selection_mode.dart';
 import 'package:anx_reader/enums/selection_menu_action.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
@@ -73,6 +74,13 @@ const Set<String> _prefsImportSkipKeys = {
   // Usage counters are device-local diagnostics. Importing them would merge
   // unrelated devices and make the displayed monthly total misleading.
   'aiTokenUsageMonthly',
+  // Display hardware and color choices are intentionally per-device. A
+  // WebDAV preferences restore must not turn an OLED phone into an E-ink
+  // device or replace either device's local appearance.
+  'deviceDisplayProfile',
+  'themeMode',
+  'themeColor',
+  'trueDarkMode',
 };
 
 class Prefs extends ChangeNotifier {
@@ -96,9 +104,16 @@ class Prefs extends ChangeNotifier {
 
   Future<void> initPrefs() async {
     prefs = await SharedPreferences.getInstance();
-    if ((prefs.getBool('eInkMode') ?? false) &&
-        prefs.getString('themeMode') != AppThemeMode.eInk.code) {
-      await prefs.setString('themeMode', AppThemeMode.eInk.code);
+    final legacyEInk = (prefs.getBool('eInkMode') ?? false) ||
+        prefs.getString('themeMode') == AppThemeMode.eInk.code;
+    if (legacyEInk) {
+      await prefs.setString(
+        'deviceDisplayProfile',
+        DeviceDisplayProfile.eInk.code,
+      );
+      if (prefs.getString('themeMode') == AppThemeMode.eInk.code) {
+        await prefs.setString('themeMode', AppThemeMode.light.code);
+      }
     }
     await prefs.remove('eInkMode');
     saveBeginDate();
@@ -229,17 +244,33 @@ class Prefs extends ChangeNotifier {
   AppThemeMode get appThemeMode =>
       AppThemeMode.fromCode(prefs.getString('themeMode'));
 
-  ThemeMode get effectiveThemeMode => appThemeMode.effectiveThemeMode;
+  ThemeMode get effectiveThemeMode =>
+      isEInkMode ? ThemeMode.light : appThemeMode.effectiveThemeMode;
 
-  bool get isEInkMode => appThemeMode == AppThemeMode.eInk;
+  DeviceDisplayProfile get deviceDisplayProfile =>
+      DeviceDisplayProfile.fromCode(prefs.getString('deviceDisplayProfile'));
+
+  bool get isEInkMode => deviceDisplayProfile == DeviceDisplayProfile.eInk;
 
   bool get reduceMotion => isEInkMode;
 
   Future<void> saveThemeModeToPrefs(String themeMode) async {
+    final mode = AppThemeMode.fromCode(themeMode);
+    if (mode == AppThemeMode.eInk) {
+      await saveDeviceDisplayProfile(DeviceDisplayProfile.eInk);
+      return;
+    }
     await prefs.setString(
       'themeMode',
-      AppThemeMode.fromCode(themeMode).code,
+      mode.code,
     );
+    notifyListeners();
+  }
+
+  Future<void> saveDeviceDisplayProfile(
+    DeviceDisplayProfile profile,
+  ) async {
+    await prefs.setString('deviceDisplayProfile', profile.code);
     notifyListeners();
   }
 
@@ -640,9 +671,11 @@ class Prefs extends ChangeNotifier {
     return prefs.getBool('trueDarkMode') ?? false;
   }
 
+  bool get effectiveTrueDarkMode => !isEInkMode && trueDarkMode;
+
   set eInkMode(bool status) {
-    saveThemeModeToPrefs(
-      status ? AppThemeMode.eInk.code : AppThemeMode.light.code,
+    saveDeviceDisplayProfile(
+      status ? DeviceDisplayProfile.eInk : DeviceDisplayProfile.standard,
     );
   }
 

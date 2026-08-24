@@ -5,6 +5,7 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:anx_reader/widgets/settings/theme_mode.dart';
+import 'package:anx_reader/widgets/settings/device_display_profile.dart';
 
 /// Onboarding screen for first-time users
 /// Shows introduction pages covering key features and settings
@@ -397,6 +398,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
               const SizedBox(height: 24),
               buildLanguageSelector(),
+              const SizedBox(height: 12),
+              const DeviceDisplayProfileCard(compact: true),
               const SizedBox(height: 12),
               const ChangeThemeMode(),
               if (prefs.isEInkMode)

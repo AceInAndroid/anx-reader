@@ -1,4 +1,5 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/enums/device_display_profile.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/page/settings_page/ai.dart';
@@ -63,7 +64,10 @@ void main() {
 
   testWidgets('translation provider list offers follow-general selection',
       (tester) async {
-    Prefs().prefs.setString('themeMode', 'eInk');
+    Prefs().prefs.setString(
+          'deviceDisplayProfile',
+          DeviceDisplayProfile.eInk.code,
+        );
     await _pumpAtSize(
       tester,
       const Size(500, 800),

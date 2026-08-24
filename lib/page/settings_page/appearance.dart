@@ -5,6 +5,7 @@ import 'package:anx_reader/widgets/common/anx_segmented_button.dart';
 import 'package:anx_reader/widgets/settings/settings_title.dart';
 import 'package:anx_reader/widgets/settings/simple_dialog.dart';
 import 'package:anx_reader/widgets/settings/theme_mode.dart';
+import 'package:anx_reader/widgets/settings/device_display_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:provider/provider.dart';
@@ -58,7 +59,18 @@ class _AppearanceSettingState extends State<AppearanceSetting> {
     return settingsSections(
       sections: [
         SettingsSection(
-          title: Text(L10n.of(context).settingsAppearanceTheme),
+          title: Text(L10n.of(context).settingsDeviceDisplayProfile),
+          tiles: const [
+            CustomSettingsTile(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(20, 8, 20, 8),
+                child: DeviceDisplayProfileCard(),
+              ),
+            ),
+          ],
+        ),
+        SettingsSection(
+          title: Text(L10n.of(context).settingsColorAppearance),
           tiles: [
             const CustomSettingsTile(
                 child: Padding(
@@ -76,12 +88,12 @@ class _AppearanceSettingState extends State<AppearanceSetting> {
                   await showColorPickerDialog(context);
                 }),
             SettingsTile.switchTile(
-              title: const Text("OLED Dark Mode"),
+              title: Text(L10n.of(context).oledPureBlack),
               leading: const Icon(Icons.brightness_2),
               enabled: !Prefs().isEInkMode,
               description: Prefs().isEInkMode
                   ? Text(L10n.of(context).eInkSettingDisabledTip)
-                  : null,
+                  : Text(L10n.of(context).oledPureBlackDescription),
               initialValue: Prefs().trueDarkMode,
               onToggle: (bool value) {
                 setState(() {

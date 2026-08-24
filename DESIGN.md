@@ -439,3 +439,24 @@ merge rules; the server only isolates and returns packages.
 - Evidence is persisted inside the existing Agent trace. It is explicitly an
   inference draft, not a source fact, Reader Profile item, or permission to
   perform a write action.
+
+## Per-device display profiles
+
+- Display hardware and interface color are independent dimensions. The device
+  profile is `standard` (OLED/LCD) or `eink`; color appearance remains system,
+  light, or dark, with OLED pure black as a retained dark-surface preference.
+- The device profile, color mode, and pure-black choice are local settings and
+  are excluded from preferences backup/restore. Reading progress and user
+  content may synchronize, but one device must never change another device's
+  display profile.
+- E-ink applies effective, reversible overrides: light high-contrast colors,
+  no page animation, no background image, and no code highlighting. It does
+  not delete or replace the stored color mode, reader theme, page-turn style,
+  or OLED preference. Switching back to OLED/LCD restores those choices.
+- Appearance settings lead with a status card for this device, including an
+  explicit “device-only” explanation. Interface colors are a separate section.
+  Options unavailable under E-ink remain visible with a reason, rather than
+  being silently reset or hidden.
+- Legacy `themeMode=eInk` and the older `eInkMode` boolean migrate to the E-ink
+  device profile. The stored color mode becomes light only when the legacy
+  combined value has no independent color preference to recover.

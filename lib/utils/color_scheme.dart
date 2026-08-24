@@ -20,8 +20,9 @@ ThemeData colorSchema(
   final isEinkMode = prefsNotifier.isEInkMode;
 
   final lightGropedBackground = const Color(0xFFF2F2F7);
-  final darkGropedBackground =
-      prefsNotifier.trueDarkMode ? Color(0xFF000000) : Color(0xFF1C1C1E);
+  final darkGropedBackground = prefsNotifier.effectiveTrueDarkMode
+      ? Color(0xFF000000)
+      : Color(0xFF1C1C1E);
   final gropedBackgroundColor = isEinkMode
       ? Colors.white
       : isDark
@@ -70,7 +71,7 @@ ThemeData colorSchema(
           Brightness.dark => FlexThemeData.dark(
               useMaterial3: true,
               swapLegacyOnMaterial3: true,
-              darkIsTrueBlack: prefsNotifier.trueDarkMode,
+              darkIsTrueBlack: prefsNotifier.effectiveTrueDarkMode,
               colorScheme: colorScheme,
             )
         };

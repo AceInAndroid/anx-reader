@@ -79,7 +79,8 @@ class _SubMoreSettingsState extends State<SubMoreSettings> {
                 "icon": Icons.color_lens_outlined,
                 "sections": const AppearanceSetting(),
                 "subtitles": [
-                  L10n.of(context).settingsAppearanceTheme,
+                  L10n.of(context).settingsDeviceDisplayProfile,
+                  L10n.of(context).settingsColorAppearance,
                   L10n.of(context).settingsAppearanceDisplay,
                   L10n.of(context).settingsBookshelfCover,
                 ],

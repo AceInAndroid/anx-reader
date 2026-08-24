@@ -29,11 +29,6 @@ class ChangeThemeModeState extends State<ChangeThemeMode> {
           icon: const Icon(Icons.brightness_auto),
         ),
         SegmentButtonItem(
-          value: 'eInk',
-          label: L10n.of(context).eInkMode,
-          icon: const Icon(Icons.contrast),
-        ),
-        SegmentButtonItem(
           value: 'dark',
           label: L10n.of(context).settingsDarkMode,
           icon: const Icon(Icons.brightness_2),
