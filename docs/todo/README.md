@@ -9,3 +9,4 @@ and implementation work is scheduled.
 | Feature | Status | Priority | Document |
 | --- | --- | --- | --- |
 | AI active reading loop | Proposed | P1 | [AI active reading coach](ai-active-reading-coach.md) |
+| Reading loop closure gaps | Proposed | P1 | [阅读闭环剩余工作](reading-loop-closure-gaps.md) |
