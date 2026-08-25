@@ -100,4 +100,56 @@ void main() {
 
     expect(atlas.timeline.map((item) => item.title), ['今天', '十年前']);
   });
+
+  test('groups long timeline by chapter and applies density and participant',
+      () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'major',
+        kind: ReadingArtifactKinds.event,
+        progress: .1,
+        payload: {
+          'title': '重大转折',
+          'importance': 'major',
+          'participants': ['林青'],
+        },
+      ),
+      artifact(
+        id: 'normal',
+        kind: ReadingArtifactKinds.event,
+        progress: .2,
+        payload: {
+          'title': '普通事件',
+          'participants': ['周明']
+        },
+      ),
+      artifact(
+        id: 'scene',
+        kind: ReadingArtifactKinds.scene,
+        progress: .3,
+        payload: {
+          'title': '场景描写',
+          'participants': ['林青']
+        },
+      ),
+    ], visibleAtProgress: .5);
+
+    final compact = fictionStoryAtlasService.timelineChapters(atlas.timeline);
+    expect(
+        compact.expand((chapter) => chapter.events).map((event) => event.title),
+        ['重大转折']);
+
+    final standard = fictionStoryAtlasService.timelineChapters(
+      atlas.timeline,
+      density: FictionTimelineDensity.standard,
+    );
+    expect(standard.expand((chapter) => chapter.events), hasLength(2));
+
+    final linQing = fictionStoryAtlasService.timelineChapters(
+      atlas.timeline,
+      density: FictionTimelineDensity.complete,
+      participant: '林青',
+    );
+    expect(linQing.expand((chapter) => chapter.events), hasLength(2));
+  });
 }

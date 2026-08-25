@@ -34,9 +34,9 @@ void main() {
 
   final atlas = fictionStoryAtlasService.fromArtifacts([
     artifact('a', ReadingArtifactKinds.character, .1,
-        {'entityId': 'a', 'name': '阿青', 'summary': '剑客'}),
+        {'entityId': 'a', 'name': '王小明', 'summary': '剑客'}),
     artifact('b', ReadingArtifactKinds.character, .12,
-        {'entityId': 'b', 'name': '白公公', 'summary': '对手'}),
+        {'entityId': 'b', 'name': '诸葛亮', 'summary': '对手'}),
     artifact('r', ReadingArtifactKinds.relationship, .2, {
       'from': 'a',
       'to': 'b',
@@ -64,10 +64,18 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     expect(find.text('人物关系图'), findsOneWidget);
-    expect(find.text('阿青'), findsOneWidget);
-    expect(find.text('白公公'), findsOneWidget);
+    expect(find.text('王小明'), findsOneWidget);
+    expect(find.text('诸葛亮'), findsOneWidget);
+    expect(find.text('小'), findsOneWidget);
+    expect(find.text('亮'), findsOneWidget);
+    expect(find.text('小'), findsOneWidget);
     expect(find.text('对手'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('fiction-character-a')));
+    await tester.pump();
+    expect(find.text('剑客'), findsOneWidget);
+    expect(find.text('已知关系'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

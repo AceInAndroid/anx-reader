@@ -90,6 +90,24 @@ class FictionTimelineEvent {
   bool get isClue => kind == ReadingArtifactKinds.clue;
 }
 
+enum FictionTimelineDensity { compact, standard, complete }
+
+class FictionTimelineChapter {
+  const FictionTimelineChapter({
+    required this.id,
+    required this.title,
+    required this.startProgress,
+    required this.events,
+  });
+
+  final String id;
+  final String title;
+  final double startProgress;
+  final List<FictionTimelineEvent> events;
+
+  int get majorEventCount => events.where((event) => event.isMajor).length;
+}
+
 class FictionStoryAtlasService {
   const FictionStoryAtlasService({ReadingAgentRepository? repository})
       : _repository = repository;
@@ -107,6 +125,64 @@ class FictionStoryAtlasService {
     );
     return fromArtifacts(artifacts, visibleAtProgress: visibleAtProgress);
   }
+
+  /// Produces the chapter-level projection used by long timelines. Filtering
+  /// happens before grouping so the page can render one bounded chapter page
+  /// without building every event widget in the book.
+  List<FictionTimelineChapter> timelineChapters(
+    Iterable<FictionTimelineEvent> input, {
+    FictionTimelineDensity density = FictionTimelineDensity.compact,
+    Set<String> kinds = const {},
+    String? participant,
+  }) {
+    final normalizedParticipant = participant?.trim();
+    final filtered = input.where((event) {
+      if (!_includedAtDensity(event, density)) return false;
+      if (kinds.isNotEmpty && !kinds.contains(event.kind)) return false;
+      if (normalizedParticipant != null &&
+          normalizedParticipant.isNotEmpty &&
+          !event.participants.contains(normalizedParticipant)) {
+        return false;
+      }
+      return true;
+    });
+    final grouped = <String, List<FictionTimelineEvent>>{};
+    final titles = <String, String>{};
+    for (final event in filtered) {
+      final href = event.source.chapterHref?.trim() ?? '';
+      final title = event.source.chapterTitle?.trim() ?? '';
+      final key = href.isNotEmpty
+          ? href
+          : title.isNotEmpty
+              ? 'title:$title'
+              : 'progress:${(event.source.sourceProgress * 1000).floor()}';
+      grouped.putIfAbsent(key, () => []).add(event);
+      titles[key] = title.isEmpty ? '未知章节' : title;
+    }
+    return grouped.entries.map((entry) {
+      final events = entry.value
+        ..sort((a, b) => _artifactOrder(a.source, b.source));
+      return FictionTimelineChapter(
+        id: entry.key,
+        title: titles[entry.key]!,
+        startProgress: events.first.source.sourceProgress,
+        events: List.unmodifiable(events),
+      );
+    }).toList(growable: false)
+      ..sort((a, b) => a.startProgress.compareTo(b.startProgress));
+  }
+
+  bool _includedAtDensity(
+    FictionTimelineEvent event,
+    FictionTimelineDensity density,
+  ) =>
+      switch (density) {
+        FictionTimelineDensity.compact =>
+          event.isMajor || event.isMystery || event.isClue,
+        FictionTimelineDensity.standard =>
+          event.kind != ReadingArtifactKinds.scene,
+        FictionTimelineDensity.complete => true,
+      };
 
   FictionStoryAtlas fromArtifacts(
     Iterable<ReadingArtifact> input, {

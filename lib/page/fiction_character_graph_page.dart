@@ -155,51 +155,59 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
       children: [
         _boundaryBanner(atlas),
         Expanded(
-          child: InteractiveViewer(
-            constrained: false,
-            minScale: .35,
-            maxScale: 3.2,
-            boundaryMargin: const EdgeInsets.all(120),
-            child: SizedBox(
-              width: width < 840 ? width * 1.4 : width,
-              height: 620,
-              child: GraphView.builder(
-                graph: graph,
-                algorithm: algorithm,
-                controller: _controller,
-                autoZoomToFit: true,
-                paint: Paint()
-                  ..color = Theme.of(context).colorScheme.outline
-                  ..strokeWidth = 1.4,
-                builder: (node) {
-                  final id = node.key?.value?.toString() ?? '';
-                  if (id.startsWith('@relation:')) {
-                    final index = int.parse(id.split(':').last);
-                    final relationship = atlas.relationships[index];
-                    return ActionChip(
-                      onPressed: () => _showRelationship(relationship),
-                      avatar: Icon(
-                        relationship.isChanged
-                            ? Icons.history
-                            : Icons.swap_horiz,
-                        size: 16,
-                      ),
-                      label: Text(relationship.relation),
-                    );
-                  }
-                  final character = atlas.characters.firstWhere(
-                    (item) => item.id == id,
-                    orElse: () => atlas.characters.first,
-                  );
-                  return GestureDetector(
-                    onTap: () => _select(character),
-                    child: _CharacterNode(
-                      character: character,
-                      selected: _selected?.id == character.id,
+          // GraphView.builder already owns an InteractiveViewer. Wrapping it
+          // in a second viewer makes the graph's render and hit-test
+          // coordinate spaces diverge on slow/partial-refresh displays (most
+          // visible on E-INK: edges remain while nodes and taps disappear).
+          child: SizedBox(
+            width: width < 840 ? width * 1.4 : width,
+            height: 620,
+            child: GraphView.builder(
+              graph: graph,
+              algorithm: algorithm,
+              controller: _controller,
+              autoZoomToFit: true,
+              // Keep positions and hit targets stable, especially while an
+              // E-INK display performs a partial refresh.
+              animated: false,
+              paint: Paint()
+                ..color = Theme.of(context).colorScheme.outline
+                ..strokeWidth = 1.4,
+              builder: (node) {
+                final id = node.key?.value?.toString() ?? '';
+                if (id.startsWith('@relation:')) {
+                  final index = int.parse(id.split(':').last);
+                  final relationship = atlas.relationships[index];
+                  return ActionChip(
+                    onPressed: () => _showRelationship(relationship),
+                    avatar: Icon(
+                      relationship.isChanged ? Icons.history : Icons.swap_horiz,
+                      size: 16,
                     ),
+                    label: Text(relationship.relation),
                   );
-                },
-              ),
+                }
+                final character = atlas.characters.firstWhere(
+                  (item) => item.id == id,
+                  orElse: () => atlas.characters.first,
+                );
+                return Semantics(
+                  button: true,
+                  label: '查看${character.name}的人物详情',
+                  child: InkWell(
+                    key: ValueKey('fiction-character-${character.id}'),
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => _select(character),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: _CharacterNode(
+                        character: character,
+                        selected: _selected?.id == character.id,
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ),
@@ -389,6 +397,10 @@ class _CharacterNode extends StatelessWidget {
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
               borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.onSurface,
+                width: 1.2,
+              ),
             ),
             child: Text(character.name, overflow: TextOverflow.ellipsis),
           ),
@@ -404,18 +416,89 @@ class _InitialAvatar extends StatelessWidget {
   final bool selected;
 
   @override
-  Widget build(BuildContext context) => CircleAvatar(
-        radius: large ? 28 : 24,
-        backgroundColor: selected
-            ? Theme.of(context).colorScheme.primary
-            : Theme.of(context).colorScheme.secondaryContainer,
-        foregroundColor: selected
-            ? Theme.of(context).colorScheme.onPrimary
-            : Theme.of(context).colorScheme.onSecondaryContainer,
-        child: Text(name.trim().isEmpty ? '?' : name.trim()[0],
-            style: TextStyle(
-                fontSize: large ? 24 : 18, fontWeight: FontWeight.w700)),
-      );
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final diameter = (large ? 28.0 : 24.0) * 2;
+    return Container(
+      width: diameter,
+      height: diameter,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: selected ? colors.primary : colors.surface,
+        border: Border.all(
+          color: selected ? colors.primary : colors.onSurface,
+          width: selected ? 3 : 2,
+        ),
+      ),
+      child: Text(
+        _avatarInitial(name),
+        style: TextStyle(
+          color: selected ? colors.onPrimary : colors.onSurface,
+          fontSize: large ? 24 : 18,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// Returns the first character of a person's given name rather than the
+/// family name. This keeps Chinese character avatars useful: 张三 -> 三,
+/// 王小明 -> 小, 诸葛亮 -> 亮. For non-Chinese names we use the initial of
+/// the final whitespace-delimited name part (John Doe -> D).
+String _avatarInitial(String rawName) {
+  final name = rawName.trim();
+  if (name.isEmpty) return '?';
+
+  final parts = name.split(RegExp(r'\s+')).where((part) => part.isNotEmpty);
+  final lastPart = parts.isEmpty ? name : parts.last;
+  final runes = lastPart.runes.toList(growable: false);
+  if (runes.isEmpty) return '?';
+
+  final isChineseName = runes.every((rune) =>
+      (rune >= 0x3400 && rune <= 0x4DBF) || (rune >= 0x4E00 && rune <= 0x9FFF));
+  if (!isChineseName || runes.length == 1) {
+    return String.fromCharCode(runes.first);
+  }
+
+  // The common compound surnames need two characters skipped. Unknown
+  // surnames default to a one-character surname, which covers the vast
+  // majority of Chinese names without maintaining a large surname database.
+  const compoundSurnames = {
+    '欧阳',
+    '司马',
+    '上官',
+    '诸葛',
+    '东方',
+    '独孤',
+    '南宫',
+    '夏侯',
+    '皇甫',
+    '尉迟',
+    '公孙',
+    '慕容',
+    '令狐',
+    '长孙',
+    '宇文',
+    '闻人',
+    '赫连',
+    '澹台',
+    '端木',
+    '拓跋',
+    '百里',
+    '钟离',
+    '完颜',
+    '呼延',
+    '鲜于',
+    '第五',
+  };
+  final surnameLength = runes.length >= 3 &&
+          compoundSurnames.contains(String.fromCharCodes(runes.take(2)))
+      ? 2
+      : 1;
+  return String.fromCharCode(
+      runes[surnameLength < runes.length ? surnameLength : 0]);
 }
 
 class ReadingArtifactSource {

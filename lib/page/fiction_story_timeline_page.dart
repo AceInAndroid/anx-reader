@@ -2,6 +2,7 @@ import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FictionStoryTimelinePage extends StatefulWidget {
   const FictionStoryTimelinePage({
@@ -25,6 +26,15 @@ class FictionStoryTimelinePage extends StatefulWidget {
 class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
   late Future<FictionStoryAtlas> _future;
   FictionStoryAtlas? _atlas;
+  FictionTimelineDensity _density = FictionTimelineDensity.compact;
+  final Set<String> _kinds = {};
+  String? _participant;
+  final Set<String> _expandedChapters = {};
+  String? _expandedForSignature;
+  int _chapterPage = 1;
+  String? _lastViewedChapter;
+  bool _restoreJumpPending = false;
+  final Map<String, GlobalKey> _chapterKeys = {};
 
   @override
   void initState() {
@@ -35,6 +45,21 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             bookId: widget.book.id,
             visibleAtProgress: widget.book.readingPercentage,
           );
+    _restoreLastViewedChapter();
+  }
+
+  String get _lastViewedKey =>
+      'fictionTimelineLastViewedChapter:${widget.book.id}';
+
+  Future<void> _restoreLastViewedChapter() async {
+    final prefs = await SharedPreferences.getInstance();
+    final chapter = prefs.getString(_lastViewedKey);
+    if (!mounted || chapter == null || chapter.isEmpty) return;
+    setState(() {
+      _lastViewedChapter = chapter;
+      _restoreJumpPending = true;
+      _expandedForSignature = null;
+    });
   }
 
   @override
@@ -52,19 +77,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             final atlas = snapshot.requireData;
             _atlas = atlas;
             if (atlas.timeline.isEmpty) return _emptyState(atlas);
-            return LayoutBuilder(builder: (context, constraints) {
-              final header = _boundaryBanner(atlas);
-              if (constraints.maxWidth >= 840) {
-                return Column(children: [
-                  header,
-                  Expanded(child: _horizontalTimeline(atlas.timeline)),
-                ]);
-              }
-              return Column(children: [
-                header,
-                Expanded(child: _verticalTimeline(atlas.timeline)),
-              ]);
-            });
+            return _timelineBody(atlas);
           },
         ),
       );
@@ -113,75 +126,241 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
         ),
       );
 
-  Widget _verticalTimeline(List<FictionTimelineEvent> events) =>
-      ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 40),
-        itemCount: events.length,
-        itemBuilder: (context, index) {
-          final event = events[index];
-          return IntrinsicHeight(
-            child:
-                Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              SizedBox(
-                width: 42,
-                child: Column(children: [
-                  _TimelineDot(event: event),
-                  if (index != events.length - 1)
-                    Expanded(
-                      child: Container(
-                        width: 2,
-                        color: Theme.of(context).colorScheme.outlineVariant,
-                      ),
-                    ),
-                ]),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: _eventCard(event),
-                ),
-              ),
-            ]),
+  Widget _timelineBody(FictionStoryAtlas atlas) {
+    final chapters = fictionStoryAtlasService.timelineChapters(
+      atlas.timeline,
+      density: _density,
+      kinds: _kinds,
+      participant: _participant,
+    );
+    final signature = '${_density.name}|${_kinds.join(',')}|$_participant';
+    if (_expandedForSignature != signature) {
+      _expandedForSignature = signature;
+      _expandedChapters
+        ..clear()
+        ..addAll(_nearbyChapterIds(chapters));
+      final lastIndex =
+          chapters.indexWhere((item) => item.id == _lastViewedChapter);
+      final focusIndex =
+          lastIndex >= 0 ? lastIndex : _currentChapterIndex(chapters);
+      _chapterPage = focusIndex < 0 ? 1 : (focusIndex ~/ 20) + 1;
+      if (lastIndex >= 0) _expandedChapters.add(chapters[lastIndex].id);
+    }
+    final totalPages = chapters.isEmpty ? 1 : ((chapters.length - 1) ~/ 20) + 1;
+    _chapterPage = _chapterPage.clamp(1, totalPages);
+    final visibleChapters =
+        chapters.skip((_chapterPage - 1) * 20).take(20).toList(growable: false);
+    final currentChapterId = _currentChapterId(chapters);
+    if (_restoreJumpPending &&
+        visibleChapters.any((chapter) => chapter.id == _lastViewedChapter)) {
+      _restoreJumpPending = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final chapterContext = _chapterKeys[_lastViewedChapter]?.currentContext;
+        if (chapterContext != null) {
+          Scrollable.ensureVisible(
+            chapterContext,
+            alignment: .1,
+            duration: const Duration(milliseconds: 1),
           );
-        },
+        }
+      });
+    }
+    return Column(
+      children: [
+        _boundaryBanner(atlas),
+        _timelineControls(atlas, chapters.length),
+        if (chapters.isNotEmpty) _pageControls(totalPages),
+        Expanded(
+          child: chapters.isEmpty
+              ? Center(
+                  child: Text(
+                    '当前筛选和显示密度下没有事件，试试切换为“标准”或“完整”。',
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              : ListView.builder(
+                  key: const PageStorageKey('fiction-story-timeline'),
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 40),
+                  itemCount: visibleChapters.length,
+                  itemBuilder: (context, index) => _chapterSection(
+                    visibleChapters[index],
+                    isCurrent: visibleChapters[index].id == currentChapterId,
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Set<String> _nearbyChapterIds(List<FictionTimelineChapter> chapters) {
+    if (chapters.isEmpty) return {};
+    final current =
+        _currentChapterIndex(chapters).clamp(0, chapters.length - 1);
+    return {
+      for (var index = (current - 1).clamp(0, chapters.length - 1);
+          index <= (current + 1).clamp(0, chapters.length - 1);
+          index++)
+        chapters[index].id,
+    };
+  }
+
+  int _currentChapterIndex(List<FictionTimelineChapter> chapters) {
+    var current = -1;
+    for (var index = 0; index < chapters.length; index++) {
+      if (chapters[index].startProgress <= widget.book.readingPercentage) {
+        current = index;
+      }
+    }
+    return current;
+  }
+
+  String? _currentChapterId(List<FictionTimelineChapter> chapters) {
+    final index = _currentChapterIndex(chapters);
+    return index < 0 ? null : chapters[index].id;
+  }
+
+  Widget _pageControls(int totalPages) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        child: Row(children: [
+          IconButton(
+            tooltip: '上一组章节',
+            onPressed:
+                _chapterPage <= 1 ? null : () => setState(() => _chapterPage--),
+            icon: const Icon(Icons.chevron_left),
+          ),
+          Expanded(
+            child: Text(
+              '章节页 $_chapterPage / $totalPages',
+              textAlign: TextAlign.center,
+            ),
+          ),
+          IconButton(
+            tooltip: '下一组章节',
+            onPressed: _chapterPage >= totalPages
+                ? null
+                : () => setState(() => _chapterPage++),
+            icon: const Icon(Icons.chevron_right),
+          ),
+        ]),
       );
 
-  Widget _horizontalTimeline(List<FictionTimelineEvent> events) =>
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(28, 32, 28, 32),
-        child: SizedBox(
-          width: events.length * 290.0,
-          child: Stack(children: [
-            Positioned(
-              left: 40,
-              right: 40,
-              top: 250,
-              child: Container(
-                height: 3,
-                color: Theme.of(context).colorScheme.outlineVariant,
+  Widget _timelineControls(FictionStoryAtlas atlas, int chapterCount) {
+    final participants = <String>{
+      for (final event in atlas.timeline) ...event.participants,
+    }.toList()
+      ..sort();
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Text('显示密度'),
+            const SizedBox(width: 8),
+            Expanded(
+              child: SegmentedButton<FictionTimelineDensity>(
+                segments: const [
+                  ButtonSegment(
+                      value: FictionTimelineDensity.compact, label: Text('精简')),
+                  ButtonSegment(
+                      value: FictionTimelineDensity.standard,
+                      label: Text('标准')),
+                  ButtonSegment(
+                      value: FictionTimelineDensity.complete,
+                      label: Text('完整')),
+                ],
+                selected: {_density},
+                onSelectionChanged: (value) =>
+                    setState(() => _density = value.first),
               ),
             ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (var index = 0; index < events.length; index++)
-                  SizedBox(
-                    width: 290,
-                    child: Column(children: [
-                      if (index.isOdd) const SizedBox(height: 266),
-                      if (index.isEven) _eventCard(events[index]),
-                      if (index.isEven) const SizedBox(height: 12),
-                      _TimelineDot(event: events[index]),
-                      if (index.isOdd) const SizedBox(height: 12),
-                      if (index.isOdd) _eventCard(events[index]),
-                    ]),
-                  ),
-              ],
-            ),
           ]),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              FilterChip(
+                label: const Text('全部类型'),
+                selected: _kinds.isEmpty,
+                onSelected: (_) => setState(_kinds.clear),
+              ),
+              for (final entry in const {
+                ReadingArtifactKinds.event: '事件',
+                ReadingArtifactKinds.scene: '场景',
+                ReadingArtifactKinds.clue: '线索',
+                ReadingArtifactKinds.mystery: '悬念',
+              }.entries)
+                Padding(
+                  padding: const EdgeInsets.only(left: 6),
+                  child: FilterChip(
+                    label: Text(entry.value),
+                    selected: _kinds.contains(entry.key),
+                    onSelected: (selected) => setState(() {
+                      if (selected) {
+                        _kinds.add(entry.key);
+                      } else {
+                        _kinds.remove(entry.key);
+                      }
+                    }),
+                  ),
+                ),
+              if (participants.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: DropdownButton<String?>(
+                    value: _participant,
+                    hint: const Text('按人物'),
+                    items: [
+                      const DropdownMenuItem<String?>(
+                          value: null, child: Text('全部人物')),
+                      ...participants.map((name) =>
+                          DropdownMenuItem(value: name, child: Text(name))),
+                    ],
+                    onChanged: (value) => setState(() => _participant = value),
+                  ),
+                ),
+            ]),
+          ),
+          Text('$chapterCount 个章节分组 · 仅在展开章节时显示事件',
+              style: Theme.of(context).textTheme.bodySmall),
+        ]),
+      ),
+    );
+  }
+
+  Widget _chapterSection(
+    FictionTimelineChapter chapter, {
+    required bool isCurrent,
+  }) {
+    final expanded = _expandedChapters.contains(chapter.id);
+    return Card(
+      key: _chapterKeys.putIfAbsent(chapter.id, GlobalKey.new),
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      child: Column(children: [
+        ListTile(
+          dense: true,
+          leading: Icon(isCurrent ? Icons.bookmark : Icons.folder_outlined),
+          title: Text(chapter.title),
+          subtitle: Text(
+              '${chapter.events.length} 个事件 · ${(chapter.startProgress * 100).round()}%'),
+          trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
+          onTap: () => setState(() {
+            if (expanded) {
+              _expandedChapters.remove(chapter.id);
+            } else {
+              _expandedChapters.add(chapter.id);
+            }
+          }),
         ),
-      );
+        if (expanded)
+          for (final event in chapter.events)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: _eventCard(event),
+            ),
+      ]),
+    );
+  }
 
   Widget _eventCard(FictionTimelineEvent event) {
     final color = _eventColor(context, event);
@@ -238,6 +417,13 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
       );
 
   Future<void> _showEvent(FictionTimelineEvent event) async {
+    final chapter = event.source.chapterHref?.trim().isNotEmpty == true
+        ? event.source.chapterHref!
+        : 'title:${event.source.chapterTitle?.trim().isNotEmpty == true ? event.source.chapterTitle! : '未知章节'}';
+    _lastViewedChapter = chapter;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastViewedKey, chapter);
+    if (!mounted) return;
     final source = event.source;
     await showModalBottomSheet<void>(
       context: context,
@@ -315,30 +501,6 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
       source.discoveredAtCfi ??
       source.chapterHref ??
       '';
-}
-
-class _TimelineDot extends StatelessWidget {
-  const _TimelineDot({required this.event});
-  final FictionTimelineEvent event;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _eventColor(context, event);
-    return Semantics(
-      label: '${event.title}时间线节点',
-      child: Container(
-        width: event.isMajor ? 22 : 16,
-        height: event.isMajor ? 22 : 16,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          border: Border.all(
-              color: Theme.of(context).colorScheme.surface, width: 3),
-          boxShadow: [BoxShadow(color: color.withAlpha(70), blurRadius: 8)],
-        ),
-      ),
-    );
-  }
 }
 
 Color _eventColor(BuildContext context, FictionTimelineEvent event) {
