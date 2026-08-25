@@ -12,6 +12,7 @@ class FictionStoryAtlas {
     required this.visibleProgress,
     required this.coverageStart,
     required this.coverageEnd,
+    this.lastOrganizedProgress,
     this.lastIngestedAt,
   });
 
@@ -21,6 +22,7 @@ class FictionStoryAtlas {
   final double visibleProgress;
   final double? coverageStart;
   final double? coverageEnd;
+  final double? lastOrganizedProgress;
   final int? lastIngestedAt;
 
   bool get isEmpty => characters.isEmpty && timeline.isEmpty;
@@ -88,6 +90,7 @@ class FictionTimelineEvent {
   bool get isMajor => source.payload['importance']?.toString() == 'major';
   bool get isMystery => kind == ReadingArtifactKinds.mystery;
   bool get isClue => kind == ReadingArtifactKinds.clue;
+  bool get isRelationship => kind == ReadingArtifactKinds.relationship;
 }
 
 enum FictionTimelineDensity { compact, standard, complete }
@@ -106,6 +109,31 @@ class FictionTimelineChapter {
   final List<FictionTimelineEvent> events;
 
   int get majorEventCount => events.where((event) => event.isMajor).length;
+}
+
+class FictionStoryStage {
+  const FictionStoryStage({
+    required this.index,
+    required this.startProgress,
+    required this.endProgress,
+    required this.chapterIds,
+    required this.eventCount,
+  });
+
+  final int index;
+  final double startProgress;
+  final double endProgress;
+  final List<String> chapterIds;
+  final int eventCount;
+
+  String get label => '阶段 $index';
+}
+
+class FictionMysteryThread {
+  const FictionMysteryThread({required this.mystery, required this.events});
+
+  final FictionTimelineEvent mystery;
+  final List<FictionTimelineEvent> events;
 }
 
 class FictionStoryAtlasService {
@@ -170,6 +198,85 @@ class FictionStoryAtlasService {
       );
     }).toList(growable: false)
       ..sort((a, b) => a.startProgress.compareTo(b.startProgress));
+  }
+
+  List<FictionStoryStage> storyStages(
+    List<FictionTimelineChapter> chapters, {
+    int maxStages = 5,
+  }) {
+    if (chapters.isEmpty) return const [];
+    final stageCount = maxStages.clamp(1, chapters.length);
+    final perStage = (chapters.length / stageCount).ceil();
+    final stages = <FictionStoryStage>[];
+    for (var offset = 0; offset < chapters.length; offset += perStage) {
+      final slice =
+          chapters.skip(offset).take(perStage).toList(growable: false);
+      stages.add(FictionStoryStage(
+        index: stages.length + 1,
+        startProgress: slice.first.startProgress,
+        endProgress: slice.last.events.last.source.sourceProgress,
+        chapterIds: List.unmodifiable(slice.map((chapter) => chapter.id)),
+        eventCount:
+            slice.fold(0, (sum, chapter) => sum + chapter.events.length),
+      ));
+    }
+    return List.unmodifiable(stages);
+  }
+
+  List<FictionMysteryThread> mysteryThreads(
+      Iterable<FictionTimelineEvent> events) {
+    final all = events.toList(growable: false);
+    final clues = all.where((event) => event.isClue).toList(growable: false);
+    return all.where((event) => event.isMystery).map((mystery) {
+      final keys = {
+        mystery.id,
+        mystery.title.trim().toLowerCase(),
+        mystery.source.payload['question']?.toString().trim().toLowerCase() ??
+            '',
+      }..remove('');
+      final related = clues.where((clue) {
+        final payload = clue.source.payload;
+        final refs = <String>{
+          payload['mysteryId']?.toString() ?? '',
+          payload['relatedMysteryId']?.toString() ?? '',
+          payload['mystery']?.toString() ?? '',
+          payload['relatedMystery']?.toString() ?? '',
+          if (payload['mysteryIds'] is List)
+            ...(payload['mysteryIds'] as List).map((value) => value.toString()),
+        }.map((value) => value.trim().toLowerCase()).toSet();
+        return refs.any(keys.contains);
+      }).toList()
+        ..sort((a, b) => _artifactOrder(a.source, b.source));
+      return FictionMysteryThread(
+        mystery: mystery,
+        events: List.unmodifiable([mystery, ...related]),
+      );
+    }).toList(growable: false);
+  }
+
+  List<FictionTimelineEvent> relationshipTimeline(FictionStoryAtlas atlas) {
+    final names = {
+      for (final character in atlas.characters) character.id: character.name
+    };
+    final result = <FictionTimelineEvent>[];
+    for (final edge in atlas.relationships) {
+      for (final artifact in edge.history) {
+        final from = names[edge.from] ?? edge.from;
+        final to = names[edge.to] ?? edge.to;
+        final relation = _text(artifact.payload['relation'], fallback: '关系变化');
+        result.add(FictionTimelineEvent(
+          id: 'relationship:${artifact.id}',
+          title: '$from与$to：$relation',
+          summary: _text(artifact.payload['summary']),
+          kind: ReadingArtifactKinds.relationship,
+          participants: [from, to],
+          storyTimeLabel: null,
+          source: artifact,
+        ));
+      }
+    }
+    result.sort((a, b) => _artifactOrder(a.source, b.source));
+    return List.unmodifiable(result);
   }
 
   bool _includedAtDensity(
@@ -266,6 +373,11 @@ class FictionStoryAtlasService {
       ..sort((a, b) => _artifactOrder(a.source, b.source));
     final ingested = artifacts.map((item) => item.ingestedAt).toList();
     final progress = artifacts.map((item) => item.sourceProgress).toList();
+    final organizedProgress = artifacts
+        .where((item) =>
+            item.ingestionMode == ReadingArtifactIngestionMode.backfill)
+        .map((item) => item.sourceProgress)
+        .toList();
     return FictionStoryAtlas(
       characters: List.unmodifiable(characters.values),
       relationships: List.unmodifiable(relationships),
@@ -273,6 +385,8 @@ class FictionStoryAtlasService {
       visibleProgress: visibleAtProgress.clamp(0, 1).toDouble(),
       coverageStart: progress.isEmpty ? null : progress.reduce(_min),
       coverageEnd: progress.isEmpty ? null : progress.reduce(_max),
+      lastOrganizedProgress:
+          organizedProgress.isEmpty ? null : organizedProgress.reduce(_max),
       lastIngestedAt: ingested.isEmpty ? null : ingested.reduce(_maxInt),
     );
   }

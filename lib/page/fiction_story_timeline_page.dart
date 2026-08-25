@@ -4,6 +4,8 @@ import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+enum _StoryTimelineView { story, mystery, character, relationship }
+
 class FictionStoryTimelinePage extends StatefulWidget {
   const FictionStoryTimelinePage({
     super.key,
@@ -27,6 +29,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
   late Future<FictionStoryAtlas> _future;
   FictionStoryAtlas? _atlas;
   FictionTimelineDensity _density = FictionTimelineDensity.compact;
+  _StoryTimelineView _view = _StoryTimelineView.story;
   final Set<String> _kinds = {};
   String? _participant;
   final Set<String> _expandedChapters = {};
@@ -119,7 +122,9 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                '正文顺序 · 安全边界 ${(atlas.visibleProgress * 100).round()}%',
+                atlas.lastOrganizedProgress == null
+                    ? '正文顺序 · 安全边界 ${(atlas.visibleProgress * 100).round()}%'
+                    : '正文顺序 · 安全边界 ${(atlas.visibleProgress * 100).round()}% · 上次整理 ${(atlas.lastOrganizedProgress! * 100).round()}%',
               ),
             ),
           ]),
@@ -127,13 +132,22 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
       );
 
   Widget _timelineBody(FictionStoryAtlas atlas) {
+    final sourceEvents = _view == _StoryTimelineView.relationship
+        ? fictionStoryAtlasService.relationshipTimeline(atlas)
+        : atlas.timeline;
+    if (_view == _StoryTimelineView.mystery) {
+      return _mysteryTimelineBody(atlas);
+    }
     final chapters = fictionStoryAtlasService.timelineChapters(
-      atlas.timeline,
-      density: _density,
+      sourceEvents,
+      density: _view == _StoryTimelineView.relationship
+          ? FictionTimelineDensity.complete
+          : _density,
       kinds: _kinds,
-      participant: _participant,
+      participant: _view == _StoryTimelineView.character ? _participant : null,
     );
-    final signature = '${_density.name}|${_kinds.join(',')}|$_participant';
+    final signature =
+        '${_view.name}|${_density.name}|${_kinds.join(',')}|$_participant';
     if (_expandedForSignature != signature) {
       _expandedForSignature = signature;
       _expandedChapters
@@ -169,6 +183,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
       children: [
         _boundaryBanner(atlas),
         _timelineControls(atlas, chapters.length),
+        if (chapters.isNotEmpty) _stageOverview(chapters),
         if (chapters.isNotEmpty) _pageControls(totalPages),
         Expanded(
           child: chapters.isEmpty
@@ -182,10 +197,23 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
                   key: const PageStorageKey('fiction-story-timeline'),
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 40),
                   itemCount: visibleChapters.length,
-                  itemBuilder: (context, index) => _chapterSection(
-                    visibleChapters[index],
-                    isCurrent: visibleChapters[index].id == currentChapterId,
-                  ),
+                  itemBuilder: (context, index) {
+                    final chapter = visibleChapters[index];
+                    final previous =
+                        index == 0 ? null : visibleChapters[index - 1];
+                    final boundary = atlas.lastOrganizedProgress;
+                    final crossesBoundary = boundary != null &&
+                        chapter.startProgress > boundary &&
+                        (previous == null ||
+                            previous.startProgress <= boundary);
+                    return Column(children: [
+                      if (crossesBoundary) _organizedBoundary(boundary),
+                      _chapterSection(
+                        chapter,
+                        isCurrent: chapter.id == currentChapterId,
+                      ),
+                    ]);
+                  },
                 ),
         ),
       ],
@@ -254,6 +282,37 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (final entry in const {
+                _StoryTimelineView.story: '故事主线',
+                _StoryTimelineView.mystery: '悬念线索',
+                _StoryTimelineView.character: '人物故事线',
+                _StoryTimelineView.relationship: '关系变化',
+              }.entries)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(entry.value),
+                    selected: _view == entry.key,
+                    onSelected: (_) => setState(() {
+                      _view = entry.key;
+                      _kinds.clear();
+                      if (_view == _StoryTimelineView.character) {
+                        _density = FictionTimelineDensity.standard;
+                      } else if (_view == _StoryTimelineView.relationship) {
+                        _density = FictionTimelineDensity.complete;
+                      }
+                      if (_view != _StoryTimelineView.character) {
+                        _participant = null;
+                      }
+                    }),
+                  ),
+                ),
+            ]),
+          ),
+          const SizedBox(height: 6),
           Row(children: [
             const Text('显示密度'),
             const SizedBox(width: 8),
@@ -276,56 +335,140 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             ),
           ]),
           const SizedBox(height: 6),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(children: [
-              FilterChip(
-                label: const Text('全部类型'),
-                selected: _kinds.isEmpty,
-                onSelected: (_) => setState(_kinds.clear),
+          if (_view == _StoryTimelineView.character && participants.isNotEmpty)
+            DropdownButtonFormField<String>(
+              initialValue: _participant,
+              decoration: const InputDecoration(
+                labelText: '选择人物',
+                isDense: true,
+                border: OutlineInputBorder(),
               ),
-              for (final entry in const {
-                ReadingArtifactKinds.event: '事件',
-                ReadingArtifactKinds.scene: '场景',
-                ReadingArtifactKinds.clue: '线索',
-                ReadingArtifactKinds.mystery: '悬念',
-              }.entries)
-                Padding(
-                  padding: const EdgeInsets.only(left: 6),
-                  child: FilterChip(
-                    label: Text(entry.value),
-                    selected: _kinds.contains(entry.key),
-                    onSelected: (selected) => setState(() {
-                      if (selected) {
-                        _kinds.add(entry.key);
-                      } else {
-                        _kinds.remove(entry.key);
-                      }
-                    }),
-                  ),
+              items: participants
+                  .map((name) =>
+                      DropdownMenuItem(value: name, child: Text(name)))
+                  .toList(growable: false),
+              onChanged: (value) => setState(() => _participant = value),
+            ),
+          if (_view == _StoryTimelineView.story)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                FilterChip(
+                  label: const Text('全部类型'),
+                  selected: _kinds.isEmpty,
+                  onSelected: (_) => setState(_kinds.clear),
                 ),
-              if (participants.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: DropdownButton<String?>(
-                    value: _participant,
-                    hint: const Text('按人物'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                          value: null, child: Text('全部人物')),
-                      ...participants.map((name) =>
-                          DropdownMenuItem(value: name, child: Text(name))),
-                    ],
-                    onChanged: (value) => setState(() => _participant = value),
+                for (final entry in const {
+                  ReadingArtifactKinds.event: '事件',
+                  ReadingArtifactKinds.scene: '场景',
+                  ReadingArtifactKinds.clue: '线索',
+                  ReadingArtifactKinds.mystery: '悬念',
+                }.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: FilterChip(
+                      label: Text(entry.value),
+                      selected: _kinds.contains(entry.key),
+                      onSelected: (selected) => setState(() {
+                        if (selected) {
+                          _kinds.add(entry.key);
+                        } else {
+                          _kinds.remove(entry.key);
+                        }
+                      }),
+                    ),
                   ),
-                ),
-            ]),
-          ),
+              ]),
+            ),
           Text('$chapterCount 个章节分组 · 仅在展开章节时显示事件',
               style: Theme.of(context).textTheme.bodySmall),
         ]),
       ),
     );
+  }
+
+  Widget _stageOverview(List<FictionTimelineChapter> chapters) {
+    final stages = fictionStoryAtlasService.storyStages(chapters);
+    return SizedBox(
+      height: 58,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        scrollDirection: Axis.horizontal,
+        itemCount: stages.length,
+        separatorBuilder: (_, __) => const Icon(Icons.chevron_right, size: 18),
+        itemBuilder: (context, index) {
+          final stage = stages[index];
+          return ActionChip(
+            avatar: CircleAvatar(child: Text('${stage.index}')),
+            label: Text('${stage.label} · ${stage.eventCount}件'),
+            onPressed: () {
+              final chapterIndex = chapters.indexWhere(
+                  (chapter) => chapter.id == stage.chapterIds.first);
+              if (chapterIndex < 0) return;
+              setState(() {
+                _chapterPage = (chapterIndex ~/ 20) + 1;
+                _expandedChapters.add(stage.chapterIds.first);
+              });
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _organizedBoundary(double progress) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(children: [
+          const Expanded(child: Divider()),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text('上次整理到这里 · ${(progress * 100).round()}%'),
+          ),
+          const Expanded(child: Divider()),
+          if (widget.onRequestOrganize != null)
+            TextButton(
+              onPressed: widget.onRequestOrganize,
+              child: const Text('整理新增'),
+            ),
+        ]),
+      );
+
+  Widget _mysteryTimelineBody(FictionStoryAtlas atlas) {
+    final threads = fictionStoryAtlasService.mysteryThreads(atlas.timeline);
+    return Column(children: [
+      _boundaryBanner(atlas),
+      _timelineControls(atlas, threads.length),
+      Expanded(
+        child: threads.isEmpty
+            ? const Center(child: Text('当前已读范围内没有未解悬念。'))
+            : ListView.builder(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 40),
+                itemCount: threads.length,
+                itemBuilder: (context, index) {
+                  final thread = threads[index];
+                  return Card(
+                    child: ExpansionTile(
+                      initiallyExpanded: index == 0,
+                      leading: const Icon(Icons.help_outline),
+                      title: Text(thread.mystery.title),
+                      subtitle: Text(
+                        thread.events.length == 1
+                            ? '尚无线索关联'
+                            : '${thread.events.length - 1} 条关联线索',
+                      ),
+                      children: [
+                        for (final event in thread.events)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                            child: _eventCard(event),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+    ]);
   }
 
   Widget _chapterSection(
