@@ -120,6 +120,7 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
       );
 
   Widget _graph(FictionStoryAtlas atlas, double width) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final graph = Graph();
     final nodes = <String, Node>{};
     for (final character in atlas.characters) {
@@ -166,10 +167,19 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
               graph: graph,
               algorithm: algorithm,
               controller: _controller,
+              // The app maps E-INK to MediaQuery.disableAnimations. Keep the
+              // fit operation but make it instantaneous there, otherwise
+              // nodes can start outside the viewport on a large graph.
               autoZoomToFit: true,
-              // Keep positions and hit targets stable, especially while an
-              // E-INK display performs a partial refresh.
-              animated: false,
+              // OLED/LCD keeps the graph's layout animation; E-INK disables
+              // it to avoid partial-refresh ghosting and stale hit targets.
+              animated: !reduceMotion,
+              panAnimationDuration: reduceMotion
+                  ? Duration.zero
+                  : const Duration(milliseconds: 350),
+              toggleAnimationDuration: reduceMotion
+                  ? Duration.zero
+                  : const Duration(milliseconds: 250),
               paint: Paint()
                 ..color = Theme.of(context).colorScheme.outline
                 ..strokeWidth = 1.4,

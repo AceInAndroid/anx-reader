@@ -4,6 +4,8 @@
 
 当前 AI 分层、调用链、持久化归属、同步边界、Token 用量统计和扩展契约见
 [`docs/architecture/ai-architecture.md`](docs/architecture/ai-architecture.md)。
+已实现功能、代码入口、复用边界和明确未实现项见
+[`docs/architecture/feature-map.md`](docs/architecture/feature-map.md)，新增能力前应先查该地图。
 本文继续作为产品行为、权限、剧透边界和低打扰交互的事实来源。
 
 ## Reading Task Runtime — P1

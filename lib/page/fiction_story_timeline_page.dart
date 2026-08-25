@@ -80,10 +80,20 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             final atlas = snapshot.requireData;
             _atlas = atlas;
             if (atlas.timeline.isEmpty) return _emptyState(atlas);
-            return _timelineBody(atlas);
+            return AnimatedSwitcher(
+              duration: _motionDuration,
+              child: KeyedSubtree(
+                key: ValueKey(_view),
+                child: _timelineBody(atlas),
+              ),
+            );
           },
         ),
       );
+
+  Duration get _motionDuration => MediaQuery.disableAnimationsOf(context)
+      ? Duration.zero
+      : const Duration(milliseconds: 240);
 
   Widget _emptyState(FictionStoryAtlas atlas) => Center(
         child: Padding(
@@ -174,7 +184,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
           Scrollable.ensureVisible(
             chapterContext,
             alignment: .1,
-            duration: const Duration(milliseconds: 1),
+            duration: _motionDuration,
           );
         }
       });
@@ -448,6 +458,10 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
                   final thread = threads[index];
                   return Card(
                     child: ExpansionTile(
+                      expansionAnimationStyle: AnimationStyle(
+                        duration: _motionDuration,
+                        reverseDuration: _motionDuration,
+                      ),
                       initiallyExpanded: index == 0,
                       leading: const Icon(Icons.help_outline),
                       title: Text(thread.mystery.title),
@@ -495,12 +509,22 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             }
           }),
         ),
-        if (expanded)
-          for (final event in chapter.events)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-              child: _eventCard(event),
-            ),
+        AnimatedSize(
+          duration: _motionDuration,
+          curve: Curves.easeOut,
+          alignment: Alignment.topCenter,
+          child: expanded
+              ? Column(
+                  children: [
+                    for (final event in chapter.events)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                        child: _eventCard(event),
+                      ),
+                  ],
+                )
+              : const SizedBox.shrink(),
+        ),
       ]),
     );
   }

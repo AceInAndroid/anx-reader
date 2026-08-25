@@ -5,6 +5,7 @@ import 'package:anx_reader/page/fiction_story_timeline_page.dart';
 import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:graphview/GraphView.dart';
 
 void main() {
   final now = DateTime(2026, 8, 24).millisecondsSinceEpoch;
@@ -61,22 +62,60 @@ void main() {
     await tester.pumpWidget(MaterialApp(
       home: FictionCharacterGraphPage(book: book, initialAtlas: atlas),
     ));
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
 
     expect(find.text('人物关系图'), findsOneWidget);
     expect(find.text('王小明'), findsOneWidget);
     expect(find.text('诸葛亮'), findsOneWidget);
     expect(find.text('小'), findsOneWidget);
     expect(find.text('亮'), findsOneWidget);
-    expect(find.text('小'), findsOneWidget);
     expect(find.text('对手'), findsOneWidget);
     expect(find.byType(Image), findsNothing);
+    final graph = tester.widget<GraphView>(find.byType(GraphView));
+    expect(graph.animated, isTrue);
+    expect(graph.panAnimationDuration, const Duration(milliseconds: 350));
 
     await tester.tap(find.byKey(const ValueKey('fiction-character-a')));
     await tester.pump();
     expect(find.text('剑客'), findsOneWidget);
     expect(find.text('已知关系'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('E-INK disables graph and timeline interaction animations',
+      (tester) async {
+    tester.view.physicalSize = const Size(1024, 768);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Widget eink(Widget child) => MaterialApp(
+          home: Builder(
+            builder: (context) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child,
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(
+      eink(FictionCharacterGraphPage(book: book, initialAtlas: atlas)),
+    );
+    await tester.pump();
+    final graph = tester.widget<GraphView>(find.byType(GraphView));
+    expect(graph.animated, isFalse);
+    expect(graph.panAnimationDuration, Duration.zero);
+
+    await tester.pumpWidget(
+      eink(FictionStoryTimelinePage(book: book, initialAtlas: atlas)),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<AnimatedSwitcher>(find.byType(AnimatedSwitcher).first)
+          .duration,
+      Duration.zero,
+    );
   });
 
   testWidgets('timeline renders narrative order metadata on phone',
