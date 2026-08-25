@@ -413,17 +413,26 @@ class CancelableLangchainRunner {
     final recorder = onTokenUsage;
     if (recorder == null) return;
     if (usage != null && _hasUsage(usage)) {
-      final total = usage.totalTokens;
       final reportedInput = usage.promptTokens;
       final reportedOutput = usage.responseTokens;
       if (reportedInput != null || reportedOutput != null) {
-        final input = reportedInput ??
-            ((total ?? reportedOutput ?? 0) - (reportedOutput ?? 0))
-                .clamp(0, 1 << 62);
-        final output = reportedOutput ??
-            ((total ?? reportedInput ?? 0) - (reportedInput ?? 0))
-                .clamp(0, 1 << 62);
-        recorder(inputTokens: input, outputTokens: output, estimated: false);
+        // A few providers expose only response_tokens, or expose a zero
+        // prompt_tokens value while streaming. Treat zero as missing here:
+        // otherwise the settings page permanently reports input usage as 0.
+        // The prompt is available locally, so estimate only the missing side.
+        final estimatedInput = _estimateTokens(
+          prompt.map((message) => message.contentAsString).join('\n'),
+        );
+        final estimatedOutput = _estimateTokens(response);
+        final hasReportedInput = reportedInput != null && reportedInput > 0;
+        final hasReportedOutput = reportedOutput != null && reportedOutput > 0;
+        final input = hasReportedInput ? reportedInput : estimatedInput;
+        final output = hasReportedOutput ? reportedOutput : estimatedOutput;
+        recorder(
+          inputTokens: input,
+          outputTokens: output,
+          estimated: !hasReportedInput || !hasReportedOutput,
+        );
         return;
       }
     }

@@ -31,4 +31,57 @@ void main() {
     expect(receivedOutput, 2);
     expect(receivedEstimated, isTrue);
   });
+
+  test('runner estimates input when provider reports output only', () async {
+    int? receivedInput;
+    int? receivedOutput;
+    bool? receivedEstimated;
+    final runner = CancelableLangchainRunner(
+      onTokenUsage: ({
+        required inputTokens,
+        required outputTokens,
+        required estimated,
+      }) {
+        receivedInput = inputTokens;
+        receivedOutput = outputTokens;
+        receivedEstimated = estimated;
+      },
+    );
+
+    await runner
+        .stream(
+          model: _OutputOnlyUsageChatModel(),
+          prompt: PromptValue.chat([ChatMessage.humanText('输入内容')]),
+        )
+        .drain<void>();
+
+    expect(receivedInput, 4);
+    expect(receivedOutput, 7);
+    expect(receivedEstimated, isTrue);
+  });
+}
+
+class _OutputOnlyUsageChatModel extends FakeChatModel {
+  _OutputOnlyUsageChatModel() : super(responses: const ['回答']);
+
+  @override
+  Stream<ChatResult> stream(
+    PromptValue input, {
+    FakeChatModelOptions? options,
+  }) {
+    return Stream.value(
+      ChatResult(
+        id: 'output-only',
+        output: AIChatMessage(content: '回答'),
+        finishReason: FinishReason.stop,
+        metadata: const {},
+        usage: const LanguageModelUsage(
+          promptTokens: 0,
+          responseTokens: 7,
+          totalTokens: 7,
+        ),
+        streaming: true,
+      ),
+    );
+  }
 }
