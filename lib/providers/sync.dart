@@ -145,7 +145,8 @@ class Sync extends _$Sync {
   }
 
   Future<SyncDirection?> determineSyncDirection(
-      SyncDirection requestedDirection) async {
+      SyncDirection requestedDirection,
+      {SyncTrigger trigger = SyncTrigger.manual}) async {
     final client = _syncClient;
     if (client == null) return null;
 
@@ -190,6 +191,34 @@ class Sync extends _$Sync {
 
     if (remoteDb == null) {
       return SyncDirection.upload;
+    }
+
+    if (requestedDirection == SyncDirection.both &&
+        trigger == SyncTrigger.auto) {
+      // Automatic checks must never open a blocking direction dialog. Treat a
+      // remote timestamp equal to the last successful upload as our own write.
+      final knownRemote = Prefs().lastUploadBookDate;
+      final knownLocal = Prefs().lastSyncLocalDatabaseTime;
+      final localChanged =
+          knownLocal == null || localDbTime.isAfter(knownLocal);
+      final remoteChanged = knownRemote == null ||
+          remoteDb.mTime == null ||
+          remoteDb.mTime!.difference(knownRemote).inSeconds.abs() >= 5;
+
+      if (!remoteChanged && !localChanged) return null;
+      if (localChanged && !remoteChanged) {
+        // Local reading edits are silently uploaded during automatic sync.
+        return SyncDirection.upload;
+      }
+      if (!localChanged && remoteChanged) {
+        // A remote-only change can be safely downloaded without asking.
+        return SyncDirection.download;
+      }
+
+      // Both sides changed. Defer the conflict to an explicit manual sync;
+      // never interrupt an active reading session with a modal dialog.
+      AnxLog.info('WebDAV conflict deferred during automatic sync');
+      return null;
     }
 
     if (requestedDirection == SyncDirection.both) {
@@ -352,7 +381,10 @@ class Sync extends _$Sync {
     AnxLog.info('Sync ping success');
 
     // Determine sync direction
-    SyncDirection? finalDirection = await determineSyncDirection(direction);
+    SyncDirection? finalDirection = await determineSyncDirection(
+      direction,
+      trigger: trigger,
+    );
     if (finalDirection == null) {
       return; // User cancelled or no sync needed
     }
@@ -592,6 +624,10 @@ class Sync extends _$Sync {
       if (newRemoteDb != null) {
         Prefs().lastUploadBookDate = newRemoteDb.mTime;
       }
+      // Capture the post-sync local timestamp (including WAL) as the next
+      // automatic comparison baseline.
+      Prefs().lastSyncLocalDatabaseTime =
+          await _latestDatabaseModification(localDbPath);
     } catch (e) {
       AnxLog.severe('Failed to sync database\n$e');
       rethrow;

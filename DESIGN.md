@@ -429,6 +429,20 @@ merge rules; the server only isolates and returns packages.
   to that account. Passwords are scrypt-hashed in the function's PG boundary;
   the account session is the only sync credential exposed to Flutter.
 
+### WebDAV automatic-sync interruption policy
+
+- Automatic WebDAV checks never open the upload/download direction dialog. A
+  local database change is uploaded silently when the remote timestamp still
+  matches the last successful sync baseline; a remote-only change is downloaded
+  silently. If both sides changed, the check is deferred and the next explicit
+  manual sync presents the conflict choice.
+- The client stores both the last acknowledged remote timestamp and the local
+  database/WAL timestamp captured after a successful sync. This prevents the
+  device's own reading progress or upload mtime from being reported as an
+  external change on the next periodic check.
+- All automatic and manual requests still pass through the single-flight gate;
+  repeated taps or overlapping lifecycle triggers join the in-flight operation.
+
 ## Hybrid extraction and internal summary engine
 
 - The lightweight extraction engine is a device-local AI role selected from

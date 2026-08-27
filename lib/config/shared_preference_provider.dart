@@ -1479,6 +1479,23 @@ class Prefs extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Local database timestamp captured after the last successful WebDAV sync.
+  /// Used as a sync baseline so automatic checks can distinguish local edits
+  /// from a remote change without repeatedly interrupting reading.
+  DateTime? get lastSyncLocalDatabaseTime {
+    final value = prefs.getString('lastSyncLocalDatabaseTime');
+    return value == null ? null : DateTime.tryParse(value);
+  }
+
+  set lastSyncLocalDatabaseTime(DateTime? value) {
+    if (value == null) {
+      prefs.remove('lastSyncLocalDatabaseTime');
+    } else {
+      prefs.setString('lastSyncLocalDatabaseTime', value.toIso8601String());
+    }
+    notifyListeners();
+  }
+
   int get lastServerPort {
     return prefs.getInt('lastServerPort') ?? 0;
   }
