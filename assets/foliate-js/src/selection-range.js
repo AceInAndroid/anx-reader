@@ -189,6 +189,12 @@ export class SelectionRangeController {
     this.programmatic = false
     this.lastTouch = null
     this.pendingWordTimer = null
+    // Android can report the temporary native selection before the configured
+    // long-press range (word/sentence) has been applied. Keep that state in
+    // the controller so the temporary range never opens a second menu.
+    this.nativeSelectionStarted = false
+    this.longPressExpandedForTouch = false
+    this.lastReportedSelection = null
   }
 
   configure(config) {
@@ -210,6 +216,7 @@ export class SelectionRangeController {
       const touch = event.touches && event.touches[0]
       const selection = this.doc.getSelection()
       if (touch) {
+        this.longPressExpandedForTouch = false
         this.lastTouch = {
           x: touch.clientX,
           y: touch.clientY,
@@ -223,7 +230,18 @@ export class SelectionRangeController {
       this.sessionId = ++nextSelectionSessionId
       this.rangeType = 'custom'
       this.trigger = 'manual'
+      this.nativeSelectionStarted = false
+      this.lastReportedSelection = null
     })
+  }
+
+  markNativeSelectionStarted() {
+    this.nativeSelectionStarted = true
+  }
+
+  get hasPendingNativeLongPress() {
+    return this.nativeSelectionStarted &&
+      Boolean(this.lastTouch && !this.lastTouch.hadSelection)
   }
 
   markManual() {
@@ -233,13 +251,39 @@ export class SelectionRangeController {
   }
 
   expandLongPressSelection() {
+    if (this.longPressExpandedForTouch) return false
     if (this.lastTouch && this.lastTouch.hadSelection) return false
     const selection = this.doc.getSelection()
     if (!selection || selection.isCollapsed || !selection.rangeCount) return false
     const range = selection.getRangeAt(0)
     const rect = range.getBoundingClientRect()
     const point = this.lastTouch || { x: rect.left, y: rect.top }
-    return this.selectAtPoint(point.x, point.y, this.longPressMode, 'longPress')
+    const wasNativeSelectionStarted = this.nativeSelectionStarted
+    this.nativeSelectionStarted = false
+    this.longPressExpandedForTouch = true
+    const expanded = this.selectAtPoint(point.x, point.y, this.longPressMode, 'longPress')
+    if (!expanded) {
+      this.nativeSelectionStarted = wasNativeSelectionStarted
+      this.longPressExpandedForTouch = false
+    }
+    return expanded
+  }
+
+  shouldSkipDuplicateReport(range) {
+    const previous = this.lastReportedSelection
+    if (!previous || previous.sessionId !== this.sessionId) return false
+    const sameRange = previous.range.startContainer === range.startContainer &&
+      previous.range.startOffset === range.startOffset &&
+      previous.range.endContainer === range.endContainer &&
+      previous.range.endOffset === range.endOffset
+    return sameRange
+  }
+
+  recordSelectionReport(range) {
+    this.lastReportedSelection = {
+      sessionId: this.sessionId,
+      range: range.cloneRange(),
+    }
   }
 
   selectAtPoint(x, y, type, trigger) {

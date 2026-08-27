@@ -26,7 +26,8 @@ Future<void> showContextMenu(
     bool footnote,
     Axis axis,
     {String? contextText,
-    SelectionSnapshot? selectionSnapshot}) async {
+    SelectionSnapshot? selectionSnapshot,
+    bool Function()? isCurrentRequest}) async {
   final playerKey = epubPlayerKey.currentState;
   if (playerKey == null) return;
   final mediaQuery = MediaQuery.of(context);
@@ -42,6 +43,11 @@ Future<void> showContextMenu(
     annoId = await playerKey.upsertSelectionAutoMark(selectionSnapshot);
     isNewNote = annoId != null;
   }
+
+  // Auto-mark persistence and dictionary setup are asynchronous. A newer
+  // selection may have arrived while they were running; never let the older
+  // request replace the menu for the current selection.
+  if (isCurrentRequest?.call() == false || !context.mounted) return;
 
   final renderBox =
       epubPlayerKey.currentContext?.findRenderObject() as RenderBox?;

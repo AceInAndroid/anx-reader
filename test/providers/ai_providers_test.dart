@@ -94,6 +94,59 @@ void main() {
     expect(notifier.setFallbackProvider(storedMissingModel.id), isFalse);
   });
 
+  test('custom no-auth OpenAI provider is runnable without a fake key', () {
+    final provider = AiProvider(
+      id: 'lm-studio',
+      title: 'LM Studio',
+      url: 'http://localhost:1234/v1/chat/completions',
+      protocol: AiProtocol.openai,
+      authMode: AiProviderAuthMode.none,
+      deployment: AiProviderDeployment.localPrivate,
+      model: 'qwen3.5-9b-mlx',
+    );
+    expect(provider.isRunnable, isTrue);
+
+    final builtin = provider.copyWith(isBuiltin: true);
+    expect(builtin.isRunnable, isFalse);
+    expect(_provider('cloud').copyWith(apiKeys: const []).isRunnable, isFalse);
+  });
+
+  test('legacy provider JSON defaults to bearer cloud authentication', () {
+    final provider = AiProvider.fromJson({
+      'id': 'legacy',
+      'title': 'Legacy',
+      'url': 'https://example.com/v1',
+      'protocol': 'openai',
+      'enabled': true,
+      'isBuiltin': false,
+      'apiKeys': const [],
+      'model': 'model',
+    });
+    expect(provider.authMode, AiProviderAuthMode.bearer);
+    expect(provider.deployment, AiProviderDeployment.cloud);
+    expect(provider.isRunnable, isFalse);
+  });
+
+  test('extraction role is excluded from preferences backup', () async {
+    Prefs().aiExtractionConfig = {
+      'enabled': true,
+      'providerId': 'translation',
+    };
+    final backup = await Prefs().buildPrefsBackupMap();
+    expect(backup, isNot(contains('aiExtractionConfig')));
+  });
+
+  test('extraction provider role is independent and device local', () {
+    final notifier = container.read(aiProvidersProvider.notifier);
+    expect(notifier.setExtractionProvider('translation'), isTrue);
+    expect(notifier.getExtractionProvider()?.id, 'translation');
+    expect(Prefs().selectedAiService, 'primary');
+
+    notifier.toggleProvider('translation', false);
+    expect(notifier.getExtractionProvider(), isNull);
+    expect(Prefs().aiExtractionConfig['enabled'], isFalse);
+  });
+
   test('first runnable custom provider becomes the general provider', () async {
     container.dispose();
     SharedPreferences.setMockInitialValues({});

@@ -146,6 +146,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   Future<void> _selectionAutoMarkMutation = Future<void>.value();
   bool _selectionClearLocked = false;
   bool _selectionClearPending = false;
+  int _selectionMenuGeneration = 0;
   late TranslationModeEnum _activeTranslationMode;
   String? _translationTextCacheStorageKey;
   Map<String, dynamic> _translationTextCache = {};
@@ -1102,6 +1103,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     controller.addJavaScriptHandler(
         handlerName: 'onSelectionEnd',
         callback: (args) {
+          final menuGeneration = ++_selectionMenuGeneration;
           removeOverlay(preserveAutoMarkSession: true);
           if (args.isEmpty || args.first is! Map) {
             AnxLog.warning('Selection menu ignored: invalid WebView payload');
@@ -1144,6 +1146,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
               writingMode.isVertical ? Axis.vertical : Axis.horizontal,
               contextText: _lastSelectionContextText,
               selectionSnapshot: snapshot,
+              isCurrentRequest: () =>
+                  mounted && menuGeneration == _selectionMenuGeneration,
             ).catchError((Object error, StackTrace stack) {
               AnxLog.warning('Failed to show selection menu: $error\n$stack');
             }),
@@ -1181,12 +1185,14 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             return;
           }
           _lastSelectionContextText = null;
+          _selectionMenuGeneration++;
           widget.onSelectionCleared?.call();
           removeOverlay();
         });
     controller.addJavaScriptHandler(
         handlerName: 'onAnnotationClick',
         callback: (args) {
+          final menuGeneration = ++_selectionMenuGeneration;
           Map<String, dynamic> annotation = args[0];
 
           if (annotation['annotation'] == null) {
@@ -1232,6 +1238,8 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
             false,
             writingMode.isVertical ? Axis.vertical : Axis.horizontal,
             contextText: _lastSelectionContextText,
+            isCurrentRequest: () =>
+                mounted && menuGeneration == _selectionMenuGeneration,
           );
         });
     controller.addJavaScriptHandler(

@@ -35,6 +35,12 @@ class FictionCharacterNode {
     required this.summary,
     required this.aliases,
     required this.source,
+    this.namingSystem = 'unknown',
+    this.courtesyNames = const [],
+    this.artNames = const [],
+    this.titles = const [],
+    this.givenName,
+    this.familyName,
   });
 
   final String id;
@@ -42,6 +48,12 @@ class FictionCharacterNode {
   final String summary;
   final List<String> aliases;
   final ReadingArtifact source;
+  final String namingSystem;
+  final List<String> courtesyNames;
+  final List<String> artNames;
+  final List<String> titles;
+  final String? givenName;
+  final String? familyName;
 
   String get initial => name.trim().isEmpty ? '?' : name.trim()[0];
 }
@@ -300,46 +312,39 @@ class FictionStoryAtlasService {
             item.isVisibleAtProgress(visibleAtProgress) &&
             item.status == ReadingArtifactStatus.active)
         .toList(growable: false);
-    final characters = <String, FictionCharacterNode>{};
-    final aliases = <String, String>{};
-    for (final artifact in artifacts
-        .where((item) => item.kind == ReadingArtifactKinds.character)) {
-      final name = _text(artifact.payload['name']);
-      if (name.isEmpty) continue;
-      final id = _id(artifact.payload['entityId'], name);
-      final node = FictionCharacterNode(
-        id: id,
-        name: name,
-        summary: _text(artifact.payload['summary']),
-        aliases: _list(artifact.payload['aliases']),
-        source: artifact,
-      );
-      characters[id] = node;
-      aliases[_normalize(name)] = id;
-      for (final alias in node.aliases) {
-        aliases[_normalize(alias)] = id;
-      }
-    }
+    final characterIndex = _buildCharacterIndex(artifacts);
+    final characters = <String, FictionCharacterNode>{
+      for (final character in characterIndex.characters)
+        character.id: character,
+    };
+    final unresolvedCharacters = <String, String>{};
 
     final relationshipArtifacts = artifacts
         .where((item) => item.kind == ReadingArtifactKinds.relationship)
         .toList()
       ..sort(_artifactOrder);
     final grouped = <String, List<ReadingArtifact>>{};
+    final endpoints = <String, ({String from, String to})>{};
     for (final artifact in relationshipArtifacts) {
-      final from = _resolve(
+      final from = _resolveRelationshipEndpoint(
         _text(artifact.payload['from']),
+        characterIndex,
         characters,
-        aliases,
+        unresolvedCharacters,
+        artifact,
       );
-      final to = _resolve(
+      final to = _resolveRelationshipEndpoint(
         _text(artifact.payload['to']),
+        characterIndex,
         characters,
-        aliases,
+        unresolvedCharacters,
+        artifact,
       );
-      if (from.isEmpty || to.isEmpty || from == to) continue;
-      characters.putIfAbsent(from, () => _placeholder(from, artifact));
-      characters.putIfAbsent(to, () => _placeholder(to, artifact));
+      // A one-character Chinese reference is normally a model-generated
+      // abbreviation. If it is ambiguous or unknown, hiding this edge is
+      // safer than rendering a duplicate character such as "第五伦" + "伦".
+      if (from == null || to == null || from == to) continue;
+      endpoints[artifact.id] = (from: from, to: to);
       final key = [from, to]..sort();
       grouped.putIfAbsent(key.join('|'), () => []).add(artifact);
     }
@@ -347,17 +352,38 @@ class FictionStoryAtlasService {
     for (final history in grouped.values) {
       history.sort(_artifactOrder);
       final latest = history.last;
-      final from = _resolve(_text(latest.payload['from']), characters, aliases);
-      final to = _resolve(_text(latest.payload['to']), characters, aliases);
+      final endpoint = endpoints[latest.id]!;
       relationships.add(FictionRelationshipEdge(
-        from: from,
-        to: to,
+        from: endpoint.from,
+        to: endpoint.to,
         relation: _text(latest.payload['relation'], fallback: '其他'),
         summary: _text(latest.payload['summary']),
         state: _text(latest.payload['state'], fallback: 'active'),
         history: List.unmodifiable(history),
         source: latest,
       ));
+    }
+
+    // Older or partially valid extraction batches may reference a named
+    // person from an event without emitting a matching character Artifact.
+    // Keep those source-backed names visible in the atlas instead of silently
+    // dropping them from the graph. Opaque IDs and ambiguous one-character
+    // Chinese references are deliberately ignored.
+    for (final artifact in artifacts.where((item) => const {
+          ReadingArtifactKinds.event,
+          ReadingArtifactKinds.scene,
+          ReadingArtifactKinds.clue,
+          ReadingArtifactKinds.mystery,
+        }.contains(item.kind))) {
+      for (final participant in _list(artifact.payload['participants'])) {
+        _ensureReferencedCharacter(
+          participant,
+          characterIndex,
+          characters,
+          unresolvedCharacters,
+          artifact,
+        );
+      }
     }
 
     final timelineKinds = {
@@ -368,7 +394,11 @@ class FictionStoryAtlasService {
     };
     final timeline = artifacts
         .where((item) => timelineKinds.contains(item.kind))
-        .map((artifact) => _timelineEvent(artifact, aliases, characters))
+        .map((artifact) => _timelineEvent(
+              artifact,
+              characterIndex,
+              characters,
+            ))
         .toList()
       ..sort((a, b) => _artifactOrder(a.source, b.source));
     final ingested = artifacts.map((item) => item.ingestedAt).toList();
@@ -393,7 +423,7 @@ class FictionStoryAtlasService {
 
   FictionTimelineEvent _timelineEvent(
     ReadingArtifact artifact,
-    Map<String, String> aliases,
+    _CharacterIdentityIndex characterIndex,
     Map<String, FictionCharacterNode> characters,
   ) {
     final payload = artifact.payload;
@@ -408,8 +438,8 @@ class FictionStoryAtlasService {
                   : '故事事件',
     );
     final participants = _list(payload['participants']).map((value) {
-      final id = _resolve(value, characters, aliases);
-      return characters[id]?.name ?? value;
+      final id = characterIndex.resolve(value);
+      return id == null ? value : characters[id]?.name ?? value;
     }).toList(growable: false);
     return FictionTimelineEvent(
       id: artifact.id,
@@ -425,28 +455,594 @@ class FictionStoryAtlasService {
     );
   }
 
-  FictionCharacterNode _placeholder(String id, ReadingArtifact source) =>
+  FictionCharacterNode _placeholder(
+          String id, String name, ReadingArtifact source) =>
       FictionCharacterNode(
         id: id,
-        name: id,
+        name: name,
         summary: '',
         aliases: const [],
         source: source,
       );
 
-  String _resolve(String value, Map<String, FictionCharacterNode> characters,
-      Map<String, String> aliases) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return '';
-    if (characters.containsKey(trimmed)) return trimmed;
-    return aliases[_normalize(trimmed)] ?? _normalize(trimmed);
+  String? _resolveRelationshipEndpoint(
+    String value,
+    _CharacterIdentityIndex index,
+    Map<String, FictionCharacterNode> characters,
+    Map<String, String> unresolved,
+    ReadingArtifact source,
+  ) {
+    final known = index.resolve(value);
+    if (known != null) return known;
+    final name = _cleanReference(value);
+    if (name.isEmpty ||
+        index.containsReference(name) ||
+        _isLikelyShortChineseReference(name)) {
+      return null;
+    }
+    final key = _normalize(name);
+    final existing = unresolved[key];
+    if (existing != null) return existing;
+    var id = 'unresolved:$key';
+    var suffix = 2;
+    while (characters.containsKey(id)) {
+      id = 'unresolved:$key:$suffix';
+      suffix++;
+    }
+    unresolved[key] = id;
+    characters[id] = _placeholder(id, name, source);
+    return id;
   }
 
-  String _id(Object? raw, String fallback) =>
-      _text(raw).isEmpty ? _normalize(fallback) : _text(raw);
+  String? _ensureReferencedCharacter(
+    String value,
+    _CharacterIdentityIndex index,
+    Map<String, FictionCharacterNode> characters,
+    Map<String, String> unresolved,
+    ReadingArtifact source,
+  ) {
+    final known = index.resolve(value);
+    if (known != null) return known;
+    final name = _cleanReference(value);
+    if (!_isRenderableCharacterReference(name)) return null;
+    final key = _normalize(name);
+    final existing = unresolved[key];
+    if (existing != null) return existing;
+    final id = 'unresolved:$key';
+    if (characters.containsKey(id)) return id;
+    unresolved[key] = id;
+    characters[id] = _placeholder(id, name, source);
+    return id;
+  }
 
-  String _normalize(String value) =>
-      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  bool _isRenderableCharacterReference(String value) {
+    if (value.isEmpty || value.length > 80) return false;
+    if (_isLikelyShortChineseReference(value)) return false;
+    final normalized = _normalize(value);
+    const genericReferences = {
+      '他们',
+      '她们',
+      '众人',
+      '某人',
+      '男人',
+      '女人',
+      '老人',
+      '孩子',
+      '主角',
+      'protagonist',
+      'narrator',
+      'unknown',
+    };
+    if (genericReferences.contains(normalized)) return false;
+    if (RegExp(r'^(character|person|char|role)[_:#-]?\d+$',
+            caseSensitive: false)
+        .hasMatch(normalized)) {
+      return false;
+    }
+    if (normalized.contains('_') || normalized.contains('://')) return false;
+    return RegExp(
+      r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaffA-Za-zÀ-ÖØ-öø-ÿ'’·•. -]+$",
+    ).hasMatch(value);
+  }
+
+  _CharacterIdentityIndex _buildCharacterIndex(
+      List<ReadingArtifact> artifacts) {
+    final records = artifacts
+        .where((item) => item.kind == ReadingArtifactKinds.character)
+        .map((artifact) {
+          final payload = artifact.payload;
+          final name = _cleanReference(_text(payload['name']));
+          if (name.isEmpty) return null;
+          final namingSystem = _namingSystem(payload, name);
+          final parsedAliases = _parseIdentityAliases(
+            _list(payload['aliases'])
+                .map(_cleanReference)
+                .where((value) => value.isNotEmpty)
+                .toList(growable: false),
+          );
+          return _CharacterRecord(
+            name: name,
+            entityId: _cleanReference(_text(payload['entityId'])),
+            summary: _text(payload['summary']),
+            namingSystem: namingSystem,
+            courtesyNames: List.unmodifiable({
+              ..._values(
+                payload,
+                const ['courtesyName', 'courtesyNames', 'styleName', 'zi', '字'],
+              ),
+              ...parsedAliases.courtesyNames,
+            }),
+            artNames: List.unmodifiable({
+              ..._values(
+                payload,
+                const ['artName', 'artNames', 'hao', '号'],
+              ),
+              ...parsedAliases.artNames,
+            }),
+            titles: List.unmodifiable({
+              ..._values(
+                payload,
+                const ['title', 'titles', 'honorifics', '称谓'],
+              ),
+              ...parsedAliases.titles,
+            }),
+            givenName: _nullableCleanText(payload['givenName']),
+            familyName: _nullableCleanText(payload['familyName']),
+            aliases: parsedAliases.aliases,
+            source: artifact,
+          );
+        })
+        .whereType<_CharacterRecord>()
+        .toList()
+      ..sort((a, b) => _artifactOrder(a.source, b.source));
+    if (records.isEmpty) {
+      return _CharacterIdentityIndex(
+        characters: const [],
+        fullNames: const {},
+        entityIds: const {},
+        aliases: const {},
+        normalize: _normalize,
+        clean: _cleanReference,
+      );
+    }
+
+    final parents = List<int>.generate(records.length, (index) => index);
+    int find(int value) {
+      var root = value;
+      while (parents[root] != root) {
+        root = parents[root];
+      }
+      while (parents[value] != value) {
+        final next = parents[value];
+        parents[value] = root;
+        value = next;
+      }
+      return root;
+    }
+
+    void union(int left, int right) {
+      final leftRoot = find(left);
+      final rightRoot = find(right);
+      if (leftRoot != rightRoot) parents[rightRoot] = leftRoot;
+    }
+
+    final nameOwners = <String, int>{};
+    final idOwners = <String, List<int>>{};
+    for (var index = 0; index < records.length; index++) {
+      final record = records[index];
+      final nameKey = _normalize(record.name);
+      final nameOwner = nameOwners[nameKey];
+      if (nameOwner != null) union(index, nameOwner);
+      nameOwners.putIfAbsent(nameKey, () => index);
+      if (record.entityId.isNotEmpty) {
+        final idKey = _normalize(record.entityId);
+        final owners = idOwners[idKey] ?? const <int>[];
+        for (final owner in owners) {
+          if (_compatibleIdentity(record, records[owner])) {
+            union(index, owner);
+          }
+        }
+        idOwners.putIfAbsent(idKey, () => <int>[]).add(index);
+      }
+    }
+
+    // Explicit culture-aware identity fields are stronger than a generic
+    // alias: Chinese 字/号 and Western aliases can bridge separate extraction
+    // passes, but only when both the alias owner and matching name are unique.
+    final identityAliasOwners = <String, Set<int>>{};
+    for (var index = 0; index < records.length; index++) {
+      for (final alias in records[index].mergeableIdentityAliases) {
+        identityAliasOwners
+            .putIfAbsent(_normalize(alias), () => <int>{})
+            .add(find(index));
+      }
+    }
+    for (final entry in identityAliasOwners.entries) {
+      final aliasRoots = entry.value.map(find).toSet();
+      final nameOwner = nameOwners[entry.key];
+      if (aliasRoots.length == 1 && nameOwner != null) {
+        union(aliasRoots.single, find(nameOwner));
+      }
+    }
+
+    // Older extraction results sometimes promoted a one-character reference
+    // to a standalone person ("伦"), while a later pass emitted the full
+    // name ("第五伦"). Merge only when that suffix identifies exactly one
+    // longer-name cluster. If both "第五伦" and "周伦" exist, keep "伦"
+    // unresolved rather than guessing.
+    final shortNameRecords = <String, Set<int>>{};
+    final suffixCandidates = <String, Set<int>>{};
+    for (var index = 0; index < records.length; index++) {
+      final record = records[index];
+      final runes = record.name.runes.toList(growable: false);
+      if (runes.length == 1 && _isLikelyShortChineseReference(record.name)) {
+        shortNameRecords
+            .putIfAbsent(_normalize(record.name), () => <int>{})
+            .add(find(index));
+      } else if (runes.length > 1) {
+        final suffix = String.fromCharCode(runes.last);
+        suffixCandidates
+            .putIfAbsent(_normalize(suffix), () => <int>{})
+            .add(find(index));
+      }
+    }
+    for (final entry in shortNameRecords.entries) {
+      final shortRoots = entry.value.map(find).toSet();
+      final longRoots =
+          (suffixCandidates[entry.key] ?? const <int>{}).map(find).toSet();
+      if (shortRoots.length == 1 && longRoots.length == 1) {
+        union(shortRoots.single, longRoots.single);
+      }
+    }
+
+    final westernShortRecords = <String, Set<int>>{};
+    final westernPartCandidates = <String, Set<int>>{};
+    for (var index = 0; index < records.length; index++) {
+      final record = records[index];
+      if (record.namingSystem != 'western') continue;
+      final parts = _westernNameParts(record.name);
+      if (parts.length == 1) {
+        westernShortRecords
+            .putIfAbsent(parts.single, () => <int>{})
+            .add(find(index));
+      } else if (parts.length > 1) {
+        for (final part in {parts.first, parts.last}) {
+          westernPartCandidates
+              .putIfAbsent(part, () => <int>{})
+              .add(find(index));
+        }
+      }
+    }
+    for (final entry in westernShortRecords.entries) {
+      final shortRoots = entry.value.map(find).toSet();
+      final longRoots =
+          (westernPartCandidates[entry.key] ?? const <int>{}).map(find).toSet();
+      if (shortRoots.length == 1 && longRoots.length == 1) {
+        union(shortRoots.single, longRoots.single);
+      }
+    }
+
+    final grouped = <int, List<_CharacterRecord>>{};
+    for (var index = 0; index < records.length; index++) {
+      grouped.putIfAbsent(find(index), () => []).add(records[index]);
+    }
+    final characters = <FictionCharacterNode>[];
+    final fullNames = <String, String>{};
+    final entityIds = <String, Set<String>>{};
+    final aliases = <String, Set<String>>{};
+    for (final group in grouped.values) {
+      group.sort((a, b) => _artifactOrder(a.source, b.source));
+      final preferred = _preferredRecord(group);
+      // The model-provided entityId is an input alias, not the ViewModel's
+      // identity. Deriving the canonical ID from the normalized full name
+      // keeps it stable when separate chapter batches invent different IDs.
+      final canonicalId =
+          'character:${Uri.encodeComponent(_normalize(preferred.name))}';
+      final displayAliases = <String>{};
+      final courtesyNames = <String>{};
+      final artNames = <String>{};
+      final titles = <String>{};
+      for (final record in group) {
+        fullNames[_normalize(record.name)] = canonicalId;
+        if (record.entityId.isNotEmpty) {
+          entityIds
+              .putIfAbsent(_normalize(record.entityId), () => <String>{})
+              .add(canonicalId);
+        }
+        if (_normalize(record.name) != _normalize(preferred.name)) {
+          displayAliases.add(record.name);
+        }
+        displayAliases.addAll(record.aliases);
+        courtesyNames.addAll(record.courtesyNames);
+        artNames.addAll(record.artNames);
+        titles.addAll(record.titles);
+      }
+      displayAliases.removeWhere(
+        (value) =>
+            _normalize(value) == _normalize(preferred.name) ||
+            courtesyNames
+                .any((item) => _normalize(item) == _normalize(value)) ||
+            artNames.any((item) => _normalize(item) == _normalize(value)) ||
+            titles.any((item) => _normalize(item) == _normalize(value)),
+      );
+      final summaryRecord = group.firstWhere(
+        (record) => record.summary.isNotEmpty,
+        orElse: () => preferred,
+      );
+      characters.add(FictionCharacterNode(
+        id: canonicalId,
+        name: preferred.name,
+        summary: summaryRecord.summary,
+        aliases: List.unmodifiable(displayAliases),
+        source: preferred.source,
+        namingSystem: preferred.namingSystem,
+        courtesyNames: List.unmodifiable(courtesyNames),
+        artNames: List.unmodifiable(artNames),
+        titles: List.unmodifiable(titles),
+        givenName: _firstNonNull(group.map((record) => record.givenName)),
+        familyName: _firstNonNull(group.map((record) => record.familyName)),
+      ));
+      for (final alias in {
+        ...displayAliases,
+        ...courtesyNames,
+        ...artNames,
+        ...titles,
+      }) {
+        aliases
+            .putIfAbsent(_normalize(alias), () => <String>{})
+            .add(canonicalId);
+      }
+    }
+    _addUniqueShortNameAliases(characters, fullNames, entityIds, aliases);
+    _addUniqueWesternNameAliases(characters, fullNames, entityIds, aliases);
+    return _CharacterIdentityIndex(
+      characters: List.unmodifiable(characters),
+      fullNames: Map.unmodifiable(fullNames),
+      entityIds: Map.unmodifiable({
+        for (final entry in entityIds.entries)
+          entry.key: Set.unmodifiable(entry.value),
+      }),
+      aliases: Map.unmodifiable({
+        for (final entry in aliases.entries)
+          entry.key: Set.unmodifiable(entry.value),
+      }),
+      normalize: _normalize,
+      clean: _cleanReference,
+    );
+  }
+
+  int _characterRecordPreference(
+      _CharacterRecord left, _CharacterRecord right) {
+    final length = _normalize(right.name)
+        .runes
+        .length
+        .compareTo(_normalize(left.name).runes.length);
+    if (length != 0) return length;
+    final source = _artifactOrder(left.source, right.source);
+    if (source != 0) return source;
+    return left.name.compareTo(right.name);
+  }
+
+  _CharacterRecord _preferredRecord(List<_CharacterRecord> group) {
+    final alternateNames = <String>{
+      for (final record in group) ...record.courtesyNames.map(_normalize),
+      for (final record in group) ...record.artNames.map(_normalize),
+      for (final record in group) ...record.titles.map(_normalize),
+    };
+    final formal = group
+        .where((record) => !alternateNames.contains(_normalize(record.name)))
+        .toList(growable: false);
+    final candidates = formal.isEmpty ? group : formal;
+    return candidates.reduce((left, right) =>
+        _characterRecordPreference(left, right) <= 0 ? left : right);
+  }
+
+  bool _compatibleIdentity(_CharacterRecord left, _CharacterRecord right) {
+    final leftName = _normalize(left.name);
+    final rightName = _normalize(right.name);
+    if (leftName == rightName) return true;
+    if (left.identityAliases.any((alias) => _normalize(alias) == rightName) ||
+        right.identityAliases.any((alias) => _normalize(alias) == leftName)) {
+      return true;
+    }
+    return (leftName.length < rightName.length &&
+            rightName.endsWith(leftName)) ||
+        (rightName.length < leftName.length && leftName.endsWith(rightName));
+  }
+
+  String? _firstNonNull(Iterable<String?> values) {
+    for (final value in values) {
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  List<String> _westernNameParts(String value) {
+    const honorifics = {
+      'mr',
+      'mrs',
+      'miss',
+      'ms',
+      'dr',
+      'sir',
+      'lady',
+      'lord',
+      'professor',
+      'captain',
+      'colonel',
+      'reverend',
+    };
+    final parts = _normalize(value)
+        .split(RegExp(r'[\s·•]+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.length > 1 && honorifics.contains(parts.first)) {
+      parts.removeAt(0);
+    }
+    return parts;
+  }
+
+  String _cleanReference(String value) {
+    var result =
+        value.replaceAll('\u3000', ' ').trim().replaceAll(RegExp(r'\s+'), ' ');
+    const pairs = {
+      '"': '"',
+      "'": "'",
+      '“': '”',
+      '‘': '’',
+      '「': '」',
+      '『': '』',
+    };
+    while (result.length >= 2 &&
+        pairs[result.substring(0, 1)] == result.substring(result.length - 1)) {
+      result = result.substring(1, result.length - 1).trim();
+    }
+    final withoutSpaces = result.replaceAll(' ', '');
+    return withoutSpaces.isNotEmpty &&
+            RegExp(r'^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+$')
+                .hasMatch(withoutSpaces)
+        ? withoutSpaces
+        : result;
+  }
+
+  String _namingSystem(Map<String, dynamic> payload, String name) {
+    final declared = _text(payload['namingSystem']).toLowerCase();
+    if (declared == 'chinese' || declared == 'western') return declared;
+    return _isChineseText(name) ? 'chinese' : 'western';
+  }
+
+  String? _nullableCleanText(Object? value) {
+    final result = _cleanReference(_text(value));
+    return result.isEmpty ? null : result;
+  }
+
+  List<String> _values(Map<String, dynamic> payload, List<String> keys) {
+    final result = <String>{};
+    for (final key in keys) {
+      final value = payload[key];
+      if (value is List) {
+        result.addAll(value.map((item) => _cleanReference(item.toString())));
+      } else {
+        final text = _cleanReference(_text(value));
+        if (text.isNotEmpty) result.add(text);
+      }
+    }
+    result.remove('');
+    return List.unmodifiable(result);
+  }
+
+  ({
+    List<String> aliases,
+    List<String> courtesyNames,
+    List<String> artNames,
+    List<String> titles,
+  }) _parseIdentityAliases(List<String> values) {
+    final aliases = <String>[];
+    final courtesyNames = <String>[];
+    final artNames = <String>[];
+    final titles = <String>[];
+    for (final value in values) {
+      final match = RegExp(r'^(字|号|称谓|尊称|官职)[：:\s]*(.+)$').firstMatch(value);
+      if (match == null) {
+        aliases.add(value);
+        continue;
+      }
+      final kind = match.group(1);
+      final name = _cleanReference(match.group(2) ?? '');
+      if (name.isEmpty) continue;
+      if (kind == '字') {
+        courtesyNames.add(name);
+      } else if (kind == '号') {
+        artNames.add(name);
+      } else {
+        titles.add(name);
+      }
+    }
+    return (
+      aliases: List.unmodifiable(aliases),
+      courtesyNames: List.unmodifiable(courtesyNames),
+      artNames: List.unmodifiable(artNames),
+      titles: List.unmodifiable(titles),
+    );
+  }
+
+  bool _isChineseText(String value) {
+    final compact = value.replaceAll(' ', '');
+    return compact.isNotEmpty &&
+        RegExp(r'^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+$')
+            .hasMatch(compact);
+  }
+
+  String _normalize(String value) {
+    var cleaned = _cleanReference(value)
+        .toLowerCase()
+        .replaceAll('’', "'")
+        .replaceAll('‘', "'");
+    final withoutSpaces = cleaned.replaceAll(' ', '');
+    if (_isChineseText(withoutSpaces)) return withoutSpaces;
+    cleaned = cleaned
+        .replaceAll('.', '')
+        .replaceAll(RegExp(r'\s*-\s*'), '-')
+        .replaceAll(RegExp(r'\s+'), ' ');
+    final comma = cleaned.split(',');
+    if (comma.length == 2 && comma.every((part) => part.trim().isNotEmpty)) {
+      cleaned = '${comma[1].trim()} ${comma[0].trim()}';
+    }
+    return cleaned;
+  }
+
+  bool _isLikelyShortChineseReference(String value) =>
+      value.runes.length == 1 &&
+      RegExp(r'^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$').hasMatch(value);
+
+  void _addUniqueShortNameAliases(
+    List<FictionCharacterNode> characters,
+    Map<String, String> fullNames,
+    Map<String, Set<String>> entityIds,
+    Map<String, Set<String>> aliases,
+  ) {
+    final candidates = <String, Set<String>>{};
+    for (final character in characters) {
+      final name = character.name.trim();
+      if (name.runes.length < 2) continue;
+      final last = String.fromCharCode(name.runes.last);
+      candidates
+          .putIfAbsent(_normalize(last), () => <String>{})
+          .add(character.id);
+    }
+    for (final entry in candidates.entries) {
+      if (entry.value.length == 1 &&
+          !fullNames.containsKey(entry.key) &&
+          !entityIds.containsKey(entry.key)) {
+        aliases
+            .putIfAbsent(entry.key, () => <String>{})
+            .add(entry.value.single);
+      }
+    }
+  }
+
+  void _addUniqueWesternNameAliases(
+    List<FictionCharacterNode> characters,
+    Map<String, String> fullNames,
+    Map<String, Set<String>> entityIds,
+    Map<String, Set<String>> aliases,
+  ) {
+    final candidates = <String, Set<String>>{};
+    for (final character in characters) {
+      if (character.namingSystem != 'western') continue;
+      final parts = _westernNameParts(character.name);
+      if (parts.length < 2) continue;
+      for (final part in {parts.first, parts.last}) {
+        candidates.putIfAbsent(part, () => <String>{}).add(character.id);
+      }
+    }
+    for (final entry in candidates.entries) {
+      if (!fullNames.containsKey(entry.key) &&
+          !entityIds.containsKey(entry.key)) {
+        aliases.putIfAbsent(entry.key, () => <String>{}).addAll(entry.value);
+      }
+    }
+  }
 
   String _text(Object? value, {String fallback = ''}) {
     final text = value?.toString().trim() ?? '';
@@ -473,7 +1069,9 @@ class FictionStoryAtlasService {
     final cfi = (a.sourceStartCfi ?? a.discoveredAtCfi ?? '')
         .compareTo(b.sourceStartCfi ?? b.discoveredAtCfi ?? '');
     if (cfi != 0) return cfi;
-    return a.createdAt.compareTo(b.createdAt);
+    final created = a.createdAt.compareTo(b.createdAt);
+    if (created != 0) return created;
+    return a.id.compareTo(b.id);
   }
 
   double _min(double a, double b) => a < b ? a : b;
@@ -482,3 +1080,90 @@ class FictionStoryAtlasService {
 }
 
 const fictionStoryAtlasService = FictionStoryAtlasService();
+
+class _CharacterRecord {
+  const _CharacterRecord({
+    required this.name,
+    required this.entityId,
+    required this.summary,
+    required this.aliases,
+    required this.namingSystem,
+    required this.courtesyNames,
+    required this.artNames,
+    required this.titles,
+    required this.givenName,
+    required this.familyName,
+    required this.source,
+  });
+
+  final String name;
+  final String entityId;
+  final String summary;
+  final List<String> aliases;
+  final String namingSystem;
+  final List<String> courtesyNames;
+  final List<String> artNames;
+  final List<String> titles;
+  final String? givenName;
+  final String? familyName;
+  final ReadingArtifact source;
+
+  Iterable<String> get identityAliases sync* {
+    yield* aliases;
+    yield* courtesyNames;
+    yield* artNames;
+    yield* titles;
+    if (givenName != null) yield givenName!;
+    if (familyName != null) yield familyName!;
+  }
+
+  Iterable<String> get mergeableIdentityAliases sync* {
+    yield* courtesyNames;
+    yield* artNames;
+    // Western aliases commonly represent a title form, given name, surname,
+    // nickname, or translated spelling of the same person.
+    if (namingSystem == 'western') yield* aliases;
+  }
+}
+
+class _CharacterIdentityIndex {
+  const _CharacterIdentityIndex({
+    required this.characters,
+    required this.fullNames,
+    required this.entityIds,
+    required this.aliases,
+    required String Function(String) normalize,
+    required String Function(String) clean,
+  })  : _normalize = normalize,
+        _clean = clean;
+
+  final List<FictionCharacterNode> characters;
+  final Map<String, String> fullNames;
+  final Map<String, Set<String>> entityIds;
+  final Map<String, Set<String>> aliases;
+  final String Function(String) _normalize;
+  final String Function(String) _clean;
+
+  String? resolve(String raw) {
+    final value = _clean(raw);
+    if (value.isEmpty) return null;
+    final key = _normalize(value);
+    // A full name always wins over model-generated IDs and aliases. Model IDs
+    // are accepted only when they identify exactly one canonical person.
+    final byName = fullNames[key];
+    if (byName != null) return byName;
+    final byId = entityIds[key];
+    if (byId?.length == 1) return byId!.single;
+    final candidates = aliases[key];
+    return candidates?.length == 1 ? candidates!.single : null;
+  }
+
+  bool containsReference(String raw) {
+    final value = _clean(raw);
+    if (value.isEmpty) return false;
+    final key = _normalize(value);
+    return fullNames.containsKey(key) ||
+        entityIds.containsKey(key) ||
+        aliases.containsKey(key);
+  }
+}

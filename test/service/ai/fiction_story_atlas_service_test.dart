@@ -76,6 +76,39 @@ void main() {
     expect(atlas.relationships.single.history, hasLength(2));
   });
 
+  test('promotes named event participants when character output is missing',
+      () {
+    final artifacts = [
+      artifact(
+        id: 'known-character',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'known', 'name': '第五伦'},
+      ),
+      artifact(
+        id: 'event-with-missing-character',
+        kind: ReadingArtifactKinds.event,
+        progress: .2,
+        payload: {
+          'title': '众人相遇',
+          'participants': ['known', '第八娇', '众人', 'character_2', '伦'],
+        },
+      ),
+    ];
+
+    final atlas = fictionStoryAtlasService.fromArtifacts(
+      artifacts,
+      visibleAtProgress: .5,
+    );
+
+    expect(atlas.characters.map((character) => character.name),
+        containsAll(['第五伦', '第八娇']));
+    final names = atlas.characters.map((character) => character.name);
+    expect(names, isNot(contains('众人')));
+    expect(names, isNot(contains('character_2')));
+    expect(names, isNot(contains('伦')));
+  });
+
   test('sorts timeline by source order instead of story time label', () {
     final atlas = fictionStoryAtlasService.fromArtifacts([
       artifact(
@@ -99,6 +132,359 @@ void main() {
     ], visibleAtProgress: .5);
 
     expect(atlas.timeline.map((item) => item.title), ['今天', '十年前']);
+  });
+
+  test('merges repeated full names and resolves a unique short name', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'character-1',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'diwu-lun-1', 'name': '第五伦'},
+      ),
+      artifact(
+        id: 'character-2',
+        kind: ReadingArtifactKinds.character,
+        progress: .2,
+        payload: {'entityId': 'diwu-lun-2', 'name': '第五伦'},
+      ),
+      artifact(
+        id: 'character-3',
+        kind: ReadingArtifactKinds.character,
+        progress: .15,
+        payload: {'entityId': 'jiaohua', 'name': '第八娇'},
+      ),
+      artifact(
+        id: 'relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .3,
+        payload: {
+          'from': '伦',
+          'to': 'jiaohua',
+          'relation': '朋友',
+        },
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters.where((item) => item.name == '第五伦'), hasLength(1));
+    expect(atlas.characters, hasLength(2));
+    final edge = atlas.relationships.single;
+    expect(atlas.characters.firstWhere((item) => item.id == edge.from).name,
+        '第五伦');
+    expect(
+        atlas.characters.firstWhere((item) => item.id == edge.to).name, '第八娇');
+  });
+
+  test('merges a legacy one-character node into its unique full name', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'short-character',
+        kind: ReadingArtifactKinds.character,
+        progress: .05,
+        payload: {'entityId': 'old-lun', 'name': '伦'},
+      ),
+      artifact(
+        id: 'full-character',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'diwu-lun', 'name': '“第五　伦”'},
+      ),
+      artifact(
+        id: 'target',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'jiao', 'name': '第八娇'},
+      ),
+      artifact(
+        id: 'relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': 'old-lun', 'to': 'jiao', 'relation': '朋友'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters.map((item) => item.name),
+        containsAll(<String>['第五伦', '第八娇']));
+    expect(atlas.characters, hasLength(2));
+    final edge = atlas.relationships.single;
+    expect(atlas.characters.firstWhere((item) => item.id == edge.from).name,
+        '第五伦');
+  });
+
+  test('does not guess an ambiguous one-character relationship endpoint', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'first-lun',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'diwu-lun', 'name': '第五伦'},
+      ),
+      artifact(
+        id: 'second-lun',
+        kind: ReadingArtifactKinds.character,
+        progress: .11,
+        payload: {'entityId': 'zhou-lun', 'name': '周伦'},
+      ),
+      artifact(
+        id: 'target',
+        kind: ReadingArtifactKinds.character,
+        progress: .12,
+        payload: {'entityId': 'jiao', 'name': '第八娇'},
+      ),
+      artifact(
+        id: 'ambiguous-relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': '伦', 'to': 'jiao', 'relation': '朋友'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters.map((item) => item.name), isNot(contains('伦')));
+    expect(atlas.characters, hasLength(3));
+    expect(atlas.relationships, isEmpty);
+  });
+
+  test('full names take priority over conflicting aliases', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'wang-lun',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'wang-lun', 'name': '王伦'},
+      ),
+      artifact(
+        id: 'diwu-lun',
+        kind: ReadingArtifactKinds.character,
+        progress: .11,
+        payload: {
+          'entityId': 'diwu-lun',
+          'name': '第五伦',
+          'aliases': ['王伦'],
+        },
+      ),
+      artifact(
+        id: 'target',
+        kind: ReadingArtifactKinds.character,
+        progress: .12,
+        payload: {'entityId': 'jiao', 'name': '第八娇'},
+      ),
+      artifact(
+        id: 'relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': '王伦', 'to': 'jiao', 'relation': '相识'},
+      ),
+    ], visibleAtProgress: .5);
+
+    final edge = atlas.relationships.single;
+    expect(
+        atlas.characters.firstWhere((item) => item.id == edge.from).name, '王伦');
+    expect(atlas.characters.where((item) => item.name == '第五伦'), hasLength(1));
+  });
+
+  test('reused model entity ids do not merge different full names', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'first',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'character-1', 'name': '第五伦'},
+      ),
+      artifact(
+        id: 'second',
+        kind: ReadingArtifactKinds.character,
+        progress: .11,
+        payload: {'entityId': 'character-1', 'name': '第八娇'},
+      ),
+      artifact(
+        id: 'ambiguous-id-relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': 'character-1', 'to': '第五伦', 'relation': '相识'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters, hasLength(2));
+    expect(atlas.characters.map((item) => item.name),
+        containsAll(<String>['第五伦', '第八娇']));
+    expect(atlas.relationships, isEmpty);
+  });
+
+  test('same entity id merges a short and compatible full name', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'short',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'entityId': 'character-1', 'name': '伦'},
+      ),
+      artifact(
+        id: 'full',
+        kind: ReadingArtifactKinds.character,
+        progress: .2,
+        payload: {'entityId': 'character-1', 'name': '第五伦'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters, hasLength(1));
+    expect(atlas.characters.single.name, '第五伦');
+  });
+
+  test('Chinese name, courtesy name and art name resolve to one person', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'liu-bei',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {
+          'namingSystem': 'chinese',
+          'entityId': 'liu-bei',
+          'name': '刘备',
+          'aliases': ['字：玄德', '称谓：汉中王'],
+        },
+      ),
+      artifact(
+        id: 'legacy-xuande',
+        kind: ReadingArtifactKinds.character,
+        progress: .11,
+        payload: {
+          'namingSystem': 'chinese',
+          'entityId': 'xuande',
+          'name': '玄德',
+        },
+      ),
+      artifact(
+        id: 'zhuge-liang',
+        kind: ReadingArtifactKinds.character,
+        progress: .12,
+        payload: {
+          'namingSystem': 'chinese',
+          'entityId': 'zhuge-liang',
+          'name': '诸葛亮',
+          'courtesyNames': ['孔明'],
+          'artName': '卧龙',
+        },
+      ),
+      artifact(
+        id: 'relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': '玄德', 'to': '孔明', 'relation': '君臣'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters, hasLength(2));
+    final liuBei =
+        atlas.characters.firstWhere((character) => character.name == '刘备');
+    final zhugeLiang =
+        atlas.characters.firstWhere((character) => character.name == '诸葛亮');
+    expect(liuBei.courtesyNames, ['玄德']);
+    expect(liuBei.titles, ['汉中王']);
+    expect(zhugeLiang.courtesyNames, ['孔明']);
+    expect(zhugeLiang.artNames, ['卧龙']);
+    expect(atlas.relationships.single.from, liuBei.id);
+    expect(atlas.relationships.single.to, zhugeLiang.id);
+  });
+
+  test('Western full name, nickname and title form resolve to one person', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'elizabeth',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {
+          'namingSystem': 'western',
+          'entityId': 'elizabeth-bennet',
+          'name': 'Elizabeth Bennet',
+          'givenName': 'Elizabeth',
+          'familyName': 'Bennet',
+          'aliases': ['Lizzy', 'Miss Bennet'],
+        },
+      ),
+      artifact(
+        id: 'legacy-lizzy',
+        kind: ReadingArtifactKinds.character,
+        progress: .11,
+        payload: {
+          'namingSystem': 'western',
+          'entityId': 'lizzy',
+          'name': 'Lizzy',
+        },
+      ),
+      artifact(
+        id: 'darcy',
+        kind: ReadingArtifactKinds.character,
+        progress: .12,
+        payload: {
+          'namingSystem': 'western',
+          'entityId': 'fitzwilliam-darcy',
+          'name': 'Fitzwilliam Darcy',
+          'givenName': 'Fitzwilliam',
+          'familyName': 'Darcy',
+          'aliases': ['Mr. Darcy'],
+        },
+      ),
+      artifact(
+        id: 'legacy-darcy',
+        kind: ReadingArtifactKinds.character,
+        progress: .13,
+        payload: {
+          'namingSystem': 'western',
+          'entityId': 'mr-darcy',
+          'name': 'Mr Darcy',
+        },
+      ),
+      artifact(
+        id: 'relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': 'Lizzy', 'to': 'Mr. Darcy', 'relation': '相识'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters, hasLength(2));
+    final elizabeth = atlas.characters
+        .firstWhere((character) => character.name == 'Elizabeth Bennet');
+    final darcy = atlas.characters
+        .firstWhere((character) => character.name == 'Fitzwilliam Darcy');
+    expect(elizabeth.givenName, 'Elizabeth');
+    expect(elizabeth.familyName, 'Bennet');
+    expect(atlas.relationships.single.from, elizabeth.id);
+    expect(atlas.relationships.single.to, darcy.id);
+  });
+
+  test('ambiguous Western surname does not create a duplicate node', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'elizabeth',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'name': 'Elizabeth Bennet'},
+      ),
+      artifact(
+        id: 'jane',
+        kind: ReadingArtifactKinds.character,
+        progress: .11,
+        payload: {'name': 'Jane Bennet'},
+      ),
+      artifact(
+        id: 'darcy',
+        kind: ReadingArtifactKinds.character,
+        progress: .12,
+        payload: {'name': 'Fitzwilliam Darcy'},
+      ),
+      artifact(
+        id: 'relationship',
+        kind: ReadingArtifactKinds.relationship,
+        progress: .2,
+        payload: {'from': 'Bennet', 'to': 'Darcy', 'relation': '相识'},
+      ),
+    ], visibleAtProgress: .5);
+
+    expect(atlas.characters, hasLength(3));
+    expect(atlas.characters.map((character) => character.name),
+        isNot(contains('Bennet')));
+    expect(atlas.relationships, isEmpty);
   });
 
   test('groups long timeline by chapter and applies density and participant',

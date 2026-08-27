@@ -326,7 +326,16 @@ legacy `readingCoach` or its MaterialBanner behavior.
   must not discard checkpoints from successful sibling batches. The default
   extraction surface is deliberately limited to characters, relationships, and
   important events to avoid token-heavy scene-by-scene summaries.
-- Character nodes use local first-character avatars only. No portrait is
+- Character identity resolution is culture-aware. Chinese historical and
+  classical fiction keeps formal name (`name`), courtesy name (`字`), art name
+  (`号`), and titles as separate fields on one canonical person; a 字、号 or
+  title never becomes another node when its identity is explicit. Western
+  fiction resolves full names, given names, family names, nicknames, and title
+  forms under Western ordering and punctuation rules. Generated short forms
+  are accepted only when unique; ambiguous surnames, given names, 字 or titles
+  remain unresolved instead of being guessed or rendered as duplicate nodes.
+- Character nodes use local text avatars only, selecting the given-name
+  character for Chinese full names rather than the surname. No portrait is
   generated or downloaded. Phones use a zoomable graph with bottom details and
   a vertical timeline; wide layouts reserve a details rail and use a horizontal
   alternating timeline. Entry visibility is capability-driven (`storyAtlas`),
@@ -419,6 +428,45 @@ merge rules; the server only isolates and returns packages.
   creates one account-owned sync space, and any number of devices can sign in
   to that account. Passwords are scrypt-hashed in the function's PG boundary;
   the account session is the only sync credential exposed to Flutter.
+
+## Hybrid extraction and internal summary engine
+
+- The lightweight extraction engine is a device-local AI role selected from
+  the existing Provider registry. It is disabled by default. Custom
+  OpenAI-compatible providers may explicitly use no authentication for a
+  trusted local or private-network LM Studio/Ollama endpoint; built-in cloud
+  providers still require credentials. A local endpoint selection is excluded
+  from preference restore because `localhost` and LAN addresses are not
+  portable between devices.
+- User-visible chapter and book summaries remain on the general model. The
+  lightweight role is limited to Story Atlas candidate extraction, cached
+  rolling conversation summaries, and reading-memory topic grouping. These
+  internal jobs never run because of page turns, dwell time, or opening an
+  outcomes page.
+- Story Atlas hybrid backfill sends full eligible chapter text only to the
+  selected extraction provider. A long chapter is segmented at paragraph or
+  sentence boundaries within the extraction input budget and receives one
+  completed checkpoint only after every segment succeeds. Malformed JSON is
+  retried once with smaller current-chapter inputs, never as an unbounded batch
+  retry. Every candidate needs an exact, bounded source
+  quote. Deterministic validation rejects missing evidence, generic roles,
+  background references, transient interactions, and unsupported relation
+  types. Only ambiguous durable relations cross the cloud boundary, with the
+  two endpoints and short quote rather than the complete chapter.
+  The task-level cloud-verification input budget is capped at 20% of the same
+  batch's full-text baseline; ambiguous candidates beyond that budget remain
+  pending rather than expanding the cloud request.
+- If the extraction provider is absent or unavailable, full-text cloud
+  fallback requires a second explicit confirmation that shows the range,
+  chapter count, model destination, and estimated input. The safe default is
+  cancel/later. Opportunistic internal summaries simply defer on failure.
+- Connection/structured-output test failure disables the extraction role on
+  that device. It never silently reassigns the role to the general provider.
+- Token diagnostics distinguish local extraction, cloud extraction, cloud
+  verification, and general generation. Story Atlas reports avoided main-model
+  input against an equivalent full-text baseline. A cloud small model may be
+  cheaper without reducing total cloud tokens, so it is never labelled as a
+  raw-token saving unless the measured totals support that claim.
 
 ## Specialist orchestration P1
 

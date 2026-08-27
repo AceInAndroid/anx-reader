@@ -42,6 +42,7 @@ import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
 import 'package:anx_reader/service/ai/fiction_reading_service.dart';
 import 'package:anx_reader/service/ai/fiction_backfill_service.dart';
+import 'package:anx_reader/service/ai/fiction_hybrid_extraction_service.dart';
 import 'package:anx_reader/service/ai/reading_coverage_service.dart';
 import 'package:anx_reader/service/ai/reading_device_identity.dart';
 import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
@@ -1665,6 +1666,35 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       ),
     );
     if (confirmed != true || chapters.isEmpty) return;
+    if (!mounted) return;
+    final hybrid = FictionHybridExtractionService(ref: ref);
+    final extractionProvider = hybrid.provider;
+    var allowFullTextCloudFallback = false;
+    if (extractionProvider == null) {
+      final estimatedTokens = chapters.length * 3500;
+      allowFullTextCloudFallback = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('轻量提取引擎不可用'),
+              content: Text(
+                '当前没有可用的本地/小模型提取引擎。\n\n'
+                '如果继续，将把 $fromPercent%～$percent% 的 ${chapters.length} 个已读章节发送给通用线上模型，粗略估计输入 ${estimatedTokens.toString()} Token。',
+              ),
+              actions: [
+                FilledButton.tonal(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('取消／稍后处理'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('确认使用线上模型'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!allowFullTextCloudFallback) return;
+    }
     SmartDialog.showLoading(msg: '正在整理已读章节…');
     try {
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -1699,6 +1729,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       Future<List<ReadingArtifact>> executeBackfill(
         ReadingTaskExecutionContext execution,
       ) async {
+        final useHybrid = extractionProvider != null;
         return fictionBackfillService.build(
           bookId: _book.id,
           moduleId: ReadingClosureIds.fictionImmersion,
@@ -1707,18 +1738,22 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           loadChapter: (href) =>
               epubPlayerKey.currentState?.chapterContentByHref(href) ??
               Future.value(''),
-          generate: (prompt) => aiGenerateText(
-            [ChatMessage.humanText(prompt)],
-            ref: ref,
-            readingMode: ReadingAiMode.general,
-            task: AiContextTask.fictionBackfill,
-          ),
+          generate: useHybrid
+              ? hybrid.generate
+              : (prompt) => aiGenerateText(
+                    [ChatMessage.humanText(prompt)],
+                    ref: ref,
+                    readingMode: ReadingAiMode.general,
+                    task: AiContextTask.fictionBackfill,
+                  ),
           sessionId: sessionId,
           ingestedAt: now,
           fromProgress: effectiveFromProgress,
-          batchSize: 6,
-          concurrency: 2,
-          maxInputCharacters: 24000,
+          batchSize: useHybrid ? 1 : 5,
+          concurrency: 1,
+          maxInputCharacters: useHybrid ? 12000 : 30000,
+          validateCandidate: useHybrid ? hybrid.validate : null,
+          artifactMetadata: useHybrid ? hybrid.artifactMetadata : const {},
           onBatchCompleted: ({
             required artifacts,
             required checkpoints,

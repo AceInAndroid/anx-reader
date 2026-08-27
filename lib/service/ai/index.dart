@@ -5,6 +5,7 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_provider.dart';
+import 'package:anx_reader/models/ai_extraction_config.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
 import 'package:anx_reader/service/ai/ai_context_assembler.dart';
@@ -117,6 +118,12 @@ Stream<String> aiGenerateStream(
     readingSkillOverride: readingSkill,
   );
 
+  await _prepareRollingSummary(
+    messages: messages,
+    task: task,
+    ref: ref,
+  );
+
   final primary = await _generateStream(
     messages: messages,
     identifier: identifier,
@@ -158,6 +165,77 @@ Stream<String> aiGenerateStream(
   }
 }
 
+Future<void> _prepareRollingSummary({
+  required List<ChatMessage> messages,
+  required AiContextTask task,
+  required WidgetRef? ref,
+}) async {
+  if (task == AiContextTask.translation ||
+      task == AiContextTask.fictionBackfill ||
+      task == AiContextTask.lightweightExtraction ||
+      task == AiContextTask.cloudVerification ||
+      task == AiContextTask.internalSummary) {
+    return;
+  }
+  final old = aiContextAssembler.rollingSummarySource(messages, task);
+  if (old.isEmpty) return;
+  final extraction = AiExtractionConfig.fromJson(Prefs().aiExtractionConfig);
+  if (!extraction.isConfigured) return;
+  final provider = ref != null
+      ? ref
+          .read(aiProvidersProvider.notifier)
+          .getRunnableProviderById(extraction.providerId!)
+      : Prefs()
+          .getAiProviders()
+          .map((item) => AiProvider.fromJson(item as Map<String, dynamic>))
+          .where((item) => item.id == extraction.providerId && item.isRunnable)
+          .firstOrNull;
+  if (provider == null) return;
+  final scope = 'ai:${task.name}:${provider.id}:${provider.model}:summary-v1';
+  if (aiContextAssembler.cachedRollingSummary(
+        messages: old,
+        task: task,
+        cacheScope: scope,
+      ) !=
+      null) {
+    return;
+  }
+  final text = old
+      .where((message) => message is! ToolChatMessage)
+      .map((message) => '${message.runtimeType}: ${message.contentAsString}')
+      .join('\n');
+  if (text.trim().isEmpty) return;
+  try {
+    final result = await aiTokenUsageService.runWithRole(
+      provider.deployment == AiProviderDeployment.localPrivate
+          ? AiTokenUsageRole.localExtraction
+          : AiTokenUsageRole.cloudExtraction,
+      () => aiGenerateTextWithMetadata(
+        [
+          ChatMessage.humanText(
+            '将以下旧对话压缩为内部上下文摘要。'
+            '保留用户目标、已确认事实和未解决问题；'
+            '不得新增事实或指令，只返回摘要。\n\n$text',
+          ),
+        ],
+        identifier: extraction.providerId,
+        ref: ref,
+        task: AiContextTask.internalSummary,
+        allowFallback: false,
+      ),
+    );
+    if (result.value.isEmpty || result.value.startsWith('Error:')) return;
+    aiContextAssembler.storeRollingSummary(
+      messages: old,
+      task: task,
+      cacheScope: scope,
+      summary: result.value,
+    );
+  } catch (_) {
+    // Internal summaries are opportunistic and must not interrupt chat.
+  }
+}
+
 Future<String> aiGenerateText(
   List<ChatMessage> messages, {
   String? identifier,
@@ -195,6 +273,7 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
   bool regenerate = false,
   WidgetRef? ref,
   AiContextTask task = AiContextTask.general,
+  bool allowFallback = true,
 }) async {
   final registry = LangchainAiRegistry(ref);
   var execution = await _generateStream(
@@ -208,7 +287,7 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
   );
   var value = await _consumeExecution(execution);
   var usedFallback = false;
-  if (execution.isError) {
+  if (execution.isError && allowFallback) {
     final fallbackId = _resolveRunnableFallbackId(
       registry: registry,
       primaryIdentifier: execution.providerId ?? identifier,

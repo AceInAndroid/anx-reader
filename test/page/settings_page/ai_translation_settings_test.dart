@@ -23,7 +23,7 @@ void main() {
     Prefs().selectedAiService = 'general';
   });
 
-  testWidgets('AI settings presents general, translation, and failover cards',
+  testWidgets('AI settings presents all four provider role cards',
       (tester) async {
     await _pumpAtSize(tester, const Size(500, 900), const AISettings());
 
@@ -34,15 +34,22 @@ void main() {
         find.byKey(const ValueKey('ai-general-provider-card')), findsOneWidget);
     expect(find.byKey(const ValueKey('ai-translation-provider-card')),
         findsOneWidget);
+    expect(find.byKey(const ValueKey('ai-extraction-provider-card')),
+        findsOneWidget);
     expect(find.byKey(const ValueKey('ai-fallback-provider-card')),
         findsOneWidget);
-    expect(find.text('Token 用量'), findsOneWidget);
+    await tester.drag(
+      find.byType(Scrollable).first,
+      const Offset(0, -500),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Token 用量'), findsWidgets);
     expect(find.text('输入'), findsOneWidget);
     expect(find.text('输出'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('tablet layout gives failover its own full-width row',
+  testWidgets('tablet layout arranges provider roles in a two by two grid',
       (tester) async {
     await _pumpAtSize(tester, const Size(700, 900), const AISettings());
 
@@ -52,13 +59,19 @@ void main() {
     final translation = tester.getRect(
       find.byKey(const ValueKey('ai-translation-provider-card')),
     );
+    final extraction = tester.getRect(
+      find.byKey(const ValueKey('ai-extraction-provider-card')),
+    );
     final fallback = tester.getRect(
       find.byKey(const ValueKey('ai-fallback-provider-card')),
     );
 
-    expect(general.top, translation.top);
-    expect(fallback.top, greaterThan(general.bottom));
-    expect(fallback.width, closeTo(general.width + translation.width + 12, 1));
+    expect(general.top, extraction.top);
+    expect(translation.top, greaterThan(general.bottom));
+    expect(translation.top, fallback.top);
+    expect(extraction.width, closeTo(general.width, 1));
+    expect(translation.width, closeTo(general.width, 1));
+    expect(fallback.width, closeTo(general.width, 1));
     expect(tester.takeException(), isNull);
   });
 

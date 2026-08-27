@@ -418,6 +418,39 @@ class _AISettingsState extends ConsumerState<AISettings> {
                   '${usage.month} 本月累计',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
+                if (usage.byRole.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  Text('按引擎用途', style: Theme.of(context).textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  for (final role in AiTokenUsageRole.values)
+                    if (usage.byRole[role] case final bucket?)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 5),
+                        child: Text(
+                          '${switch (role) {
+                            AiTokenUsageRole.general => '通用对话/总结',
+                            AiTokenUsageRole.localExtraction => '本地轻量提取',
+                            AiTokenUsageRole.cloudExtraction => '云端轻量提取',
+                            AiTokenUsageRole.cloudVerification => '线上疑难复核',
+                          }}：${_formatTokenCount(bucket.inputTokens)} 输入 / ${_formatTokenCount(bucket.outputTokens)} 输出'
+                          '${bucket.estimatedRequests == 0 ? '' : '（${bucket.estimatedRequests} 次估算）'}',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                ],
+                if (usage.storyCloudSavingRate case final rate?) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '故事档案主模型输入避免约 ${(rate * 100).toStringAsFixed(1)}%'
+                    '（整章直传基线 ${_formatTokenCount(usage.storyBaselineInputTokens)} / 主模型实际输入 ${_formatTokenCount(usage.storyCloudInputTokens)}；云端轻量提取另计）',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Wrap(
                   spacing: 24,
@@ -1367,6 +1400,7 @@ class _AiProviderConfigurationSection extends ConsumerWidget {
     final primary = notifier.getRunnableSelectedProvider();
     final dedicatedTranslation = notifier.getDedicatedTranslationProvider();
     final effectiveTranslation = notifier.getRunnableTranslationProvider();
+    final extraction = notifier.getExtractionProvider();
     final fallback = notifier.getFallbackProvider();
     final fallbackCandidates = notifier.getRunnableFallbackCandidates(
       primary?.id,
@@ -1383,6 +1417,20 @@ class _AiProviderConfigurationSection extends ConsumerWidget {
         onTap: () => _openProviderList(
           context,
           AiProviderListMode.general,
+        ),
+      ),
+      _AiConfigurationCard(
+        key: const ValueKey('ai-extraction-provider-card'),
+        icon: Icons.compress_rounded,
+        title: '轻量提取与摘要引擎',
+        description: '本地或小参数模型：故事档案、内部摘要和阅读记忆。疑难项才交给通用模型复核。',
+        status: extraction == null
+            ? '未启用'
+            : '${extraction.title} · ${extraction.model} · ${extraction.deployment == AiProviderDeployment.localPrivate ? '本地/内网' : '云端'}',
+        ready: extraction != null,
+        onTap: () => _openProviderList(
+          context,
+          AiProviderListMode.extraction,
         ),
       ),
       _AiConfigurationCard(
@@ -1440,8 +1488,8 @@ class _AiProviderConfigurationSection extends ConsumerWidget {
               final spacing = 12.0;
               final isWide = constraints.maxWidth >= 900;
               final isTwoColumn = constraints.maxWidth >= 620;
-              final regularCardWidth = isWide
-                  ? (constraints.maxWidth - spacing * 2) / 3
+              final cardWidth = isWide
+                  ? (constraints.maxWidth - spacing * 3) / 4
                   : isTwoColumn
                       ? (constraints.maxWidth - spacing) / 2
                       : constraints.maxWidth;
@@ -1451,9 +1499,7 @@ class _AiProviderConfigurationSection extends ConsumerWidget {
                 children: [
                   for (var index = 0; index < cards.length; index++)
                     SizedBox(
-                      width: isTwoColumn && !isWide && index == 2
-                          ? constraints.maxWidth
-                          : regularCardWidth,
+                      width: cardWidth,
                       child: cards[index],
                     ),
                 ],

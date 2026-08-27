@@ -1,8 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
 import 'package:flutter/material.dart';
-import 'package:graphview/GraphView.dart';
 
 class FictionCharacterGraphPage extends StatefulWidget {
   const FictionCharacterGraphPage({
@@ -27,7 +28,6 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
   late Future<FictionStoryAtlas> _future;
   FictionCharacterNode? _selected;
   FictionStoryAtlas? _atlas;
-  final _controller = GraphViewController();
 
   @override
   void initState() {
@@ -71,13 +71,16 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
             }
             final atlas = snapshot.requireData;
             _atlas = atlas;
-            if (atlas.characters.isEmpty || atlas.relationships.isEmpty) {
+            if (atlas.characters.isEmpty) {
               return _emptyState(atlas);
             }
             return LayoutBuilder(
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 840;
-                final graph = _graph(atlas, constraints.maxWidth);
+                final graph = _graph(
+                  atlas,
+                  wide ? constraints.maxWidth - 320 : constraints.maxWidth,
+                );
                 if (!wide) return graph;
                 return Row(
                   children: [
@@ -120,104 +123,52 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
       );
 
   Widget _graph(FictionStoryAtlas atlas, double width) {
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final graph = Graph();
-    final nodes = <String, Node>{};
-    for (final character in atlas.characters) {
-      nodes[character.id] = Node.Id(character.id);
-      graph.addNode(nodes[character.id]!);
-    }
-    for (var index = 0; index < atlas.relationships.length; index++) {
-      final relationship = atlas.relationships[index];
-      final relationId = '@relation:$index';
-      final relationNode = Node.Id(relationId);
-      nodes[relationId] = relationNode;
-      graph.addNode(relationNode);
-      final paint = Paint()
-        ..color = relationship.isChanged
-            ? Theme.of(context).colorScheme.outline
-            : Theme.of(context).colorScheme.primary
-        ..strokeWidth = relationship.isChanged ? 1.2 : 2.4;
-      graph.addEdge(
-        nodes[relationship.from]!,
-        relationNode,
-        paint: paint,
-      );
-      graph.addEdge(relationNode, nodes[relationship.to]!, paint: paint);
-    }
-    final algorithm = FruchtermanReingoldAlgorithm(
-      FruchtermanReingoldConfiguration(
-        iterations: 300,
-        repulsionRate: 0.8,
-        attractionRate: 0.15,
-      ),
-    );
+    final centerId = _protagonistId(atlas);
+    final layout = _buildRadialGraphLayout(atlas, centerId, width);
     return Column(
       children: [
         _boundaryBanner(atlas),
         Expanded(
-          // GraphView.builder already owns an InteractiveViewer. Wrapping it
-          // in a second viewer makes the graph's render and hit-test
-          // coordinate spaces diverge on slow/partial-refresh displays (most
-          // visible on E-INK: edges remain while nodes and taps disappear).
-          child: SizedBox(
-            width: width < 840 ? width * 1.4 : width,
-            height: 620,
-            child: GraphView.builder(
-              graph: graph,
-              algorithm: algorithm,
-              controller: _controller,
-              // The app maps E-INK to MediaQuery.disableAnimations. Keep the
-              // fit operation but make it instantaneous there, otherwise
-              // nodes can start outside the viewport on a large graph.
-              autoZoomToFit: true,
-              // OLED/LCD keeps the graph's layout animation; E-INK disables
-              // it to avoid partial-refresh ghosting and stale hit targets.
-              animated: !reduceMotion,
-              panAnimationDuration: reduceMotion
-                  ? Duration.zero
-                  : const Duration(milliseconds: 350),
-              toggleAnimationDuration: reduceMotion
-                  ? Duration.zero
-                  : const Duration(milliseconds: 250),
-              paint: Paint()
-                ..color = Theme.of(context).colorScheme.outline
-                ..strokeWidth = 1.4,
-              builder: (node) {
-                final id = node.key?.value?.toString() ?? '';
-                if (id.startsWith('@relation:')) {
-                  final index = int.parse(id.split(':').last);
-                  final relationship = atlas.relationships[index];
-                  return ActionChip(
-                    onPressed: () => _showRelationship(relationship),
-                    avatar: Icon(
-                      relationship.isChanged ? Icons.history : Icons.swap_horiz,
-                      size: 16,
-                    ),
-                    label: Text(relationship.relation),
-                  );
-                }
-                final character = atlas.characters.firstWhere(
-                  (item) => item.id == id,
-                  orElse: () => atlas.characters.first,
-                );
-                return Semantics(
-                  button: true,
-                  label: '查看${character.name}的人物详情',
-                  child: InkWell(
-                    key: ValueKey('fiction-character-${character.id}'),
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => _select(character),
-                    child: Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: _CharacterNode(
-                        character: character,
-                        selected: _selected?.id == character.id,
+          child: InteractiveViewer(
+            constrained: false,
+            alignment: Alignment.center,
+            boundaryMargin: const EdgeInsets.all(240),
+            minScale: 0.55,
+            maxScale: 2.5,
+            panEnabled: true,
+            scaleEnabled: true,
+            child: SizedBox(
+              width: layout.size.width,
+              height: layout.size.height,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _StoryGraphPainter(
+                        atlas: atlas,
+                        positions: layout.positions,
+                        colorScheme: Theme.of(context).colorScheme,
                       ),
                     ),
                   ),
-                );
-              },
+                  for (var index = 0;
+                      index < atlas.relationships.length;
+                      index++)
+                    if (layout.relationPositions[index] != null)
+                      _positionedRelationship(
+                        atlas.relationships[index],
+                        layout.relationPositions[index]!,
+                      ),
+                  // Nodes stay above lines and labels as the final visual and
+                  // hit-test layer; relationship labels are already placed
+                  // outside their bounds by the layout engine.
+                  for (final character in atlas.characters)
+                    _positionedCharacter(
+                      character,
+                      layout.positions[character.id]!,
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -231,6 +182,92 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
     );
   }
 
+  Widget _positionedCharacter(FictionCharacterNode character, Offset center) =>
+      Positioned(
+        left: center.dx - 56,
+        top: center.dy - 30,
+        width: 112,
+        height: 84,
+        child: Semantics(
+          button: true,
+          label: '查看${character.name}的人物详情',
+          child: InkWell(
+            key: ValueKey('fiction-character-${character.id}'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _select(character),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: _CharacterNode(
+                character: character,
+                selected: _selected?.id == character.id,
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _positionedRelationship(
+          FictionRelationshipEdge relationship, Offset center) =>
+      Positioned(
+        left: center.dx - 34,
+        top: center.dy - 12,
+        width: 68,
+        height: 24,
+        child: Semantics(
+          key: ValueKey(
+            'fiction-relationship-${relationship.from}-${relationship.to}',
+          ),
+          button: true,
+          label: '查看${_localizedRelation(relationship.relation)}关系',
+          child: Material(
+            color: Theme.of(context).colorScheme.surface,
+            shape: StadiumBorder(
+              side: BorderSide(
+                color: relationship.isChanged
+                    ? Theme.of(context).colorScheme.outline
+                    : Theme.of(context).colorScheme.primary,
+                width: 1.2,
+              ),
+            ),
+            child: InkWell(
+              customBorder: const StadiumBorder(),
+              onTap: () => _showRelationship(relationship),
+              child: Center(
+                child: Text(
+                  _localizedRelation(relationship.relation),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+  String _protagonistId(FictionStoryAtlas atlas) {
+    final explicit = atlas.characters.where((character) {
+      final role = character.source.payload['role']?.toString().toLowerCase();
+      return role == 'protagonist' || role == 'main' || role == '主角';
+    });
+    if (explicit.isNotEmpty) return explicit.first.id;
+    final scores = <String, int>{for (final c in atlas.characters) c.id: 0};
+    for (final edge in atlas.relationships) {
+      scores[edge.from] = (scores[edge.from] ?? 0) + 1;
+      scores[edge.to] = (scores[edge.to] ?? 0) + 1;
+    }
+    return atlas.characters.reduce((a, b) {
+      final scoreA = scores[a.id] ?? 0;
+      final scoreB = scores[b.id] ?? 0;
+      if (scoreA != scoreB) return scoreA > scoreB ? a : b;
+      return a.source.sourceProgress <= b.source.sourceProgress ? a : b;
+    }).id;
+  }
+
   Widget _boundaryBanner(FictionStoryAtlas atlas) => Material(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         child: Padding(
@@ -240,8 +277,17 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
               const Icon(Icons.shield_outlined, size: 18),
               const SizedBox(width: 8),
               Expanded(
-                  child: Text(
-                      '安全边界 ${(atlas.visibleProgress * 100).round()}% · 仅展示已读内容')),
+                child: Text(
+                  '安全边界 ${(atlas.visibleProgress * 100).round()}% · '
+                  '${atlas.characters.length} 人物 · '
+                  '${atlas.relationships.length} 关系',
+                ),
+              ),
+              if (widget.onRequestOrganize != null)
+                TextButton(
+                  onPressed: widget.onRequestOrganize,
+                  child: const Text('补充人物'),
+                ),
             ],
           ),
         ),
@@ -274,6 +320,18 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
             const SizedBox(height: 12),
             Text('别名：${node.aliases.join('、')}'),
           ],
+          if (node.courtesyNames.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('字：${node.courtesyNames.join('、')}'),
+          ],
+          if (node.artNames.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('号：${node.artNames.join('、')}'),
+          ],
+          if (node.titles.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('称谓：${node.titles.join('、')}'),
+          ],
           const SizedBox(height: 12),
           _sourceStatus(node.source),
           const SizedBox(height: 16),
@@ -281,7 +339,9 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
           for (final edge in _relationshipsFor(node))
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text('${_otherName(edge, node)} · ${edge.relation}'),
+              title: Text(
+                '${_otherName(edge, node)} · ${_localizedRelation(edge.relation)}',
+              ),
               subtitle: Text(edge.summary.isEmpty ? edge.state : edge.summary),
               trailing: edge.isChanged ? const Icon(Icons.history) : null,
               onTap: () => _showRelationship(edge),
@@ -320,7 +380,7 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text('${edge.relation}关系'),
+        title: Text('${_localizedRelation(edge.relation)}关系'),
         content: SizedBox(
           width: 420,
           child: ListView(
@@ -337,7 +397,7 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
                   contentPadding: EdgeInsets.zero,
                   dense: true,
                   title: Text(
-                    '${artifact.payload['relation'] ?? '其他'} · ${artifact.payload['state'] ?? 'active'}',
+                    '${_localizedRelation(artifact.payload['relation']?.toString() ?? '其他')} · ${_localizedRelationshipState(artifact.payload['state']?.toString() ?? 'active')}',
                   ),
                   subtitle: Text(
                     '${artifact.chapterTitle ?? '未知章节'} · ${(artifact.sourceProgress * 100).round()}%',
@@ -390,6 +450,218 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
       '';
 }
 
+class _StoryGraphPainter extends CustomPainter {
+  const _StoryGraphPainter({
+    required this.atlas,
+    required this.positions,
+    required this.colorScheme,
+  });
+
+  final FictionStoryAtlas atlas;
+  final Map<String, Offset> positions;
+  final ColorScheme colorScheme;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var index = 0; index < atlas.relationships.length; index++) {
+      final edge = atlas.relationships[index];
+      final from = positions[edge.from];
+      final to = positions[edge.to];
+      if (from == null || to == null) continue;
+      final vector = to - from;
+      final distance = vector.distance;
+      if (distance <= 60) continue;
+      final unit = vector / distance;
+      final start = from + unit * 28;
+      final end = to - unit * 28;
+      final halo = Paint()
+        ..color = colorScheme.surface
+        ..strokeWidth = 6
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      final paint = Paint()
+        ..color = edge.isChanged ? colorScheme.outline : colorScheme.primary
+        ..strokeWidth = edge.isChanged ? 1.6 : 2.4
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(start, end, halo);
+      canvas.drawLine(start, end, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _StoryGraphPainter oldDelegate) =>
+      oldDelegate.atlas != atlas ||
+      oldDelegate.positions != positions ||
+      oldDelegate.colorScheme != colorScheme;
+}
+
+class _GraphLayout {
+  const _GraphLayout({
+    required this.size,
+    required this.positions,
+    required this.relationPositions,
+  });
+
+  final Size size;
+  final Map<String, Offset> positions;
+  final Map<int, Offset> relationPositions;
+}
+
+_GraphLayout _buildRadialGraphLayout(
+  FictionStoryAtlas atlas,
+  String centerId,
+  double viewportWidth,
+) {
+  final byId = {
+    for (final character in atlas.characters) character.id: character
+  };
+  final adjacency = <String, Set<String>>{
+    for (final character in atlas.characters) character.id: <String>{},
+  };
+  for (final edge in atlas.relationships) {
+    if (!adjacency.containsKey(edge.from) || !adjacency.containsKey(edge.to)) {
+      continue;
+    }
+    adjacency[edge.from]!.add(edge.to);
+    adjacency[edge.to]!.add(edge.from);
+  }
+
+  final distance = <String, int>{centerId: 0};
+  final queue = <String>[centerId];
+  for (var offset = 0; offset < queue.length; offset++) {
+    final current = queue[offset];
+    for (final next in adjacency[current] ?? const <String>{}) {
+      if (distance.containsKey(next)) continue;
+      distance[next] = distance[current]! + 1;
+      queue.add(next);
+    }
+  }
+
+  int compareNodes(String left, String right) {
+    final degree =
+        (adjacency[right]?.length ?? 0).compareTo(adjacency[left]?.length ?? 0);
+    if (degree != 0) return degree;
+    final progress = byId[left]!
+        .source
+        .sourceProgress
+        .compareTo(byId[right]!.source.sourceProgress);
+    if (progress != 0) return progress;
+    return byId[left]!.name.compareTo(byId[right]!.name);
+  }
+
+  final groups = <int, List<String>>{};
+  for (final id in byId.keys.where((id) => id != centerId)) {
+    groups.putIfAbsent(distance[id] ?? -1, () => []).add(id);
+  }
+  for (final nodes in groups.values) {
+    nodes.sort(compareNodes);
+  }
+
+  final ringNodes = <List<String>>[];
+  final connectedDistances = groups.keys.where((value) => value > 0).toList()
+    ..sort();
+  final orderedGroups = [
+    for (final value in connectedDistances) groups[value]!,
+    if (groups[-1]?.isNotEmpty == true) groups[-1]!,
+  ];
+  for (final group in orderedGroups) {
+    var offset = 0;
+    while (offset < group.length) {
+      final capacity = math.min(20, 8 + ringNodes.length * 4);
+      ringNodes.add(group.skip(offset).take(capacity).toList(growable: false));
+      offset += capacity;
+    }
+  }
+
+  final radii = <double>[];
+  var previousRadius = 0.0;
+  for (var ring = 0; ring < ringNodes.length; ring++) {
+    final count = ringNodes[ring].length;
+    final byCircumference = count <= 1 ? 0.0 : count * 132 / (2 * math.pi);
+    final radius = math.max(
+      math.max(250.0 + ring * 160, byCircumference),
+      previousRadius + 155,
+    );
+    radii.add(radius);
+    previousRadius = radius;
+  }
+  final maxRadius = radii.isEmpty ? 0.0 : radii.last;
+  final canvasWidth =
+      math.max(viewportWidth, math.max(720.0, maxRadius * 2 + 220));
+  final canvasHeight = math.max(620.0, maxRadius * 2 + 220);
+  final origin = Offset(canvasWidth / 2, canvasHeight / 2);
+  final positions = <String, Offset>{centerId: origin};
+  for (var ring = 0; ring < ringNodes.length; ring++) {
+    final nodes = ringNodes[ring];
+    final phase = -math.pi / 2 + (ring.isOdd ? math.pi / nodes.length : 0);
+    for (var index = 0; index < nodes.length; index++) {
+      final angle = nodes.length == 1
+          ? phase
+          : phase + 2 * math.pi * index / nodes.length;
+      positions[nodes[index]] = origin +
+          Offset(radii[ring] * math.cos(angle), radii[ring] * math.sin(angle));
+    }
+  }
+
+  final nodeBounds = [
+    for (final center in positions.values)
+      Rect.fromLTWH(center.dx - 56, center.dy - 30, 112, 84).inflate(8),
+  ];
+  final occupiedLabels = <Rect>[];
+  final relationPositions = <int, Offset>{};
+  for (var index = 0; index < atlas.relationships.length; index++) {
+    final edge = atlas.relationships[index];
+    final from = positions[edge.from];
+    final to = positions[edge.to];
+    if (from == null || to == null) continue;
+    final vector = to - from;
+    if (vector.distance == 0) continue;
+    final normal = Offset(-vector.dy, vector.dx) / vector.distance;
+    Offset? selected;
+    for (final progress in const [.5, .42, .58, .34, .66, .26, .74]) {
+      for (final shift in const [
+        0.0,
+        22.0,
+        -22.0,
+        44.0,
+        -44.0,
+        66.0,
+        -66.0,
+        88.0,
+        -88.0,
+      ]) {
+        final candidate = from + vector * progress + normal * shift;
+        final bounds = Rect.fromCenter(
+          center: candidate,
+          width: 76,
+          height: 32,
+        );
+        final hitsNode = nodeBounds.any((rect) => rect.overlaps(bounds));
+        final hitsLabel = occupiedLabels.any((rect) => rect.overlaps(bounds));
+        if (!hitsNode && !hitsLabel) {
+          selected = candidate;
+          occupiedLabels.add(bounds);
+          break;
+        }
+      }
+      if (selected != null) break;
+    }
+    final fallback = selected ?? from + vector * .5 + normal * 22;
+    relationPositions[index] = fallback;
+    if (selected == null) {
+      occupiedLabels.add(
+        Rect.fromCenter(center: fallback, width: 76, height: 32),
+      );
+    }
+  }
+  return _GraphLayout(
+    size: Size(canvasWidth, canvasHeight),
+    positions: Map.unmodifiable(positions),
+    relationPositions: Map.unmodifiable(relationPositions),
+  );
+}
+
 class _CharacterNode extends StatelessWidget {
   const _CharacterNode({required this.character, required this.selected});
   final FictionCharacterNode character;
@@ -402,8 +674,8 @@ class _CharacterNode extends StatelessWidget {
           _InitialAvatar(name: character.name, selected: selected),
           const SizedBox(height: 4),
           Container(
-            constraints: const BoxConstraints(maxWidth: 120),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            constraints: const BoxConstraints(maxWidth: 104),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
               borderRadius: BorderRadius.circular(8),
@@ -412,7 +684,13 @@ class _CharacterNode extends StatelessWidget {
                 width: 1.2,
               ),
             ),
-            child: Text(character.name, overflow: TextOverflow.ellipsis),
+            child: Text(
+              character.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, height: 1.05),
+            ),
           ),
         ],
       );
@@ -428,7 +706,7 @@ class _InitialAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final diameter = (large ? 28.0 : 24.0) * 2;
+    final diameter = (large ? 28.0 : 22.0) * 2;
     return Container(
       width: diameter,
       height: diameter,
@@ -445,7 +723,7 @@ class _InitialAvatar extends StatelessWidget {
         _avatarInitial(name),
         style: TextStyle(
           color: selected ? colors.onPrimary : colors.onSurface,
-          fontSize: large ? 24 : 18,
+          fontSize: large ? 24 : 16,
           fontWeight: FontWeight.w700,
         ),
       ),
@@ -502,6 +780,7 @@ String _avatarInitial(String rawName) {
     '呼延',
     '鲜于',
     '第五',
+    '第八',
   };
   final surnameLength = runes.length >= 3 &&
           compoundSurnames.contains(String.fromCharCodes(runes.take(2)))
@@ -509,6 +788,31 @@ String _avatarInitial(String rawName) {
       : 1;
   return String.fromCharCode(
       runes[surnameLength < runes.length ? surnameLength : 0]);
+}
+
+String _localizedRelation(String raw) {
+  const labels = {
+    'parent': '亲子',
+    'family': '家人',
+    'colleague': '同事',
+    'rival': '对手',
+    'enemy': '敌对',
+    'friend': '朋友',
+    'spouse': '夫妻',
+    'teacher': '师徒',
+    'student': '师徒',
+    'mentor': '师徒',
+    '相识': '相识',
+    'unknown': '其他',
+    'active': '其他',
+  };
+  final value = raw.trim();
+  return labels[value.toLowerCase()] ?? (value.isEmpty ? '其他' : value);
+}
+
+String _localizedRelationshipState(String raw) {
+  const labels = {'active': '当前', 'changed': '已变化', 'ended': '已结束'};
+  return labels[raw.trim().toLowerCase()] ?? '当前';
 }
 
 class ReadingArtifactSource {

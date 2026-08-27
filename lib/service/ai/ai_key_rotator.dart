@@ -5,6 +5,7 @@ class AiKeyRotator {
   /// Get the next available API key from the provider using round-robin strategy
   /// Returns null if no enabled keys are available
   static String? getNextKey(AiProvider provider) {
+    if (provider.authMode == AiProviderAuthMode.none) return '';
     final enabledKeys = provider.apiKeys
         .where((key) => key.enabled && key.key.trim().isNotEmpty)
         .toList();

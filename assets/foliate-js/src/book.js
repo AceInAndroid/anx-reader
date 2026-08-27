@@ -202,6 +202,14 @@ const handleSelection = (view, doc, index, controller = selectionControllers.get
 
   if (!range) return false;
 
+  // On Android the native WebView selection callback can arrive while a
+  // long-press word/sentence expansion is still pending. Treat that callback
+  // as handled, but do not emit a menu for the temporary single-character
+  // range. The Android selection scheduler will emit the final range.
+  if (controller?.hasPendingNativeLongPress) return true;
+
+  if (controller?.shouldSkipDuplicateReport(range)) return true;
+
   const position = getPosition(range);
   const cfi = view.getCFI(index, range);
   const lang = 'en-US'
@@ -224,6 +232,7 @@ const handleSelection = (view, doc, index, controller = selectionControllers.get
     canMoveNext: false,
     supportsRangeSelection: false,
   }
+  controller?.recordSelectionReport(range)
   activeSelectionController = controller || null
 
   onSelectionEnd({
@@ -496,6 +505,7 @@ const setSelectionHandler = (view, doc, index) => {
     // This event signals that the user has started dragging handles
     doc.addEventListener('pointercancel', () => {
       hasNativeSelectionStarted = true;
+      rangeController.markNativeSelectionStarted();
       scheduleAndroidSelection(700);
     });
 
@@ -1520,7 +1530,12 @@ class Reader {
   }
 
   showContextMenu() {
-    return handleSelection(this.view, this.#doc, this.#index)
+    const controller = selectionControllers.get(this.#doc)
+    // The native Android context-menu callback may beat pointercancel and the
+    // debounced selectionchange handler. Apply the configured long-press range
+    // here first so Flutter only ever sees the final word/sentence selection.
+    if (controller?.expandLongPressSelection()) return true
+    return handleSelection(this.view, this.#doc, this.#index, controller)
   }
 
   addAnnotation(annotation) {

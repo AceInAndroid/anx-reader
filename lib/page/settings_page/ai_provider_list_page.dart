@@ -2,12 +2,13 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/page/settings_page/ai_provider_detail_page.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
+import 'package:anx_reader/service/ai/ai_extraction_engine.dart';
 import 'package:anx_reader/widgets/common/container/filled_container.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 
-enum AiProviderListMode { general, translation }
+enum AiProviderListMode { general, translation, extraction }
 
 class AiProviderListPage extends ConsumerWidget {
   const AiProviderListPage({
@@ -22,19 +23,37 @@ class AiProviderListPage extends ConsumerWidget {
     final l10n = L10n.of(context);
     final providers = ref.watch(aiProvidersProvider);
     final notifier = ref.read(aiProvidersProvider.notifier);
-    final selectedId = mode == AiProviderListMode.general
-        ? notifier.getSelectedProvider()?.id
-        : notifier.getDedicatedTranslationProvider()?.id;
+    final selectedId = switch (mode) {
+      AiProviderListMode.general => notifier.getSelectedProvider()?.id,
+      AiProviderListMode.translation =>
+        notifier.getDedicatedTranslationProvider()?.id,
+      AiProviderListMode.extraction => notifier.getExtractionProvider()?.id,
+    };
     final generalProvider = notifier.getRunnableSelectedProvider();
 
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          mode == AiProviderListMode.translation
-              ? l10n.settingsAiTranslationProviders
-              : l10n.settingsAiGeneralProviders,
+          switch (mode) {
+            AiProviderListMode.translation =>
+              l10n.settingsAiTranslationProviders,
+            AiProviderListMode.extraction => '轻量提取与摘要引擎',
+            AiProviderListMode.general => l10n.settingsAiGeneralProviders,
+          },
         ),
         actions: [
+          if (mode == AiProviderListMode.extraction)
+            IconButton(
+              icon: const Icon(Icons.help_outline_rounded),
+              tooltip: '配置帮助',
+              onPressed: () => _showExtractionHelp(context),
+            ),
+          if (mode == AiProviderListMode.extraction)
+            IconButton(
+              icon: const Icon(Icons.science_outlined),
+              tooltip: '测试结构化提取',
+              onPressed: () => _testExtraction(context, ref),
+            ),
           IconButton(
             icon: const Icon(Icons.add),
             onPressed: () => _addProvider(context),
@@ -48,9 +67,14 @@ class AiProviderListPage extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
             child: Text(
-              mode == AiProviderListMode.translation
-                  ? l10n.settingsAiTranslationProvidersTip
-                  : l10n.settingsAiGeneralProvidersTip,
+              switch (mode) {
+                AiProviderListMode.translation =>
+                  l10n.settingsAiTranslationProvidersTip,
+                AiProviderListMode.extraction =>
+                  '用于故事档案、内部上下文摘要和阅读记忆整理。完整正文默认只发送到此引擎。',
+                AiProviderListMode.general =>
+                  l10n.settingsAiGeneralProvidersTip,
+              },
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -62,17 +86,27 @@ class AiProviderListPage extends ConsumerWidget {
               generalProvider: generalProvider,
               onSelected: () => notifier.setTranslationProvider(null),
             ),
+          if (mode == AiProviderListMode.extraction)
+            _DisableExtractionTile(
+              selected: selectedId == null,
+              onSelected: () => notifier.setExtractionProvider(null),
+            ),
           for (final provider in providers)
             _ProviderTile(
               provider: provider,
               selected: provider.id == selectedId,
-              selectedLabel: mode == AiProviderListMode.general
-                  ? l10n.settingsAiProviderDefault
-                  : l10n.aiTranslationProviderSelected,
+              selectedLabel: switch (mode) {
+                AiProviderListMode.general => l10n.settingsAiProviderDefault,
+                AiProviderListMode.translation =>
+                  l10n.aiTranslationProviderSelected,
+                AiProviderListMode.extraction => '已用于轻量提取',
+              },
               runnable: notifier.isRunnableProvider(provider),
               onSelected: () {
                 if (mode == AiProviderListMode.translation) {
                   notifier.setTranslationProvider(provider.id);
+                } else if (mode == AiProviderListMode.extraction) {
+                  notifier.setExtractionProvider(provider.id);
                 } else {
                   notifier.setSelectedProvider(provider.id);
                 }
@@ -97,6 +131,86 @@ class AiProviderListPage extends ConsumerWidget {
         builder: (context) => const AiProviderDetailPage(providerId: null),
       ),
     );
+  }
+
+  Future<void> _showExtractionHelp(BuildContext context) => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('轻量提取引擎配置'),
+          content: const SingleChildScrollView(
+            child: SelectableText(
+              'LM Studio\n'
+              '选择 OpenAI 兼容协议，地址使用 '
+              'http://<主机IP>:1234/v1/chat/completions，认证选“无认证”。\n'
+              'Qwen 模板首行可加：{%- set enable_thinking = false %}\n\n'
+              'Ollama\n'
+              '启动示例：ollama run qwen3.5:4b --think=false\n'
+              '兼容地址：http://<主机IP>:11434/v1/chat/completions\n\n'
+              'Android 上 localhost 指手机本身。连接电脑或 NAS '
+              '时请使用局域网 IP，并只在受信任网络中启用无认证服务。\n\n'
+              '完整正文默认只发送到此引擎；通用线上模型只复核疑难候选和短证据。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+
+  Future<void> _testExtraction(BuildContext context, WidgetRef ref) async {
+    final provider =
+        ref.read(aiProvidersProvider.notifier).getExtractionProvider();
+    if (provider == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先选择可用的提取 Provider')),
+      );
+      return;
+    }
+    SmartDialog.showLoading(msg: '正在测试 ${provider.model}…');
+    try {
+      final result = await aiExtractionEngine.extract(
+        taskId: AiExtractionTaskIds.fictionStoryAtlas,
+        prompt: '只返回严格 JSON：{"character":"第五伦","evidence":"第五伦走进屋内"}',
+        ref: ref,
+      );
+      if (!result.isValid) {
+        ref.read(aiProvidersProvider.notifier).setExtractionProvider(null);
+      }
+      SmartDialog.dismiss();
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(result.isValid ? '提取引擎可用' : '提取结果不合格'),
+          content: Text(
+            'Provider：${provider.title}\n'
+            '模型：${result.model}\n'
+            '部署：${result.deployment == AiProviderDeployment.localPrivate ? '本地/内网' : '云端'}\n'
+            '耗时：${result.elapsed.inMilliseconds} ms\n'
+            '输入：${result.inputTokens} Token${result.usageEstimated ? '（含估算）' : ''}\n'
+            '输出：${result.outputTokens} Token\n'
+            'JSON：${result.isValid ? '合格' : result.validationErrors.join('；')}\n'
+            'Thinking：${result.raw.contains('<think>') ? '检测到思考标记，请在服务端关闭' : '未在正文检测到'}',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      SmartDialog.dismiss();
+      ref.read(aiProvidersProvider.notifier).setExtractionProvider(null);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('测试失败：$error')),
+      );
+    }
   }
 
   Future<void> _editProvider(BuildContext context, String providerId) async {
@@ -140,6 +254,25 @@ class AiProviderListPage extends ConsumerWidget {
       ref.read(aiProvidersProvider.notifier).deleteProvider(provider.id);
     }
   }
+}
+
+class _DisableExtractionTile extends StatelessWidget {
+  const _DisableExtractionTile({
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: const Icon(Icons.pause_circle_outline_rounded),
+        title: const Text('不使用轻量提取引擎'),
+        subtitle: const Text('默认关闭；不会自动将完整正文改发到线上模型'),
+        trailing: selected ? const Icon(Icons.check_circle_rounded) : null,
+        onTap: onSelected,
+      );
 }
 
 class _FollowGeneralProviderTile extends StatelessWidget {

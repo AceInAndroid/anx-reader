@@ -14,6 +14,9 @@ enum AiContextTask {
   fictionBackfill,
   noteOrganizer,
   expertAnalysis,
+  lightweightExtraction,
+  cloudVerification,
+  internalSummary,
 }
 
 class AiContextBudget {
@@ -83,6 +86,26 @@ class AiContextCache {
     _entries.removeWhere((key, _) => key.startsWith('$scope::'));
   }
 
+  String? read({required String scope, required String fingerprint}) {
+    final key = '$scope::$fingerprint';
+    final value = _entries.remove(key);
+    if (value != null) _entries[key] = value;
+    return value;
+  }
+
+  void put({
+    required String scope,
+    required String fingerprint,
+    required String value,
+  }) {
+    final key = '$scope::$fingerprint';
+    _entries.remove(key);
+    _entries[key] = value;
+    while (_entries.length > maxEntries) {
+      _entries.remove(_entries.keys.first);
+    }
+  }
+
   void clear() => _entries.clear();
 }
 
@@ -122,8 +145,8 @@ class AiContextAssembler {
       summaryTokens: 800,
     ),
     AiContextTask.fictionBackfill: AiContextBudget(
-      maxInputTokens: 16000,
-      reservedOutputTokens: 4000,
+      maxInputTokens: 20000,
+      reservedOutputTokens: 6000,
       recentMessages: 2,
       summaryTokens: 0,
     ),
@@ -139,10 +162,70 @@ class AiContextAssembler {
       recentMessages: 2,
       summaryTokens: 300,
     ),
+    AiContextTask.lightweightExtraction: AiContextBudget(
+      maxInputTokens: 8000,
+      reservedOutputTokens: 768,
+      recentMessages: 2,
+      summaryTokens: 0,
+    ),
+    AiContextTask.cloudVerification: AiContextBudget(
+      maxInputTokens: 4000,
+      reservedOutputTokens: 1000,
+      recentMessages: 2,
+      summaryTokens: 0,
+    ),
+    AiContextTask.internalSummary: AiContextBudget(
+      maxInputTokens: 8000,
+      reservedOutputTokens: 768,
+      recentMessages: 8,
+      summaryTokens: 0,
+    ),
   };
 
   AiContextBudget budgetFor(AiContextTask task) =>
       _budgets[task] ?? _defaultBudgets[AiContextTask.general]!;
+
+  List<ChatMessage> rollingSummarySource(
+    List<ChatMessage> source,
+    AiContextTask task,
+  ) {
+    final budget = budgetFor(task);
+    if (budget.summaryTokens <= 0) return const [];
+    final nonSystem = _deduplicateSystemMessages(source)
+        .where((message) => message is! SystemChatMessage)
+        .toList(growable: false);
+    final start =
+        (nonSystem.length - budget.recentMessages).clamp(0, nonSystem.length);
+    return nonSystem.sublist(0, start);
+  }
+
+  String rollingSummaryFingerprint(
+    List<ChatMessage> messages,
+    AiContextTask task,
+  ) =>
+      _fingerprint(messages, budgetFor(task).summaryTokens);
+
+  String? cachedRollingSummary({
+    required List<ChatMessage> messages,
+    required AiContextTask task,
+    required String cacheScope,
+  }) =>
+      cache.read(
+        scope: '$cacheScope:summary',
+        fingerprint: rollingSummaryFingerprint(messages, task),
+      );
+
+  void storeRollingSummary({
+    required List<ChatMessage> messages,
+    required AiContextTask task,
+    required String cacheScope,
+    required String summary,
+  }) =>
+      cache.put(
+        scope: '$cacheScope:summary',
+        fingerprint: rollingSummaryFingerprint(messages, task),
+        value: summary.trim(),
+      );
 
   LangchainAiConfig applyOutputBudget(
     LangchainAiConfig config,

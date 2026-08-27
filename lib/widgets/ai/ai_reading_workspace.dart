@@ -26,6 +26,7 @@ import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_memory.dart';
 import 'package:anx_reader/service/ai/reading_memory_ai_service.dart';
+import 'package:anx_reader/service/ai/ai_extraction_engine.dart';
 import 'package:anx_reader/service/ai/agent_action_service.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
 import 'package:anx_reader/service/reading_note/reading_note_capture_service.dart';
@@ -1046,6 +1047,31 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
       }
       final service = ReadingMemoryAiService();
       final prompt = service.topicPrompt(sources);
+      var useExtractionEngine = aiExtractionEngine.resolveProvider(ref) != null;
+      if (!useExtractionEngine) {
+        if (!mounted) return;
+        final allowCloud = await showDialog<bool>(
+              context: context,
+              builder: (dialogContext) => AlertDialog(
+                title: const Text('轻量提取引擎不可用'),
+                content: const Text(
+                  '主题聚类通常由本地或小参数模型处理。若继续，本次收集的阅读记忆内容将发送给通用线上模型；以后仍不会自动切换。',
+                ),
+                actions: [
+                  FilledButton.tonal(
+                    onPressed: () => Navigator.pop(dialogContext, false),
+                    child: const Text('取消／稍后处理'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext, true),
+                    child: const Text('仅本次使用线上模型'),
+                  ),
+                ],
+              ),
+            ) ??
+            false;
+        if (!allowCloud) return;
+      }
       final batchId = DateTime.now().millisecondsSinceEpoch.toString();
       final topics = await _generateMemoryStructured(
         prompt: prompt,
@@ -1055,6 +1081,7 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
             batchId: batchId,
             allowedSourceIds: sources.map((s) => s.id).toSet(),
             now: int.parse(batchId)),
+        useExtractionEngine: useExtractionEngine,
       );
       await notifier.saveTopics(topics);
       if (mounted) {
@@ -1099,18 +1126,32 @@ class _AiReadingWorkspaceState extends ConsumerState<AiReadingWorkspace> {
   Future<List<T>> _generateMemoryStructured<T>(
       {required String prompt,
       required String correction,
-      required List<T> Function(String response) parser}) async {
-    var response = await aiGenerateText([ChatMessage.humanText(prompt)],
-        useAgent: false, ref: ref);
+      required List<T> Function(String response) parser,
+      bool useExtractionEngine = false}) async {
+    Future<String> generate(String value) async {
+      if (!useExtractionEngine) {
+        return aiGenerateText([ChatMessage.humanText(value)],
+            useAgent: false, ref: ref);
+      }
+      final extracted = await aiExtractionEngine.extract(
+        taskId: AiExtractionTaskIds.readingMemoryTopics,
+        prompt: value,
+        ref: ref,
+      );
+      if (!extracted.isValid) {
+        throw FormatException(extracted.validationErrors.join('；'));
+      }
+      return extracted.raw;
+    }
+
+    var response = await generate(prompt);
     try {
       return parser(response);
     } on FormatException {
-      response = await aiGenerateText([
-        ChatMessage.humanText('''返回未通过校验。请只输出合法 JSON 数组，不要解释。
+      response = await generate('''返回未通过校验。请只输出合法 JSON 数组，不要解释。
 $correction
 原始任务：$prompt
-待纠正返回：$response''')
-      ], useAgent: false, ref: ref);
+待纠正返回：$response''');
       return parser(response);
     }
   }

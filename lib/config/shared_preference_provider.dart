@@ -74,6 +74,8 @@ const Set<String> _prefsImportSkipKeys = {
   // Usage counters are device-local diagnostics. Importing them would merge
   // unrelated devices and make the displayed monthly total misleading.
   'aiTokenUsageMonthly',
+  // Local/NAS endpoints and the selected extraction engine are device-local.
+  'aiExtractionConfig',
   // Display hardware and color choices are intentionally per-device. A
   // WebDAV preferences restore must not turn an OLED phone into an E-ink
   // device or replace either device's local appearance.
@@ -1028,6 +1030,21 @@ class Prefs extends ChangeNotifier {
 
   String? get translationAiProvider {
     return prefs.getString('translationAiProvider');
+  }
+
+  Map<String, dynamic> get aiExtractionConfig {
+    final raw = prefs.getString('aiExtractionConfig');
+    if (raw == null || raw.isEmpty) return const {};
+    try {
+      return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  set aiExtractionConfig(Map<String, dynamic> value) {
+    prefs.setString('aiExtractionConfig', jsonEncode(value));
+    notifyListeners();
   }
 
   void deleteAiConfig(String identifier) {

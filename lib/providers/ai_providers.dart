@@ -1,5 +1,6 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
+import 'package:anx_reader/models/ai_extraction_config.dart';
 import 'package:anx_reader/service/ai/ai_services.dart';
 import 'package:anx_reader/service/translate/translation_ai_provider_resolver.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -126,6 +127,31 @@ class AiProviders extends _$AiProviders {
     final providerId = Prefs().translationAiProvider;
     if (providerId == null) return null;
     return getRunnableProviderById(providerId);
+  }
+
+  AiExtractionConfig getExtractionConfig() =>
+      AiExtractionConfig.fromJson(Prefs().aiExtractionConfig);
+
+  AiProvider? getExtractionProvider() {
+    final config = getExtractionConfig();
+    if (!config.isConfigured) return null;
+    return getRunnableProviderById(config.providerId!);
+  }
+
+  bool setExtractionProvider(String? providerId) {
+    if (providerId == null) {
+      Prefs().aiExtractionConfig = const AiExtractionConfig().toJson();
+      _notifySelectionChanged();
+      return true;
+    }
+    final provider = getRunnableProviderById(providerId);
+    if (provider == null) return false;
+    Prefs().aiExtractionConfig = AiExtractionConfig(
+      enabled: true,
+      providerId: provider.id,
+    ).toJson();
+    _notifySelectionChanged();
+    return true;
   }
 
   AiProvider? getFallbackProvider() {
@@ -390,6 +416,12 @@ class AiProviders extends _$AiProviders {
         (fallbackId == Prefs().selectedAiService ||
             runnableById(fallbackId) == null)) {
       Prefs().aiFallbackProvider = null;
+    }
+
+    final extraction = getExtractionConfig();
+    if (extraction.isConfigured &&
+        runnableById(extraction.providerId) == null) {
+      Prefs().aiExtractionConfig = const AiExtractionConfig().toJson();
     }
   }
 

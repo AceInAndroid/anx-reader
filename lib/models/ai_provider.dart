@@ -21,6 +21,26 @@ enum AiProtocol {
   }
 }
 
+enum AiProviderAuthMode {
+  bearer,
+  none;
+
+  static AiProviderAuthMode fromJson(Object? value) => values.firstWhere(
+        (item) => item.name == value?.toString(),
+        orElse: () => AiProviderAuthMode.bearer,
+      );
+}
+
+enum AiProviderDeployment {
+  cloud,
+  localPrivate;
+
+  static AiProviderDeployment fromJson(Object? value) => values.firstWhere(
+        (item) => item.name == value?.toString(),
+        orElse: () => AiProviderDeployment.cloud,
+      );
+}
+
 @freezed
 abstract class AiProvider with _$AiProvider {
   const AiProvider._();
@@ -36,6 +56,8 @@ abstract class AiProvider with _$AiProvider {
     bool isBuiltin, // Whether this is a built-in provider (cannot be deleted)
     @Default([]) List<AiApiKey> apiKeys, // List of API keys
     @Default('') String model, // Current selected model
+    @Default(AiProviderAuthMode.bearer) AiProviderAuthMode authMode,
+    @Default(AiProviderDeployment.cloud) AiProviderDeployment deployment,
     @Default(AiReasoningEffort.auto)
     AiReasoningEffort reasoningEffort, // AI reasoning effort
     @Default(0) int requestTimeoutSeconds, // 0 means no app-level timeout
@@ -68,7 +90,10 @@ abstract class AiProvider with _$AiProvider {
     return enabled &&
         url.trim().isNotEmpty &&
         model.trim().isNotEmpty &&
-        hasValidKey;
+        ((authMode == AiProviderAuthMode.none &&
+                !isBuiltin &&
+                protocol == AiProtocol.openai) ||
+            hasValidKey);
   }
 }
 

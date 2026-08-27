@@ -52,6 +52,7 @@
 | WebDAV 同步 | 已实现 | 设置/同步按钮 | `service/sync/` | 整库兼容 + Agent 包 | 入口必须走 single-flight gate |
 | E-INK/OLED 配置 | 已实现 | 设置 > 外观 | `device_display_profile.dart`、`shared_preference_provider.dart` | 设备本地，不备份 | 不把 E-INK 当普通主题 |
 | Token 用量 | 已实现 | 设置 > AI | `ai_token_usage_service.dart` | 本机诊断计数 | 不把估算值当服务端精确值 |
+| 轻量提取/摘要引擎 | 已实现 | 设置 > AI > 轻量提取与摘要引擎 | `ai_extraction_engine.dart`、`fiction_hybrid_extraction_service.dart` | Provider 角色设备本地；Artifact 正常同步 | 不在失败时静默上传整章 |
 | 阅读成果页 | 已实现 | 阅读页 > 本书阅读成果 | `reading_outcomes_page.dart` | 读取闭环/Atlas/记忆 | 不在成果页自动整理 |
 
 ## 3. AI 底座与上下文

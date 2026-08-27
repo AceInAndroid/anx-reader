@@ -49,4 +49,38 @@ void main() {
     expect(service.snapshot().totalTokens, 0);
     expect(service.snapshot().requests, 0);
   });
+
+  test('separates local extraction and cloud verification usage', () async {
+    final service = AiTokenUsageService(
+      clock: () => DateTime(2026, 8, 24),
+    );
+    await service.runWithRole(AiTokenUsageRole.localExtraction, () async {
+      service.record(inputTokens: 1000, outputTokens: 80, estimated: false);
+    });
+    await service.runWithRole(AiTokenUsageRole.cloudVerification, () async {
+      service.record(inputTokens: 120, outputTokens: 20, estimated: true);
+    });
+    service.recordStorySavings(
+      baselineInputTokens: 1000,
+      cloudInputTokens: 120,
+    );
+
+    final usage = service.snapshot();
+    expect(usage.byRole[AiTokenUsageRole.localExtraction]?.inputTokens, 1000);
+    expect(usage.byRole[AiTokenUsageRole.cloudVerification]?.inputTokens, 120);
+    expect(usage.storyCloudSavingRate, closeTo(.88, .0001));
+  });
+
+  test('reads legacy aggregate snapshots without role data', () {
+    Prefs().prefs.setString(
+          AiTokenUsageService.storageKey,
+          '{"month":"2026-08","inputTokens":20,"outputTokens":5,'
+          '"requests":1,"estimatedRequests":0,"startedAt":1}',
+        );
+    final service = AiTokenUsageService(
+      clock: () => DateTime(2026, 8, 24),
+    );
+    expect(service.snapshot().totalTokens, 25);
+    expect(service.snapshot().byRole, isEmpty);
+  });
 }
