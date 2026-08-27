@@ -442,6 +442,10 @@ merge rules; the server only isolates and returns packages.
   external change on the next periodic check.
 - All automatic and manual requests still pass through the single-flight gate;
   repeated taps or overlapping lifecycle triggers join the in-flight operation.
+- Automatic sync has a short device-local cooldown and an offline backoff. This
+  coalesces lifecycle, bookshelf and reading-progress triggers and avoids
+  repeated network wakeups while Wi-Fi is unavailable; manual sync is never
+  blocked by the cooldown.
 
 ## Hybrid extraction and internal summary engine
 

@@ -39,8 +39,12 @@ class Sync extends _$Sync {
   static final Sync _instance = Sync._internal();
   static final SyncRequestGate<void> _syncGate = SyncRequestGate<void>();
   static const Duration _progressUpdateInterval = Duration(milliseconds: 100);
+  static const Duration _automaticSyncCooldown = Duration(minutes: 3);
+  static const Duration _offlineRetryBackoff = Duration(minutes: 5);
 
   DateTime? _lastProgressUpdate;
+  DateTime? _lastAutomaticSyncAttempt;
+  DateTime? _lastOfflineSyncCheck;
 
   factory Sync() {
     return _instance;
@@ -342,6 +346,30 @@ class Sync extends _$Sync {
     WidgetRef? ref, {
     required SyncTrigger trigger,
   }) async {
+    final silent = trigger == SyncTrigger.auto;
+    if (silent) {
+      final now = DateTime.now();
+      final lastAttempt = _lastAutomaticSyncAttempt;
+      if (lastAttempt != null &&
+          now.difference(lastAttempt) < _automaticSyncCooldown) {
+        AnxLog.info('Skipping automatic sync during cooldown');
+        return;
+      }
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) {
+        final lastOfflineCheck = _lastOfflineSyncCheck;
+        if (lastOfflineCheck != null &&
+            now.difference(lastOfflineCheck) < _offlineRetryBackoff) {
+          AnxLog.info('Skipping automatic sync while offline');
+          return;
+        }
+        _lastOfflineSyncCheck = now;
+        AnxLog.info('Deferring automatic sync while offline');
+        return;
+      }
+      _lastAutomaticSyncAttempt = now;
+    }
+
     if (Prefs().cloudBaseSyncEnabled) {
       try {
         final wifiAllowed = !Prefs().onlySyncWhenWifi ||
@@ -391,7 +419,7 @@ class Sync extends _$Sync {
 
     changeState(state.copyWith(isSyncing: true));
 
-    if (Prefs().syncCompletedToast) {
+    if (!silent && Prefs().syncCompletedToast) {
       AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavSyncing);
     }
 
@@ -413,7 +441,7 @@ class Sync extends _$Sync {
         localBeforeDatabaseSync: readingAgentBeforeDatabaseSync,
       );
 
-      if (Prefs().syncCompletedToast) {
+      if (!silent && Prefs().syncCompletedToast) {
         AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavSyncingFiles);
       }
 
@@ -431,7 +459,7 @@ class Sync extends _$Sync {
 
       // Backup cleanup is now handled by DatabaseSyncManager
 
-      if (Prefs().syncCompletedToast) {
+      if (!silent && Prefs().syncCompletedToast) {
         AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavSyncComplete);
       }
     } catch (e, s) {
