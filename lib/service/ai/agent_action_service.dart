@@ -2,6 +2,7 @@ import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_note.dart';
 import 'package:anx_reader/models/book_note.dart';
+import 'package:anx_reader/models/book_wiki.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:uuid/uuid.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
@@ -164,6 +165,26 @@ class AgentActionService {
     final mutation =
         await _repository.saveArtifact(artifact, sessionId: _sessionId);
     _runtime.actionApplied(mutation.action);
+    return mutation;
+  }
+
+  Future<AgentMutation<BookWikiEntry>> saveWikiEntry(
+    BookWikiEntry entry, {
+    BookWiki? wiki,
+    BookWikiRevision? revision,
+    String? sessionId,
+  }) async {
+    final mutation = await _repository.saveWikiEntry(
+      entry,
+      wiki: wiki,
+      revision: revision,
+      sessionId: sessionId ??
+          _runtime.state.sessionId ??
+          'wiki-${entry.bookId}-${DateTime.now().millisecondsSinceEpoch}',
+    );
+    if (_runtime.state.sessionId != null) {
+      _runtime.actionApplied(mutation.action);
+    }
     return mutation;
   }
 

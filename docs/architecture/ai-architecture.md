@@ -14,6 +14,28 @@ Anx Reader 的 AI 不是阅读页上的一次性问答按钮，而是由阅读�
 - 所有持久化 AI 写入通过统一动作服务，支持即时撤销、30 天内撤销和冲突保护。
 - 同步只同步阅读数据，不在后台触发 AI；云端不可用时本地阅读和 AI 仍可用。
 
+### Book Wiki 执行边界
+
+`BookWikiService` 是 Wiki 唯一查询投影层，合并结构化 Wiki Entry、Story
+Atlas Artifact 与 Markdown 记忆，并统一应用 `visibleFromProgress`。页面不直查
+DAO，也不拼 Prompt。`BookWikiGenerationService` 只接受用户确认后由活跃阅读器
+提供的章节文本，按章节校验证据并通过 `AgentActionService` 写入；内容哈希未变时
+跳过。全书模式不改变本地默认可见边界。`BookWikiExportService` 只导出当前允许
+显示的投影，并附来源和事实/推断标识。
+
+### ReadingChunk 与 Reading Evidence Resolver
+
+`ReadingChunker` 是用户确认后的整理任务使用的短生命周期分块层。它优先在段落、
+句末和换行处切分，并为每个 chunk 保留原章节的 UTF-16 `startOffset`/`endOffset`、
+内容哈希和 pipeline 版本；chunk 正文不写入新表，checkpoint 只保存元数据。Wiki
+生成和 Story Atlas 的超长章节统一复用此分块器，因此内容变化或 pipeline 变化会自然
+失效，普通翻页不会计算 chunk。
+
+`ReadingEvidenceResolver` 是页面无关的来源安全边界。它依次尝试原文子串、空白/全
+半角标点归一化和仅去除引用外壳的确定性匹配，并返回从原章节切出的 `exactText` 与
+字符范围。无法安全定位的模型证据被拒绝，绝不由模型补写或用模糊关键词替代。优先
+chunk 范围既用于选择重复证据，也是不可越过的范围约束。
+
 ## 2. 总体分层
 
 ```mermaid

@@ -12,6 +12,7 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 import 'package:anx_reader/models/book.dart';
+import 'package:anx_reader/models/book_wiki.dart';
 import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/providers/ai_workspace.dart';
 import 'package:anx_reader/providers/reading_coach.dart';
@@ -25,6 +26,8 @@ import 'package:anx_reader/page/book_detail.dart';
 import 'package:anx_reader/page/book_player/epub_player.dart';
 import 'package:anx_reader/page/reading_outcomes_page.dart';
 import 'package:anx_reader/page/reading_agent_help_page.dart';
+import 'package:anx_reader/page/book_wiki_page.dart';
+import 'package:anx_reader/service/ai/book_wiki_generation_service.dart';
 import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/providers/book_toc.dart';
 import 'package:anx_reader/dao/reading_agent_sync.dart';
@@ -2502,6 +2505,112 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
   }
 
+  Future<void> _generateBookWiki(bool fullBook) async {
+    final localProgress = readingAgentRuntime.state.totalProgress > 0
+        ? readingAgentRuntime.state.totalProgress
+        : _book.readingPercentage;
+    final boundary = fullBook ? 1.0 : localProgress.clamp(0, 1).toDouble();
+    final chapters = (await _eligibleBackfillChapters(boundary))
+        .where((chapter) =>
+            BookWikiGenerationService.isEligibleChapterTitle(chapter.title))
+        .toList(growable: false);
+    if (!mounted) return;
+    final estimatedTokens = chapters.length * 3000;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(fullBook ? '确认生成全书 Wiki' : '确认生成已读 Wiki'),
+        content: Text(fullBook
+            ? '将读取全书 ${chapters.length} 个章节，可能包含未读内容并产生剧透。预计输入约 $estimatedTokens Token，可随时取消后重新开始。'
+            : '将读取 0%～${(boundary * 100).round()}% 内 ${chapters.length} 个已完整读完的章节，不读取后文。预计输入约 $estimatedTokens Token。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('确认并生成')),
+        ],
+      ),
+    );
+    if (confirmed != true || chapters.isEmpty || !mounted) return;
+    final sessionId = readingAgentRuntime.state.sessionId;
+    if (sessionId == null) return;
+    SmartDialog.showLoading(msg: '正在生成书籍 Wiki…');
+    try {
+      final inputs = <BookWikiChapter>[];
+      for (final chapter in chapters) {
+        final content = await (epubPlayerKey.currentState
+                ?.chapterContentByHref(chapter.href, maxCharacters: 24000) ??
+            Future.value(''));
+        if (content.trim().isEmpty) continue;
+        inputs.add(BookWikiChapter(
+            href: chapter.href,
+            title: chapter.title,
+            progress: chapter.startProgress,
+            content: content));
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await readingTaskScheduler.submit<int>(
+        ReadingTask(
+            id: 'wiki-${_book.id}-$now',
+            type: 'wiki.book_generate',
+            bookId: _book.id,
+            priority: ReadingTaskPriority.userInitiated,
+            persistence: ReadingTaskPersistence.durable,
+            status: ReadingTaskStatus.queued,
+            payload: {
+              'scope': fullBook ? 'full_book' : 'read_boundary',
+              'safeBoundary': boundary
+            },
+            createdAt: now,
+            updatedAt: now),
+        (execution) => bookWikiGenerationService.generate(
+            bookId: _book.id,
+            chapters: inputs,
+            safeBoundary: boundary,
+            sessionId: sessionId,
+            scope: fullBook
+                ? BookWikiGenerationScope.fullBook
+                : BookWikiGenerationScope.readBoundary,
+            generate: (prompt) => aiGenerateText(
+                [ChatMessage.humanText(prompt)],
+                ref: ref,
+                readingMode: ReadingAiMode.general,
+                task: AiContextTask.fictionBackfill),
+            onProgress: (done, total, href) async {
+              execution.safePoint();
+              await execution.update(
+                  progress: total == 0 ? 1 : done / total,
+                  checkpoint: {
+                    'completedChapters': done,
+                    'lastChapterHref': href
+                  });
+            }),
+      );
+    } finally {
+      SmartDialog.dismiss();
+    }
+  }
+
+  Future<void> _showBookWiki() => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => BookWikiPage(
+            book: _book,
+            visibleProgress: readingAgentRuntime.state.totalProgress,
+            onGenerate: _generateBookWiki,
+            onOpenLocation: (target) async {
+              if (target.startsWith('epubcfi(')) {
+                epubPlayerKey.currentState?.goToCfi(target);
+              } else if (target.isNotEmpty) {
+                epubPlayerKey.currentState?.goToHref(target);
+              }
+            },
+          ),
+        ),
+      );
+
   void _showAgentUndoSnackBar(AgentAction action) {
     if (!mounted) return;
     _lastReadingAgentSnackActionId = action.id;
@@ -2526,6 +2635,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         AgentActionType.difficulty => '阅读难点',
         AgentActionType.memory => 'Markdown 记忆',
         AgentActionType.artifact => '阅读档案',
+        AgentActionType.wiki => '书籍 Wiki',
       };
 
   String _undoResultLabel(UndoResult result) => switch (result) {
@@ -2591,6 +2701,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   ),
                   actions: [
                     if (EnvVar.enableAIFeature) aiButton,
+                    IconButton(
+                      tooltip: '书籍 Wiki',
+                      onPressed: _showBookWiki,
+                      icon: const Icon(Icons.menu_book_outlined),
+                    ),
                     IconButton(
                       tooltip: '本书阅读成果',
                       onPressed: _showReadingOutcomes,

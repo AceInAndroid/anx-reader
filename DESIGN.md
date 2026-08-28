@@ -600,3 +600,43 @@ merge rules; the server only isolates and returns packages.
 - Legacy `themeMode=eInk` and the older `eInkMode` boolean migrate to the E-ink
   device profile. The stored color mode becomes light only when the legacy
   combined value has no independent color preference to recover.
+
+## Book Wiki
+
+### 整理输入与证据
+
+Wiki 与 Story Atlas 的长章节整理统一经过 `ReadingChunker`：先按段落、句末和换行
+切分为有上限的 `ReadingChunk`，每个对象带稳定 ID、内容哈希、原章节字符 offset 和
+pipeline 版本。它只在用户确认生成/更新后创建，不是新的事实表；任务 checkpoint 只
+保存 chunk 元数据，不保存完整正文。
+
+模型返回的 evidence 必须通过 `ReadingEvidenceResolver` 定位到原文。Resolver 支持
+精确子串、空白/全半角标点归一化和有限的引用外壳清理，最终 `textSnapshot` 始终是
+原章节的精确切片，并保留起止 offset。无法安全定位的证据会被跳过，不调用模型补证据，
+也不接受模糊关键词。chunk 范围是重复证据选择和安全边界，不能泄露其他片段内容。
+
+- Book Wiki is a local-first browsing index over persisted Wiki entries,
+  Story Atlas artifacts, Markdown memories, and reading outcomes. It does not
+  replace those sources of truth and opening the Wiki never loads chapter text
+  or invokes a model.
+- The default generation scope is the current device's safe reading boundary.
+  Full-book generation is a separate action with a second confirmation that
+  states chapter count, estimated input, full-book access, and spoiler risk.
+- Each persisted entry has a stable namespaced kind, source references,
+  `visibleFromProgress`, epistemic status, version, and creator. Returning to
+  an earlier position hides later entries. Synchronization must not expand a
+  device's default spoiler visibility.
+- AI generation is chapter-bounded and incremental. A content hash and stable
+  entry ID prevent unchanged chapters from being regenerated. Invalid JSON,
+  unsupported kinds, missing exact evidence, and out-of-bound chapters are
+  rejected without replacing existing usable entries.
+- AI writes, hiding, and local correction use AgentActionService. A user
+  correction increments the entry version, is recorded as a revision, wins
+  synchronization conflicts over generated content, and cannot be silently
+  overwritten by a later generation.
+- The reading toolbar exposes `AI | Wiki | Reading outcomes | Sync`. The book
+  details page exposes a read-only Wiki entrance; generation remains in an
+  active reader where chapter access and the confirmation boundary are known.
+- E-ink uses the same static cards and native navigation with no required
+  animation. New book types register Wiki mappings; Wiki pages do not branch
+  on book genre.

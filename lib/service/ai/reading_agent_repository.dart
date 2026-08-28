@@ -5,6 +5,7 @@ import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/models/reading_note.dart';
+import 'package:anx_reader/models/book_wiki.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
@@ -62,6 +63,78 @@ class ReadingAgentRepository {
         status: status,
         visibleAtProgress: visibleAtProgress,
       );
+
+  Future<BookWiki?> bookWiki(int bookId) => _dao.wiki(bookId);
+  Future<List<BookWikiEntry>> bookWikiEntries(int bookId,
+          {double? visibleAtProgress}) =>
+      _dao.wikiEntries(bookId, visibleAtProgress: visibleAtProgress);
+  Future<List<BookWikiSourceRef>> bookWikiSources(String entryId) =>
+      _dao.wikiSources(entryId);
+
+  Future<AgentMutation<BookWikiEntry>> saveWikiEntry(
+    BookWikiEntry entry, {
+    required String sessionId,
+    BookWiki? wiki,
+    BookWikiRevision? revision,
+  }) async {
+    if (entry.id.isEmpty ||
+        entry.bookId <= 0 ||
+        entry.title.trim().isEmpty ||
+        !BookWikiEntryKinds.supported.contains(entry.kind)) {
+      throw ArgumentError(
+          'Wiki entry requires a supported kind, identity and title');
+    }
+    if (entry.sources.isEmpty && entry.sourceArtifactIds.isEmpty) {
+      throw ArgumentError('Wiki entry requires a traceable source');
+    }
+    final now = _clock();
+    return _dao.write((txn) async {
+      final before = await _wikiSnapshot(txn, entry.id);
+      final currentEntry = before?['entry'];
+      if (currentEntry is Map &&
+          currentEntry['user_corrected'] == 1 &&
+          !entry.userCorrected) {
+        return AgentMutation(
+          value: BookWikiEntry.fromDb(Map<String, dynamic>.from(currentEntry)),
+          action: _action(
+              type: AgentActionType.wiki,
+              targetId: entry.id,
+              bookId: entry.bookId,
+              sessionId: sessionId,
+              before: before,
+              after: before,
+              now: now),
+        );
+      }
+      await txn.insert('tb_book_wiki_entries', entry.toDb(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      await txn.delete('tb_book_wiki_entry_sources',
+          where: 'entry_id = ?', whereArgs: [entry.id]);
+      for (final source in entry.sources) {
+        await txn.insert('tb_book_wiki_entry_sources', source.toDb(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      if (wiki != null) {
+        await txn.insert('tb_book_wikis', wiki.toDb(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      if (revision != null) {
+        await txn.insert('tb_book_wiki_revisions', revision.toDb(),
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      final after = await _wikiSnapshot(txn, entry.id);
+      final action = _action(
+          type: AgentActionType.wiki,
+          targetId: entry.id,
+          bookId: entry.bookId,
+          sessionId: sessionId,
+          before: before,
+          after: after,
+          now: now);
+      await _insertAction(txn, action, now);
+      return AgentMutation(value: entry, action: action);
+    });
+  }
 
   Future<ReadingChapterCheckpoint> upsertCheckpoint(
       ReadingChapterCheckpoint checkpoint) async {
@@ -553,6 +626,8 @@ class ReadingAgentRepository {
       case AgentActionType.artifact:
         return _queryOne(
             txn, 'tb_reading_artifacts', 'id = ?', [action.targetId]);
+      case AgentActionType.wiki:
+        return _wikiSnapshot(txn, action.targetId);
     }
   }
 
@@ -671,7 +746,43 @@ class ReadingAgentRepository {
           await _recomputeArtifactCoverage(txn, action.bookId!);
         }
         return;
+      case AgentActionType.wiki:
+        await txn.delete('tb_book_wiki_entry_sources',
+            where: 'entry_id = ?', whereArgs: [action.targetId]);
+        await txn.delete('tb_book_wiki_entries',
+            where: 'id = ?', whereArgs: [action.targetId]);
+        final snapshot = action.beforeSnapshot;
+        final oldEntry = snapshot?['entry'];
+        if (oldEntry is Map) {
+          await txn.insert(
+              'tb_book_wiki_entries', Map<String, Object?>.from(oldEntry),
+              conflictAlgorithm: ConflictAlgorithm.replace);
+          final oldSources = snapshot?['sources'];
+          if (oldSources is List) {
+            for (final source in oldSources.whereType<Map>()) {
+              await txn.insert('tb_book_wiki_entry_sources',
+                  Map<String, Object?>.from(source),
+                  conflictAlgorithm: ConflictAlgorithm.replace);
+            }
+          }
+        } else if (action.bookId != null) {
+          await _recordSyncDeletion(
+              txn, 'wikiEntry', action.targetId, action.bookId!, syncDeviceId);
+        }
+        return;
     }
+  }
+
+  Future<Map<String, dynamic>?> _wikiSnapshot(
+      Transaction txn, String entryId) async {
+    final entry =
+        await _queryOne(txn, 'tb_book_wiki_entries', 'id = ?', [entryId]);
+    if (entry == null) return null;
+    final sources = await txn.query('tb_book_wiki_entry_sources',
+        where: 'entry_id = ?',
+        whereArgs: [entryId],
+        orderBy: 'source_progress');
+    return {'entry': entry, 'sources': sources};
   }
 
   Future<void> _recordSyncDeletion(Transaction txn, String entityType,

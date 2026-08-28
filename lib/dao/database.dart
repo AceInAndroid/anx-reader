@@ -16,7 +16,7 @@ import 'package:crypto/crypto.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 // Current app database version
-const int currentDbVersion = 21;
+const int currentDbVersion = 22;
 
 String _canonicalHash(Object? value) => sha256
     .convert(utf8.encode(jsonEncode(_canonicalDatabaseValue(value))))
@@ -578,6 +578,39 @@ CREATE INDEX IF NOT EXISTS idx_reading_tasks_book_updated
 ON tb_reading_tasks(book_id, updated_at DESC)
 ''';
 
+const createBookWikiSQL = '''
+CREATE TABLE IF NOT EXISTS tb_book_wikis (
+  book_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 1,
+  generation_scope TEXT NOT NULL DEFAULT 'read_boundary',
+  safe_knowledge_boundary REAL NOT NULL DEFAULT 0,
+  coverage_start REAL NOT NULL DEFAULT 0, coverage_end REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'empty', last_generated_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tb_book_wiki_entries (
+  id TEXT PRIMARY KEY, book_id INTEGER NOT NULL, kind TEXT NOT NULL,
+  title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+  content_markdown TEXT NOT NULL DEFAULT '', parent_id TEXT, sort_key TEXT NOT NULL DEFAULT '',
+  source_artifact_ids_json TEXT NOT NULL DEFAULT '[]', visible_from_progress REAL NOT NULL DEFAULT 0,
+  epistemic_status TEXT NOT NULL DEFAULT 'agentInference', created_by TEXT NOT NULL DEFAULT 'agent',
+  version INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'active', user_corrected INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_book_wiki_entries_book ON tb_book_wiki_entries(book_id, status, visible_from_progress, sort_key);
+CREATE TABLE IF NOT EXISTS tb_book_wiki_entry_sources (
+  id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, book_id INTEGER NOT NULL, artifact_id TEXT,
+  chapter_href TEXT, chapter_title TEXT, cfi TEXT, text_snapshot TEXT NOT NULL DEFAULT '',
+  source_progress REAL NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_book_wiki_sources_entry ON tb_book_wiki_entry_sources(entry_id, source_progress);
+CREATE TABLE IF NOT EXISTS tb_book_wiki_revisions (
+  id TEXT PRIMARY KEY, entry_id TEXT NOT NULL, book_id INTEGER NOT NULL, base_version INTEGER NOT NULL,
+  revision_kind TEXT NOT NULL, correction TEXT NOT NULL DEFAULT '', before_snapshot TEXT NOT NULL DEFAULT '{}',
+  after_snapshot TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_book_wiki_revisions_entry ON tb_book_wiki_revisions(entry_id, created_at DESC)
+''';
+
 class DBHelper {
   static final DBHelper _instance = DBHelper._internal();
   static Database? _database;
@@ -895,7 +928,7 @@ class DBHelper {
           SELECT DISTINCT group_id 
           FROM tb_books 
           WHERE group_id IS NOT NULL AND group_id != 0
-        ''');
+''');
 
         // Create groups for existing group_ids
         for (var i = 0; i < uniqueGroups.length; i++) {
@@ -1038,6 +1071,13 @@ class DBHelper {
         for (final statement in createReadingTasksSQL.split(';')) {
           if (statement.trim().isNotEmpty) await db.execute(statement);
         }
+        continue case21Migration;
+      case21Migration:
+      case 21:
+        await _migrateWikiActionType(db);
+        for (final statement in createBookWikiSQL.split(';')) {
+          if (statement.trim().isNotEmpty) await db.execute(statement);
+        }
     }
 
     if (oldVersion != 0 && Prefs().webdavStatus) {
@@ -1056,6 +1096,33 @@ class DBHelper {
     if (!exists) {
       await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
     }
+  }
+
+  Future<void> _migrateWikiActionType(Database db) async {
+    final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tb_agent_actions'");
+    if (tables.isNotEmpty) {
+      await db.execute(
+          'ALTER TABLE tb_agent_actions RENAME TO tb_agent_actions_v21');
+    }
+    await db.execute('''CREATE TABLE tb_agent_actions (
+      id TEXT PRIMARY KEY, action_type TEXT NOT NULL, target_id TEXT NOT NULL,
+      book_id INTEGER, before_snapshot TEXT, after_snapshot TEXT,
+      after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
+      session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL, undone_at INTEGER,
+      CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory', 'artifact', 'wiki')),
+      CHECK(status IN ('applied', 'undone', 'conflict'))
+    )''');
+    if (tables.isNotEmpty) {
+      await db.execute(
+          'INSERT INTO tb_agent_actions SELECT * FROM tb_agent_actions_v21');
+      await db.execute('DROP TABLE tb_agent_actions_v21');
+    }
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_agent_actions_recent ON tb_agent_actions(created_at DESC)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_agent_actions_target ON tb_agent_actions(action_type, target_id, created_at DESC)');
   }
 
   Future<void> _migrateArtifactActionSnapshots(Database db) async {

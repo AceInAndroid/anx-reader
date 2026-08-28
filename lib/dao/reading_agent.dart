@@ -1,5 +1,6 @@
 import 'package:anx_reader/dao/base_dao.dart';
 import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/models/book_wiki.dart';
 import 'package:sqflite/sqflite.dart';
 
 class ReadingAgentDao extends BaseDao {
@@ -192,6 +193,31 @@ class ReadingAgentDao extends BaseDao {
 
   Future<R> write<R>(Future<R> Function(Transaction txn) operation) =>
       transaction(operation);
+
+  Future<BookWiki?> wiki(int bookId) => querySingle('tb_book_wikis',
+      mapper: BookWiki.fromDb, where: 'book_id = ?', whereArgs: [bookId]);
+
+  Future<List<BookWikiEntry>> wikiEntries(int bookId,
+      {double? visibleAtProgress}) {
+    final where = <String>['book_id = ?', "status = 'active'"];
+    final args = <Object?>[bookId];
+    if (visibleAtProgress != null) {
+      where.add('visible_from_progress <= ?');
+      args.add(visibleAtProgress);
+    }
+    return queryList('tb_book_wiki_entries',
+        mapper: BookWikiEntry.fromDb,
+        where: where.join(' AND '),
+        whereArgs: args,
+        orderBy: 'sort_key, updated_at');
+  }
+
+  Future<List<BookWikiSourceRef>> wikiSources(String entryId) =>
+      queryList('tb_book_wiki_entry_sources',
+          mapper: BookWikiSourceRef.fromDb,
+          where: 'entry_id = ?',
+          whereArgs: [entryId],
+          orderBy: 'source_progress');
 }
 
 final readingAgentDao = ReadingAgentDao();

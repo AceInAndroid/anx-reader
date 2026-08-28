@@ -98,7 +98,7 @@ void main() {
 
     await helper.onUpgradeDatabase(db, 9, currentDbVersion);
 
-    expect(currentDbVersion, 21);
+    expect(currentDbVersion, 22);
     final columns = await db.rawQuery('PRAGMA table_info(tb_ai_sessions)');
     expect(
       columns.map((row) => row['name']).toSet(),
@@ -452,5 +452,41 @@ void main() {
         'progress',
       }),
     );
+  });
+
+  test('version 22 creates Wiki tables and enables Wiki actions', () async {
+    final db = await openTempDb('book_wiki_v22.db');
+    addTearDown(db.close);
+    for (final statement in createReadingAgentSQL.split(';')) {
+      if (statement.trim().isNotEmpty) await db.execute(statement);
+    }
+    for (final statement in createReadingClosureSQL.split(';')) {
+      if (statement.trim().isNotEmpty) await db.execute(statement);
+    }
+    for (final statement in createReadingExperienceModulesSQL.split(';')) {
+      if (statement.trim().isNotEmpty) await db.execute(statement);
+    }
+    await helper.onUpgradeDatabase(db, 21, 22);
+    final tables = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'tb_book_wiki%'");
+    expect(
+        tables.map((row) => row['name']).toSet(),
+        containsAll({
+          'tb_book_wikis',
+          'tb_book_wiki_entries',
+          'tb_book_wiki_entry_sources',
+          'tb_book_wiki_revisions'
+        }));
+    await db.insert('tb_agent_actions', {
+      'id': 'wiki-action',
+      'action_type': 'wiki',
+      'target_id': 'entry',
+      'book_id': 1,
+      'after_hash': 'hash',
+      'session_id': 'session',
+      'created_at': 1,
+      'expires_at': 2,
+    });
+    expect(await db.query('tb_agent_actions'), hasLength(1));
   });
 }

@@ -6,6 +6,7 @@ import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/ai_extraction_engine.dart';
 import 'package:anx_reader/service/ai/ai_token_usage_service.dart';
 import 'package:anx_reader/service/ai/index.dart';
+import 'package:anx_reader/service/ai/reading_evidence_resolver.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:langchain_core/chat_models.dart';
@@ -395,19 +396,11 @@ class FictionCandidateRuleValidator {
   }
 
   bool _evidenceMatches(String content, String evidence) {
-    if (content.contains(evidence)) return true;
-    String normalize(String value) => value
-        .replaceAll(RegExp(r'\s+'), '')
-        .replaceAll('“', '"')
-        .replaceAll('”', '"')
-        .replaceAll('‘', "'")
-        .replaceAll('’', "'")
-        .replaceAll('：', ':')
-        .replaceAll('，', ',')
-        .replaceAll('。', '.')
-        .replaceAll('！', '!')
-        .replaceAll('？', '?');
-    return normalize(content).contains(normalize(evidence));
+    return readingEvidenceResolver.resolve(
+          sourceText: content,
+          evidence: evidence,
+        ) !=
+        null;
   }
 
   bool _looksLikeBackgroundReference(String evidence) => const [

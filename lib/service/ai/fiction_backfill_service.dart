@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_hybrid_extraction_service.dart';
+import 'package:anx_reader/service/ai/reading_chunker.dart';
+import 'package:anx_reader/service/ai/reading_evidence_resolver.dart';
 import 'package:crypto/crypto.dart';
 
 class FictionBackfillChapter {
@@ -76,7 +78,9 @@ class _BackfillBatchAttempt {
 class FictionBackfillService {
   const FictionBackfillService();
 
-  static const extractorVersion = 6;
+  static const extractorVersion = 7;
+  static const _chunker = ReadingChunker();
+  static const _evidenceResolver = ReadingEvidenceResolver();
 
   Future<List<ReadingArtifact>> build({
     required int bookId,
@@ -263,11 +267,18 @@ class FictionBackfillService {
         batch.single.content.length > maxSegmentCharacters) {
       final original = batch.single;
       final artifacts = <ReadingArtifact>[];
-      for (final content
-          in _splitChapter(original.content, maxSegmentCharacters)) {
+      final chunks = _chunker.split(
+        bookId: bookId,
+        chapterHref: original.chapter.href,
+        chapterTitle: original.chapter.title,
+        content: original.content,
+        sourceProgress: original.chapter.startProgress,
+        maxCharacters: maxSegmentCharacters,
+      );
+      for (final chunk in chunks) {
         final fragment = (
           chapter: original.chapter,
-          content: content,
+          content: chunk.content,
           hash: original.hash,
         );
         final results = await _processBatchWithFallback(
@@ -417,6 +428,15 @@ class FictionBackfillService {
           Map<String, dynamic>.from(payload),
         );
         if (!_isValid(kind, normalizedPayload)) continue;
+        final evidence = normalizedPayload['evidence']?.toString() ?? '';
+        if (evidence.isNotEmpty) {
+          final resolvedEvidence = _evidenceResolver.resolve(
+            sourceText: chapter.content,
+            evidence: evidence,
+          );
+          if (resolvedEvidence == null) continue;
+          normalizedPayload['evidence'] = resolvedEvidence.exactText;
+        }
         if (validateCandidate != null) {
           final validated = await validateCandidate(
             kind: kind,
@@ -533,23 +553,6 @@ class FictionBackfillService {
     }
     if (current.isNotEmpty) result.add(current);
     return result;
-  }
-
-  List<String> _splitChapter(String content, int maxCharacters) {
-    final chunks = <String>[];
-    var start = 0;
-    while (start < content.length) {
-      var end = (start + maxCharacters).clamp(0, content.length);
-      if (end < content.length) {
-        final searchStart = (end - 1200).clamp(start, end);
-        final boundary = content.lastIndexOf(RegExp(r'[\n。！？]'), end - 1);
-        if (boundary >= searchStart) end = boundary + 1;
-      }
-      if (end <= start) end = (start + maxCharacters).clamp(0, content.length);
-      chunks.add(content.substring(start, end).trim());
-      start = end;
-    }
-    return chunks.where((chunk) => chunk.isNotEmpty).toList(growable: false);
   }
 
   List<_PreparedChapter> _bisectChapter(_PreparedChapter item) {

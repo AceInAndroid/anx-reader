@@ -5,6 +5,7 @@ import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/page/reading_agent_help_page.dart';
 import 'package:anx_reader/page/fiction_character_graph_page.dart';
 import 'package:anx_reader/page/fiction_story_timeline_page.dart';
+import 'package:anx_reader/page/book_wiki_page.dart';
 import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
@@ -233,6 +234,20 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
         children: [
           _OutcomeHero(book: widget.book, state: state, closure: closure),
           const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.menu_book_outlined),
+              title: const Text('书籍 Wiki'),
+              subtitle: const Text('把阅读成果、概念、人物和来源组织成可浏览百科'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => BookWikiPage(
+                    book: widget.book,
+                    visibleProgress: widget.book.readingPercentage),
+              )),
+            ),
+          ),
+          const SizedBox(height: 8),
           Card(
             elevation: 0,
             child: ListTile(

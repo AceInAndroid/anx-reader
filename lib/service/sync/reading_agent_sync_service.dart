@@ -23,10 +23,15 @@ class ReadingAgentSyncService {
     'tb_reading_memory_documents',
     'tb_reading_artifacts',
     'tb_reading_difficulties',
+    'tb_book_wikis',
+    'tb_book_wiki_entries',
+    'tb_book_wiki_entry_sources',
+    'tb_book_wiki_revisions',
     'tb_reading_sync_tombstones',
   ];
 
   static const _idColumns = <String, String>{
+    'tb_book_wikis': 'book_id',
     'tb_reading_goals': 'id',
     'tb_reading_checkpoints': 'id',
     'tb_reading_mastery': 'id',
@@ -34,6 +39,9 @@ class ReadingAgentSyncService {
     'tb_reading_memory_documents': 'id',
     'tb_reading_artifacts': 'id',
     'tb_reading_difficulties': 'id',
+    'tb_book_wiki_entries': 'id',
+    'tb_book_wiki_entry_sources': 'id',
+    'tb_book_wiki_revisions': 'id',
   };
 
   static const _entityTables = <String, String>{
@@ -44,6 +52,9 @@ class ReadingAgentSyncService {
     'memory': 'tb_reading_memory_documents',
     'artifact': 'tb_reading_artifacts',
     'difficulty': 'tb_reading_difficulties',
+    'wikiEntry': 'tb_book_wiki_entries',
+    'wikiSource': 'tb_book_wiki_entry_sources',
+    'wikiRevision': 'tb_book_wiki_revisions',
   };
 
   Future<List<ReadingAgentBookDelta>> capture({Database? database}) async {
@@ -164,6 +175,12 @@ class ReadingAgentSyncService {
           await _mergeGoal(txn, row);
         } else if (table == 'tb_reading_checkpoints') {
           await _mergeCheckpoint(txn, row);
+        } else if (table == 'tb_book_wiki_entries') {
+          await _mergeWikiEntry(txn, row);
+        } else if (table == 'tb_book_wiki_entry_sources' ||
+            table == 'tb_book_wiki_revisions') {
+          await txn.insert(table, row,
+              conflictAlgorithm: ConflictAlgorithm.ignore);
         } else {
           await _mergeLww(txn, table, row);
         }
@@ -374,6 +391,29 @@ class ReadingAgentSyncService {
         await txn.insert(table, incoming,
             conflictAlgorithm: ConflictAlgorithm.replace);
       }
+    }
+  }
+
+  Future<void> _mergeWikiEntry(
+      Transaction txn, Map<String, dynamic> incoming) async {
+    final rows = await txn.query('tb_book_wiki_entries',
+        where: 'id = ?', whereArgs: [incoming['id']], limit: 1);
+    if (rows.isEmpty) {
+      await txn.insert('tb_book_wiki_entries', incoming);
+      return;
+    }
+    final current = rows.first;
+    final incomingCorrected = _asInt(incoming['user_corrected']) == 1;
+    final currentCorrected = _asInt(current['user_corrected']) == 1;
+    final shouldReplace = incomingCorrected && !currentCorrected ||
+        incomingCorrected == currentCorrected &&
+            (_asInt(incoming['version']) > _asInt(current['version']) ||
+                _asInt(incoming['version']) == _asInt(current['version']) &&
+                    _asInt(incoming['updated_at']) >
+                        _asInt(current['updated_at']));
+    if (shouldReplace) {
+      await txn.insert('tb_book_wiki_entries', incoming,
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
 

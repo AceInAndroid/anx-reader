@@ -11,6 +11,7 @@ import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_time.dart';
 import 'package:anx_reader/models/tag.dart';
 import 'package:anx_reader/page/reading_outcomes_page.dart';
+import 'package:anx_reader/page/book_wiki_page.dart';
 import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/providers/book_list.dart';
 import 'package:anx_reader/providers/tags.dart';
@@ -536,6 +537,27 @@ class _BookDetailState extends ConsumerState<BookDetail> {
       );
     }
 
+    Widget buildBookWikiEntry() {
+      return FilledContainer(
+        width: MediaQuery.of(context).size.width,
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(12),
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.menu_book_outlined,
+              color: Theme.of(context).colorScheme.primary),
+          title: const Text('书籍 Wiki'),
+          subtitle: const Text('概念、方法、人物、事件与来源统一浏览'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => BookWikiPage(book: _book),
+              )),
+        ),
+      );
+    }
+
     Widget buildTagEditor() {
       return FilledContainer(
         width: MediaQuery.of(context).size.width,
@@ -879,6 +901,7 @@ class _BookDetailState extends ConsumerState<BookDetail> {
                                     const SizedBox(height: 5),
                                     buildBookStatistics(),
                                     buildReadingOutcomesEntry(),
+                                    buildBookWikiEntry(),
                                   ],
                                 ),
                               ),
@@ -902,6 +925,7 @@ class _BookDetailState extends ConsumerState<BookDetail> {
                               const SizedBox(height: 5),
                               buildBookStatistics(),
                               buildReadingOutcomesEntry(),
+                              buildBookWikiEntry(),
                               const SizedBox(height: 15),
                               buildMoreDetail(),
                             ],

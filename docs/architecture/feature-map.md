@@ -61,6 +61,8 @@ namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在�
 | Token 用量 | 已实现 | 设置 > AI | `ai_token_usage_service.dart` | 本机诊断计数 | 不把估算值当服务端精确值 |
 | 轻量提取/摘要引擎 | 已实现 | 设置 > AI > 轻量提取与摘要引擎 | `ai_extraction_engine.dart`、`fiction_hybrid_extraction_service.dart` | Provider 角色设备本地；Artifact 正常同步 | 定位为本地候选提取器 + 证据筛选器；不在失败时静默上传整章 |
 | 阅读成果页 | 已实现 | 阅读页 > 本书阅读成果 | `reading_outcomes_page.dart` | 读取闭环/Atlas/记忆 | 不在成果页自动整理 |
+| 书籍 Wiki | 已实现（一期） | 阅读页 AI 旁、书籍详情 | `book_wiki_page.dart`、`book_wiki_service.dart` | `tb_book_wikis`/entries/sources/revisions，进入 Agent 增量同步 | 打开页面不扫描正文；详情页不启动隐藏阅读器 |
+| 阅读分块与证据解析 | 已实现 | 用户确认的 Wiki/Story Atlas 整理任务 | `reading_chunker.dart`、`reading_evidence_resolver.dart` | ReadingChunk 为任务中间产物；证据回到原文 offset | 不持久化完整 chunk；普通阅读不触发 |
 
 ## 3. AI 底座与上下文
 
@@ -235,6 +237,7 @@ E-INK 有效覆盖：浅色高对比、无翻页动画、无背景图、无代�
 - CloudBase 服务端管理员控制台、邀请制和跨设备撤销保证。
 - 自动扫描未读后文、以全局最远设备进度替代当前设备整理上限。
 - 页面直接编辑 AI 产物而不经过动作日志/来源校验。
+- Wiki 整页自由编辑；一期仅支持隐藏与带版本的局部纠正。
 
 ## 11. 扩展契约（新增类型/书类时）
 

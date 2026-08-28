@@ -6,7 +6,7 @@ enum ReaderProfileStatus { candidate, confirmed, rejected }
 
 enum AgentActionStatus { applied, undone, conflict }
 
-enum AgentActionType { goal, profile, note, difficulty, memory, artifact }
+enum AgentActionType { goal, profile, note, difficulty, memory, artifact, wiki }
 
 enum ReadingCheckpointStatus { pending, completed, skipped }
 
