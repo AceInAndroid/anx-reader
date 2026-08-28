@@ -65,6 +65,72 @@ void main() {
     );
   });
 
+  test('keeps intelligent nonhuman characters but rejects sci-fi concepts', () {
+    final intelligentCharacter = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.character,
+      {
+        'name': '智子观察员',
+        'entityType': 'intelligent_nonhuman',
+        'evidence': '智子观察员第一次回答了问题',
+      },
+    );
+    expect(
+      validator
+          .validate(
+            kind: ReadingArtifactKinds.character,
+            payload: intelligentCharacter,
+            chapterContent: '智子观察员第一次回答了问题。',
+          )
+          .status,
+      FictionCandidateRuleStatus.accepted,
+    );
+
+    for (final type in ['organization', 'concept', 'technology', 'species']) {
+      final concept = FictionCandidateRuleValidator.normalizePayload(
+        ReadingArtifactKinds.character,
+        {
+          'name': '科幻实体',
+          'entityType': type,
+          'evidence': '科幻实体改变了整个世界',
+        },
+      );
+      expect(
+        validator
+            .validate(
+              kind: ReadingArtifactKinds.character,
+              payload: concept,
+              chapterContent: '科幻实体改变了整个世界。',
+            )
+            .status,
+        FictionCandidateRuleStatus.rejected,
+      );
+    }
+  });
+
+  test('rejects a relationship whose endpoint is an organization', () {
+    final payload = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.relationship,
+      {
+        'from': '汪淼',
+        'to': '某组织',
+        'fromEntityType': 'person',
+        'toEntityType': 'organization',
+        'relation': '盟友',
+        'evidence': '汪淼与某组织成为盟友',
+      },
+    );
+    expect(
+      validator
+          .validate(
+            kind: ReadingArtifactKinds.relationship,
+            payload: payload,
+            chapterContent: '汪淼与某组织成为盟友。',
+          )
+          .status,
+      FictionCandidateRuleStatus.rejected,
+    );
+  });
+
   test('preserves numeric surnames and explicit durable relations', () {
     final verdict = validator.validate(
       kind: ReadingArtifactKinds.relationship,
@@ -167,11 +233,36 @@ void main() {
     expect(event['track'], FictionEventTrackIds.caseInvestigation);
     expect(event['stage'], FictionEventStageIds.revelation);
 
+    final scienceFiction = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.event,
+      {'title': '物理规律异常', 'summary': '科学实验结果发生变化'},
+    );
+    expect(scienceFiction['track'], FictionEventTrackIds.worldbuilding);
+
     final unknown = FictionCandidateRuleValidator.normalizePayload(
       ReadingArtifactKinds.event,
       {'eventType': '其他', 'track': '模型自创轨道', 'stage': '模型自创阶段'},
     );
     expect(unknown['track'], FictionEventTrackIds.general);
     expect(unknown['stage'], FictionEventStageIds.other);
+
+    final compatible = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.event,
+      {
+        'eventType': '发展',
+        'track': 'story.main',
+        'stage': 'stage.rising_action',
+      },
+    );
+    expect(compatible['track'], FictionEventTrackIds.general);
+    expect(compatible['stage'], FictionEventStageIds.development);
+  });
+
+  test('normalizes romantic relationship to a stable taxonomy id', () {
+    final relationship = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.relationship,
+      {'from': '甲某', 'to': '乙某', 'relation': '恋人'},
+    );
+    expect(relationship['relationType'], FictionRelationTypeIds.romantic);
   });
 }

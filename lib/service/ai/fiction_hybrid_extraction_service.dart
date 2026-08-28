@@ -84,6 +84,27 @@ class FictionHybridExtractionService {
     );
   }
 
+  /// Deterministic-only validation for the regular cloud model path. Cloud
+  /// generation may be used when no local extractor is configured, but its
+  /// candidates must still prove an exact source substring before persistence.
+  Future<Map<String, dynamic>?> validateDirect({
+    required String kind,
+    required Map<String, dynamic> payload,
+    required String chapterContent,
+  }) async {
+    final normalized = FictionCandidateRuleValidator.normalizePayload(
+      kind,
+      payload,
+    );
+    final verdict = const FictionCandidateRuleValidator().validate(
+      kind: kind,
+      payload: normalized,
+      chapterContent: chapterContent,
+    );
+    if (verdict.status != FictionCandidateRuleStatus.accepted) return null;
+    return verdict.payload;
+  }
+
   Future<Map<String, dynamic>?> _verifyAmbiguous(
     Map<String, dynamic> payload,
     String evidence,
@@ -176,6 +197,9 @@ class FictionCandidateRuleValidator {
     }
 
     if (kind == ReadingArtifactKinds.character) {
+      result['entityType'] = FictionEntityTypeIds.normalize(
+        result['entityType'],
+      );
       final name = normalizePerson(result['name']);
       final aliases = (result['aliases'] as List?)
               ?.map((e) => e.toString().trim())
@@ -215,6 +239,14 @@ class FictionCandidateRuleValidator {
       result['relationType'] = FictionRelationTypeIds.normalize(
         result['relationType'] ?? _relationTypeFor(relation),
       );
+      if (result['fromEntityType'] != null) {
+        result['fromEntityType'] =
+            FictionEntityTypeIds.normalize(result['fromEntityType']);
+      }
+      if (result['toEntityType'] != null) {
+        result['toEntityType'] =
+            FictionEntityTypeIds.normalize(result['toEntityType']);
+      }
     } else if (kind == ReadingArtifactKinds.event) {
       final type = result['eventType']?.toString().trim() ?? '';
       if ((result['title']?.toString().trim().isEmpty ?? true) &&
@@ -225,10 +257,13 @@ class FictionCandidateRuleValidator {
       if (participants is List) {
         result['participants'] = participants.map(normalizePerson).toList();
       }
-      result['track'] = result['track'] == null && type != '转折'
-          ? FictionEventTrackIds.caseInvestigation
-          : FictionEventTrackIds.normalize(
-              result['track'] ?? FictionEventTrackIds.character);
+      final inferredTrack = RegExp(r'宇宙|文明|技术|科学|星际|外星|行星|物理规律')
+              .hasMatch('${result['title']} ${result['summary']} $type')
+          ? FictionEventTrackIds.worldbuilding
+          : FictionEventTrackIds.caseInvestigation;
+      result['track'] = FictionEventTrackIds.normalize(
+        result['track'] ?? inferredTrack,
+      );
       result['stage'] = _normalizeStage(result['stage'], type);
     }
     return result;
@@ -252,6 +287,9 @@ class FictionCandidateRuleValidator {
     if (relation.contains('战友')) return FictionRelationTypeIds.comrade;
     if (RegExp(r'夫妻|婚|丈夫|妻子|配偶').hasMatch(relation)) {
       return FictionRelationTypeIds.spouse;
+    }
+    if (RegExp(r'恋人|恋爱|情侣').hasMatch(relation)) {
+      return FictionRelationTypeIds.romantic;
     }
     if (RegExp(r'父|母|子|女').hasMatch(relation)) {
       return FictionRelationTypeIds.parentChild;
@@ -298,6 +336,8 @@ class FictionCandidateRuleValidator {
     }
     if (kind == ReadingArtifactKinds.character) {
       final name = payload['name']?.toString().trim() ?? '';
+      final entityType = FictionEntityTypeIds.normalize(payload['entityType']);
+      if (!_characterEntityTypes.contains(entityType)) return reject();
       if ((name != '叙述者' && _isGenericPerson(name)) || name.length < 2) {
         return reject();
       }
@@ -317,6 +357,18 @@ class FictionCandidateRuleValidator {
     final relation = payload['relation']?.toString().trim() ?? '';
     final from = payload['from']?.toString().trim() ?? '';
     final to = payload['to']?.toString().trim() ?? '';
+    final fromType = payload['fromEntityType'];
+    final toType = payload['toEntityType'];
+    if ((fromType != null &&
+            !_characterEntityTypes.contains(
+              FictionEntityTypeIds.normalize(fromType),
+            )) ||
+        (toType != null &&
+            !_characterEntityTypes.contains(
+              FictionEntityTypeIds.normalize(toType),
+            ))) {
+      return reject();
+    }
     if ((from != '叙述者' && _isGenericPerson(from)) ||
         (to != '叙述者' && _isGenericPerson(to)) ||
         _invalidRelationLabels.contains(relation)) {
@@ -411,6 +463,10 @@ class FictionCandidateRuleValidator {
     '无明确关系',
     '关系不明',
   };
+  static const _characterEntityTypes = {
+    FictionEntityTypeIds.person,
+    FictionEntityTypeIds.intelligentNonhuman,
+  };
 
   bool _isGenericPerson(String value) {
     if (_genericNames.contains(value)) return true;
@@ -430,6 +486,9 @@ class FictionCandidateRuleValidator {
     '祖',
     '孙',
     '夫妻',
+    '恋人',
+    '恋爱',
+    '情侣',
     '婚',
     '亲属',
     '同宗',
@@ -468,6 +527,9 @@ class FictionCandidateRuleValidator {
     '祖父',
     '孙儿',
     '夫妻',
+    '恋人',
+    '恋爱',
+    '情侣',
     '妻子',
     '丈夫',
     '同宗',

@@ -33,6 +33,7 @@ void main() {
     expect(ReadingStructureParser.isNonStoryTitle('前言'), isTrue);
     expect(ReadingStructureParser.isNonStoryTitle('作者简介'), isTrue);
     expect(ReadingStructureParser.isNonStoryTitle('第一章'), isFalse);
+    expect(ReadingStructureParser.isNonStoryTitle('序章'), isFalse);
   });
 
   test('scopes chapters to independent works inside a collection EPUB', () {
@@ -74,5 +75,50 @@ void main() {
     // Ordinary chapters inside a work are scenes, not fake case boundaries.
     expect(structure.units[1].arcId, isNull);
     expect(structure.units[4].arcId, isNull);
+  });
+
+  test('separates roman-numbered science-fiction volumes with sparse toc', () {
+    final structure = parser.parse(const [
+      ReadingStructureChapter(
+        href: 'Text/part0003.xhtml',
+        title: '三体I',
+      ),
+      ReadingStructureChapter(
+        href: 'Text/part0004.xhtml',
+        title: '科学边界',
+      ),
+      ReadingStructureChapter(
+        href: 'Text/part0044.xhtml',
+        title: '三体II·黑暗森林',
+      ),
+      ReadingStructureChapter(
+        href: 'Text/part0045.xhtml',
+        title: '序章',
+      ),
+      ReadingStructureChapter(
+        href: 'Text/part0046.xhtml',
+        title: '上部 面壁者',
+      ),
+      ReadingStructureChapter(
+        href: 'Text/part0051.xhtml',
+        title: '三体III·死神永生',
+      ),
+      ReadingStructureChapter(
+        href: 'Text/part0052.xhtml',
+        title: '第一部 公元1453年5月，魔法师之死',
+      ),
+    ]);
+
+    final firstWork = structure.units[0].workId;
+    final secondWork = structure.units[2].workId;
+    final thirdWork = structure.units[5].workId;
+    expect(firstWork, isNotNull);
+    expect(structure.units[1].workId, firstWork);
+    expect(secondWork, isNot(firstWork));
+    expect(structure.units[3].workId, secondWork);
+    expect(structure.units[4].volumeId, 'volume-1');
+    expect(thirdWork, isNot(secondWork));
+    expect(structure.units[6].workId, thirdWork);
+    expect(structure.units[6].volumeId, 'volume-1');
   });
 }

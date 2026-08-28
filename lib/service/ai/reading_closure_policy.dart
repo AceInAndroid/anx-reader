@@ -508,6 +508,12 @@ class ReadingClosurePolicyMatcher {
       if (RegExp(r'家族|家庭|亲情|现实主义|family|realist').hasMatch(text)) ...{
         ReadingProfileFacetIds.timelineFamilyDefault,
       },
+      if (RegExp(r'科幻|宇宙|星际|外星|未来|机器人|人工智能|science fiction|sci-fi|space opera')
+          .hasMatch(text)) ...{
+        ReadingProfileFacetIds.scienceFiction,
+        ReadingProfileFacetIds.entitiesWorldbuilding,
+        ReadingProfileFacetIds.timelineWorldbuildingDefault,
+      },
       if (RegExp(r'外语|英语|日语|法语|english|japanese|french').hasMatch(text))
         'foreign_language',
       if (RegExp(r'投资|金融|财务|估值|finance|invest').hasMatch(text)) 'finance',

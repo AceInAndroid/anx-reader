@@ -497,6 +497,29 @@ merge rules; the server only isolates and returns packages.
 
 ## Hybrid extraction and internal summary engine
 
+### Science-fiction and sparse-TOC fiction
+
+- Science-fiction remains inside the fiction immersion closure. Its profile
+  adds stable `fiction.science_fiction`, `entities.worldbuilding`, and
+  `timeline.default.worldbuilding` facets, so the default timeline is
+  `story.worldbuilding` without adding a science-fiction page branch.
+- Collection EPUBs may expose only volume titles in NCX while keeping real
+  chapters in spine documents. Only after the reader explicitly confirms
+  story-archive organization may the reader request a local spine manifest of
+  href, heading, progress, and text length. The manifest contains no body text,
+  does not invoke a model, and is never built from page-turn events or merely
+  opening outcomes. Roman-numbered series entries form independent works.
+- Extraction distinguishes stable `entity.*` types. People and intelligent
+  non-human actors with durable identities may enter the character archive;
+  civilizations, organizations, species, technologies, places, and concepts
+  must not become person nodes or relationship endpoints. Their effects belong
+  on the worldbuilding event track. Every accepted cloud or local candidate
+  still requires a bounded verbatim source quote.
+- A chapter prompt caps output candidates to four characters, two durable
+  relationships, and four meaningful events. This prevents worldbuilding-heavy
+  chapters from turning every technical noun into a node or exhausting the
+  structured-output budget.
+
 - The lightweight extraction engine is a device-local AI role selected from
   the existing Provider registry. It is disabled by default. Custom
   OpenAI-compatible providers may explicitly use no authentication for a

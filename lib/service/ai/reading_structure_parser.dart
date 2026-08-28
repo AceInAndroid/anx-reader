@@ -5,6 +5,14 @@ class ReadingStructureParser {
   const ReadingStructureParser();
 
   ReadingStructure parse(Iterable<ReadingStructureChapter> chapters) {
+    final input = chapters.toList(growable: false);
+    final seriesCounts = <String, int>{};
+    for (final chapter in input) {
+      final base = _seriesWorkBase(chapter.title.trim());
+      if (base != null && chapter.tocDepth == 0) {
+        seriesCounts.update(base, (value) => value + 1, ifAbsent: () => 1);
+      }
+    }
     final result = <ReadingStructureUnit>[];
     String? workId;
     String? workTitle;
@@ -12,12 +20,14 @@ class ReadingStructureParser {
     String? arcId;
     var volumeIndex = 0;
     var arcIndex = 0;
-    for (final chapter in chapters) {
+    for (final chapter in input) {
       final title = chapter.title.trim();
-      final startsWork = chapter.hasChildren &&
-          chapter.tocDepth == 0 &&
+      final seriesBase = _seriesWorkBase(title);
+      final startsWork = chapter.tocDepth == 0 &&
           !isNonStoryTitle(title) &&
-          !_volumePattern.hasMatch(title);
+          !_volumePattern.hasMatch(title) &&
+          (chapter.hasChildren ||
+              (seriesBase != null && (seriesCounts[seriesBase] ?? 0) >= 2));
       if (startsWork) {
         workId = 'work-${_stableHrefToken(chapter.href)}';
         workTitle = title;
@@ -56,7 +66,7 @@ class ReadingStructureParser {
   }
 
   static final _volumePattern = RegExp(
-    r'(?:第\s*[一二三四五六七八九十百\d]+\s*[册卷部篇]|(?:卷|册|部)\s*[一二三四五六七八九十\d]+|[（(]\s*[一二三四五六七八九十\d]+\s*[）)])',
+    r'(?:第\s*[一二三四五六七八九十百\d]+\s*[册卷部篇]|(?:卷|册|部)\s*[一二三四五六七八九十\d]+|(?:上|中|下)部|[（(]\s*[一二三四五六七八九十\d]+\s*[）)])',
     caseSensitive: false,
   );
   static final _casePattern = RegExp(
@@ -68,18 +78,33 @@ class ReadingStructureParser {
     caseSensitive: false,
   );
 
-  static bool isNonStoryTitle(String title) => const {
-        '封面',
-        '版权',
-        '版权信息',
-        '目录',
-        '前言',
-        '序言',
-        '作者简介',
-        '译者序',
-        '编者按',
-        '后记',
-      }.contains(title);
+  static bool isNonStoryTitle(String title) {
+    final normalized = title.replaceAll(RegExp(r'\s+'), '').trim();
+    return const {
+          '封面',
+          '版权',
+          '版权信息',
+          '目录',
+          '前言',
+          '序言',
+          '作者简介',
+          '译者序',
+          '编者按',
+          '后记',
+          'Contents',
+          'contents',
+        }.contains(title) ||
+        {'序言', '前言', '目录'}.contains(normalized);
+  }
+
+  static String? _seriesWorkBase(String title) {
+    final match = RegExp(
+      r'^(.{1,40}?)\s*(?:[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+|I{1,3}|IV|V|VI{0,3}|IX|X)(?:\s*[·:：—-].*)?$',
+      caseSensitive: false,
+    ).firstMatch(title);
+    final base = match?.group(1)?.trim().toLowerCase();
+    return base == null || base.isEmpty ? null : base;
+  }
 
   static String _stableHrefToken(String href) {
     final path = href.split('#').first.trim().toLowerCase();

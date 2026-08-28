@@ -94,6 +94,13 @@ void main() {
         FictionEventTrackIds.historical);
     expect(profileFor('普通小说', '一个人的成长').defaultStoryTrack,
         FictionEventTrackIds.character);
+    final scienceFiction = profileFor('三体', '宇宙文明科幻小说');
+    expect(
+        scienceFiction.facets, contains(ReadingProfileFacetIds.scienceFiction));
+    expect(scienceFiction.facets,
+        contains(ReadingProfileFacetIds.entitiesWorldbuilding));
+    expect(
+        scienceFiction.defaultStoryTrack, FictionEventTrackIds.worldbuilding);
   });
 
   test('pinned closure overrides metadata and exposes distinct behavior', () {

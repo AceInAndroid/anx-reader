@@ -63,10 +63,37 @@ import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:icons_plus/icons_plus.dart';
+
 import 'package:pointer_interceptor/pointer_interceptor.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'minute_clock.dart';
+
+class ReadingAgentChapterManifestItem {
+  const ReadingAgentChapterManifestItem({
+    required this.href,
+    required this.title,
+    required this.startPercentage,
+    required this.textLength,
+    required this.isNavigation,
+  });
+
+  final String href;
+  final String title;
+  final double startPercentage;
+  final int textLength;
+  final bool isNavigation;
+
+  factory ReadingAgentChapterManifestItem.fromJson(Map<String, dynamic> json) =>
+      ReadingAgentChapterManifestItem(
+        href: json['href']?.toString() ?? '',
+        title: json['title']?.toString().trim() ?? '',
+        startPercentage:
+            (json['startPercentage'] as num?)?.toDouble().clamp(0, 1) ?? 0,
+        textLength: (json['textLength'] as num?)?.toInt() ?? 0,
+        isNavigation: json['isNavigation'] == true,
+      );
+}
 
 class EpubPlayer extends ConsumerStatefulWidget {
   final Book book;
@@ -759,6 +786,24 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     int? maxCharacters,
   }) =>
       _getChapterContentByHref(href, maxCharacters: maxCharacters);
+
+  Future<List<ReadingAgentChapterManifestItem>>
+      readingAgentChapterManifest() async {
+    final result = await webViewController.callAsyncJavaScript(
+      functionBody: 'return await getReadingAgentChapterManifest()',
+    );
+    final value = result?.value;
+    if (value is! List) return const [];
+    return value
+        .whereType<Map>()
+        .map((item) => ReadingAgentChapterManifestItem.fromJson(
+              Map<String, dynamic>.from(item),
+            ))
+        .where((item) =>
+            item.href.isNotEmpty &&
+            (item.textLength > 100 || item.isNavigation))
+        .toList(growable: false);
+  }
 
   String _normalizeChapterContent(String? content, int? maxCharacters) {
     if (content == null || content.isEmpty) {

@@ -31,6 +31,9 @@ abstract final class ReadingProfileFacetIds {
   static const timelineFamilyDefault = 'timeline.default.family';
   static const timelineHistoricalDefault = 'timeline.default.historical';
   static const timelineCharacterDefault = 'timeline.default.character';
+  static const timelineWorldbuildingDefault = 'timeline.default.worldbuilding';
+  static const scienceFiction = 'fiction.science_fiction';
+  static const entitiesWorldbuilding = 'entities.worldbuilding';
 }
 
 /// Persisted story taxonomy. These are deliberately strings (rather than
@@ -43,6 +46,7 @@ abstract final class FictionEventTrackIds {
   static const relationship = 'story.relationship';
   static const mystery = 'story.mystery';
   static const social = 'story.social';
+  static const worldbuilding = 'story.worldbuilding';
   static const general = 'story.general';
 
   static String normalize(Object? value) {
@@ -54,13 +58,20 @@ abstract final class FictionEventTrackIds {
       'investigation' ||
       caseInvestigation =>
         caseInvestigation,
-      'family' || '家庭' || '家族' => family,
-      'historical' || 'history' || '历史' => historical,
-      'character' || '人物' || '成长' => character,
-      'relationship' || '关系' => relationship,
-      'mystery' || '悬念' => mystery,
-      'social' || '社会' => social,
-      'general' || '' => general,
+      'family' || '家庭' || '家族' || family => family,
+      'historical' || 'history' || '历史' || historical => historical,
+      'character' || '人物' || '成长' || character => character,
+      'relationship' || '关系' || relationship => relationship,
+      'mystery' || '悬念' || mystery => mystery,
+      'social' || '社会' || social => social,
+      'worldbuilding' ||
+      '世界观' ||
+      '科幻' ||
+      '文明' ||
+      worldbuilding =>
+        worldbuilding,
+      'main' || 'story.main' || '主线' => general,
+      'general' || '' || general => general,
       _ => general,
     };
   }
@@ -88,6 +99,10 @@ abstract final class FictionEventStageIds {
       '勘查' || '调查' || '侦查' || 'investigation' || investigation => investigation,
       '尸检' || 'autopsy' || autopsy => autopsy,
       '发展' || 'development' || development => development,
+      'rising_action' ||
+      'rising action' ||
+      'stage.rising_action' =>
+        development,
       '冲突' || 'conflict' || conflict => conflict,
       '揭示' || 'revelation' || revelation => revelation,
       '高潮' || 'climax' || climax => climax,
@@ -111,6 +126,7 @@ abstract final class FictionRelationTypeIds {
   static const comrade = 'relation.comrade';
   static const family = 'relation.family';
   static const spouse = 'relation.spouse';
+  static const romantic = 'relation.romantic';
   static const parentChild = 'relation.parent_child';
   static const ally = 'relation.ally';
   static const rival = 'relation.rival';
@@ -125,11 +141,42 @@ abstract final class FictionRelationTypeIds {
       'colleague' || '同事' || '同僚' || colleague => colleague,
       'comrade' || '战友' || comrade => comrade,
       'spouse' || '夫妻' || '配偶' || spouse => spouse,
+      'romantic' || '恋人' || '恋爱' || '情侣' || romantic => romantic,
       'parent_child' || '亲子' || parentChild => parentChild,
       'family' || '家人' || '亲属' || family => family,
       'ally' || '盟友' || '朋友' || ally => ally,
       'rival' || '敌对' || '对手' || rival => rival,
       _ => other,
+    };
+  }
+}
+
+/// Stable entity taxonomy used by extraction validation. Story Atlas still
+/// renders people, but science-fiction extraction needs to distinguish an
+/// intelligent non-human character from a civilization, technology or idea.
+abstract final class FictionEntityTypeIds {
+  static const person = 'entity.person';
+  static const intelligentNonhuman = 'entity.intelligent_nonhuman';
+  static const organization = 'entity.organization';
+  static const concept = 'entity.concept';
+  static const technology = 'entity.technology';
+  static const species = 'entity.species';
+  static const place = 'entity.place';
+
+  static String normalize(Object? value) {
+    final raw = value?.toString().trim().toLowerCase() ?? '';
+    return switch (raw) {
+      'person' || person => person,
+      'intelligent_nonhuman' ||
+      'intelligent nonhuman' ||
+      intelligentNonhuman =>
+        intelligentNonhuman,
+      'organization' || organization => organization,
+      'concept' || concept => concept,
+      'technology' || technology => technology,
+      'species' || species => species,
+      'place' || place => place,
+      _ => person,
     };
   }
 }
@@ -209,6 +256,10 @@ class BookReadingProfile {
     if (hasFacet(ReadingProfileFacetIds.timelineHistoricalDefault) ||
         hasFacet('historical')) {
       return FictionEventTrackIds.historical;
+    }
+    if (hasFacet(ReadingProfileFacetIds.timelineWorldbuildingDefault) ||
+        hasFacet(ReadingProfileFacetIds.scienceFiction)) {
+      return FictionEventTrackIds.worldbuilding;
     }
     return FictionEventTrackIds.character;
   }

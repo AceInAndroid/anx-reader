@@ -396,6 +396,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
                     FictionEventTrackIds.family: '家庭线',
                     FictionEventTrackIds.historical: '历史线',
                     FictionEventTrackIds.character: '人物成长线',
+                    FictionEventTrackIds.worldbuilding: '世界观线',
                   }.entries)
                     Padding(
                       padding: const EdgeInsets.only(left: 6),

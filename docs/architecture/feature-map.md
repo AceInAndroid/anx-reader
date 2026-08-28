@@ -8,7 +8,7 @@
 namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在读取
 和整理时由 taxonomy 兼容层归一。叙述层以 `narrative.outer/inner` 区分
 框架叙述者与故事内人物第一人称叙述。`BookReadingProfile.defaultStoryTrack`
-按书籍特征选择案件线、家庭线、历史线或人物成长线；对应轨道尚无数据时，
+按书籍特征选择案件线、家庭线、历史线、科幻世界观线或人物成长线；对应轨道尚无数据时，
 时间线安全回退为全部故事线。
 
 ## 0. AI 开发前的强制检查顺序
@@ -158,6 +158,15 @@ fiction.backfill_checkpoint  增量整理 checkpoint
 TOC 作品节点建立稳定的 href 派生 `workId`；Artifact 与回填 checkpoint 都
 携带该字段，查询时先过滤作品、再过滤案件，避免同一个 `bookId` 下相邻
 小说互相污染。普通“第一章/第二章”在作品内只作为 scene，不被误判为案件。
+对于 NCX 只包含分册而真实章节位于 spine 的 EPUB（如科幻合集），用户主动
+整理时才读取不含正文的 spine 章节清单；普通翻页和打开成果页不会触发扫描或
+模型调用。罗马数字分册标题会形成独立 `workId`，避免相邻分册互相污染。
+
+科幻书使用 `fiction.science_fiction`、`entities.worldbuilding` 和
+`timeline.default.worldbuilding` facet，默认展示 `story.worldbuilding`。
+提取阶段以稳定 `entity.*` 类型区分人物、智能非人角色、组织、概念、技术、
+物种和地点：只有人物与具备稳定身份的智能非人角色可进入人物档案/关系端点；
+其余内容通过世界观事件表达，并继续要求逐字原文证据。
 
 每个 Artifact 必须保留 `sourceProgress`（正文发生位置）、`visibleFromProgress`（剧透展示边界）、`ingestedAt`（进入系统时间）、`ingestionMode`、正文快照、章节和创建者。后文 Artifact 即使今天同步到设备，回到早期位置仍不可见。
 

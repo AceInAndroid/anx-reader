@@ -1521,10 +1521,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
   }
 
-  List<FictionBackfillChapter> _eligibleBackfillChapters(
+  Future<List<FictionBackfillChapter>> _eligibleBackfillChapters(
     double boundary, {
     double fromProgress = 0,
-  }) {
+  }) async {
     final result = <FictionBackfillChapter>[];
     void addItems(List<TocItem> items, [int depth = 0]) {
       for (final item in items) {
@@ -1543,6 +1543,29 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
 
     addItems(ref.read(bookTocProvider));
+    // EPUB2 collections sometimes publish only one NCX entry per volume. On
+    // explicit archive organization, recover the local spine headings so AI
+    // receives real chapters rather than an HTML table of contents.
+    if (result.length < 6) {
+      final manifest =
+          await epubPlayerKey.currentState?.readingAgentChapterManifest() ??
+              const <ReadingAgentChapterManifestItem>[];
+      if (manifest.length > result.length) {
+        result
+          ..clear()
+          ..addAll([
+            for (final item in manifest)
+              if (!ReadingStructureParser.isNonStoryTitle(item.title))
+                FictionBackfillChapter(
+                  href: item.href,
+                  title: item.title,
+                  startProgress: item.startPercentage,
+                  hasChildren: item.isNavigation,
+                  isNavigationDocument: item.isNavigation,
+                ),
+          ]);
+      }
+    }
     final byHref = <String, FictionBackfillChapter>{};
     for (final chapter in result) {
       byHref.putIfAbsent(chapter.href.split('#').first, () => chapter);
@@ -1577,9 +1600,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           volumeId: unitsByHref[unique[index].href]?.volumeId,
           arcId: unitsByHref[unique[index].href]?.arcId,
           sceneId: unitsByHref[unique[index].href]?.sceneId,
+          isNavigationDocument: unique[index].isNavigationDocument,
         ),
     ]
         .where((chapter) =>
+            !chapter.isNavigationDocument &&
             chapter.startProgress >= fromProgress - .000001 &&
             chapter.endProgress! <= boundary + .000001)
         .toList(growable: false);
@@ -1664,10 +1689,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         (fromProgressOverride ?? Prefs().localReadingBackfillStart(_book.id))
             .clamp(0, currentProgress)
             .toDouble();
-    final chapters = _eligibleBackfillChapters(
+    final chapters = await _eligibleBackfillChapters(
       currentProgress,
       fromProgress: fromProgress,
     );
+    if (!mounted) return;
     final percent = (currentProgress * 100).round();
     final fromPercent = (fromProgress * 100).round();
     final confirmed = await showDialog<bool>(
@@ -1743,7 +1769,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   currentProgress)
               .clamp(effectiveFromProgress, currentProgress)
               .toDouble();
-      final effectiveChapters = _eligibleBackfillChapters(
+      final effectiveChapters = await _eligibleBackfillChapters(
         effectiveSafeBoundary,
         fromProgress: effectiveFromProgress,
       );
@@ -1774,7 +1800,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           batchSize: useHybrid ? 1 : 5,
           concurrency: 1,
           maxInputCharacters: useHybrid ? 12000 : 30000,
-          validateCandidate: useHybrid ? hybrid.validate : null,
+          // Both extraction routes require exact source evidence. The hybrid
+          // route may additionally send only ambiguous short evidence to the
+          // cloud verifier; the regular cloud route never accepts ambiguity.
+          validateCandidate:
+              useHybrid ? hybrid.validate : hybrid.validateDirect,
           artifactMetadata: useHybrid ? hybrid.artifactMetadata : const {},
           onBatchCompleted: ({
             required artifacts,

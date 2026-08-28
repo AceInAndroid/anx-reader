@@ -17,6 +17,7 @@ class FictionBackfillChapter {
     this.sceneId,
     this.tocDepth = 0,
     this.hasChildren = false,
+    this.isNavigationDocument = false,
   });
 
   final String href;
@@ -30,6 +31,7 @@ class FictionBackfillChapter {
   final String? sceneId;
   final int tocDepth;
   final bool hasChildren;
+  final bool isNavigationDocument;
 }
 
 typedef FictionChapterLoader = Future<String> Function(String href);
@@ -74,7 +76,7 @@ class _BackfillBatchAttempt {
 class FictionBackfillService {
   const FictionBackfillService();
 
-  static const extractorVersion = 5;
+  static const extractorVersion = 6;
 
   Future<List<ReadingArtifact>> build({
     required int bookId,
@@ -614,8 +616,8 @@ class FictionBackfillService {
 请对每章分别提取，返回严格 JSON 数组，每项格式：
 {"chapterHref":"章节 href","items":[{"kind":"character|relationship|event","payload":{...}}]}
 每个 payload 必须增加 evidence：从本章正文逐字复制、最多 80 字的连续原文；不得改写或用摘要代替证据。
-人物 payload 使用 namingSystem(chinese|western)、name、summary、aliases、role(protagonist|case|case_victim|background)。框架故事中观察、采访或转述他人故事的“我”是外层叙述者：输出 name=叙述者、entityId=narrator.outer、narrativeLayer=narrative.outer。故事内人物以第一人称讲述自身经历时，必须使用该人物姓名，输出 narrativeLayer=narrative.inner、narratorRole=first_person，并把“我”放入 aliases；不得把外层叙述者和内层人物合并。中文历史/古典人物可补充 courtesyNames（字）、artNames（号）、titles（官职、尊称）；英文人物可补充 givenName、familyName、titles。若正文明确“诸葛亮，字孔明，号卧龙”，只输出一个 character，name 用完整正式姓名，孔明/卧龙进入对应字段。每个人物在同一批次只输出一次，放在其首次出现的章节，后续章节不要重复输出。
-关系 from、to 和事件 participants 必须使用人物完整规范姓名；外层叙述者尚无姓名时统一使用“叙述者”。关系使用 relation、relationType(relation.mentor|relation.partner|relation.schoolmate|relation.colleague|relation.comrade|relation.family|relation.spouse|relation.parent_child|relation.ally|relation.rival|relation.other)、summary、state(active|changed|ended)、previousRelation，只输出正文明确支持且对理解人物网络有价值的持久关系；搭档、同桌、同学、老师属于有效关系，同行、对话、尸检对象不属于关系。事件使用 title、summary、eventType、track(story.case|story.family|story.historical|story.character|story.relationship|story.mystery|story.social|story.general)、stage(stage.opening|stage.incident|stage.investigation|stage.autopsy|stage.development|stage.conflict|stage.revelation|stage.climax|stage.resolution|stage.turning_point|stage.background|stage.other)、storyTimeLabel（不确定则空）、participants、importance(normal|major)。
+人物 payload 使用 namingSystem(chinese|western)、name、summary、aliases、role(protagonist|case|case_victim|background)、entityType(entity.person|entity.intelligent_nonhuman|entity.organization|entity.concept|entity.technology|entity.species|entity.place)。只有 entity.person 和具备稳定身份、能持续参与情节的 entity.intelligent_nonhuman 才能输出为 character；文明、组织、技术、物种、地点和思想概念不得输出为 character。框架故事中观察、采访或转述他人故事的“我”是外层叙述者：输出 name=叙述者、entityId=narrator.outer、narrativeLayer=narrative.outer。故事内人物以第一人称讲述自身经历时，必须使用该人物姓名，输出 narrativeLayer=narrative.inner、narratorRole=first_person，并把“我”放入 aliases；不得把外层叙述者和内层人物合并。中文历史/古典人物可补充 courtesyNames（字）、artNames（号）、titles（官职、尊称）；英文人物可补充 givenName、familyName、titles。若正文明确“诸葛亮，字孔明，号卧龙”，只输出一个 character，name 用完整正式姓名，孔明/卧龙进入对应字段。每个人物在同一批次只输出一次，放在其首次出现的章节，后续章节不要重复输出。每章最多输出 4 个人物。
+关系 from、to 和事件 participants 必须使用人物完整规范姓名；外层叙述者尚无姓名时统一使用“叙述者”。关系端点只能是 entity.person 或 entity.intelligent_nonhuman，并分别用 fromEntityType、toEntityType 标注；文明、组织、技术、物种、地点和概念不得成为人物关系端点。关系使用 relation、relationType(relation.mentor|relation.partner|relation.schoolmate|relation.colleague|relation.comrade|relation.family|relation.spouse|relation.romantic|relation.parent_child|relation.ally|relation.rival|relation.other)、summary、state(active|changed|ended)、previousRelation，只输出正文明确支持且对理解人物网络有价值的持久关系；搭档、同桌、同学、老师属于有效关系，同行、对话、尸检对象不属于关系。每章最多输出 2 条关系。事件使用 title、summary、eventType、track(story.case|story.family|story.historical|story.character|story.relationship|story.mystery|story.social|story.worldbuilding|story.general)、stage(stage.opening|stage.incident|stage.investigation|stage.autopsy|stage.development|stage.conflict|stage.revelation|stage.climax|stage.resolution|stage.turning_point|stage.background|stage.other)、storyTimeLabel（不确定则空）、participants、importance(normal|major)。科学发现、宇宙规则、技术造成的情势变化和文明危机使用 story.worldbuilding；人物选择与成长仍使用 story.character。每章最多输出 4 个事件。
 中文历史人物的数字姓（如第五、第八、第一）必须作为完整姓名保留，不得截成单字简称。不同数字姓之间不得自行推断为同宗、同族或兄弟；若正文明确写出“同宗兄弟”等关系，则按原文保留。
 人物完整性优先，但分层展示：主线人物标 protagonist，当前案件人物标 case，死者/受害者标 case_victim，只在回忆或背景说明出现且不参与当前事件的人物标 background。稳定称谓只有能唯一指向同一人物时才放 aliases/titles，不得把“众人、男人、侍从”等泛称生成人物。事件只提取推动案件、悬念、关系或人物成长的重要节点，不生成流水账，不猜测日期。摘要保持一句话，避免重复正文，以节约 Token。
 ${knownCharacterNames.isEmpty ? '' : '已建档人物（关系和事件可引用，但不要再次输出 character）：${knownCharacterNames.join('、')}\n'}

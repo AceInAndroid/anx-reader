@@ -1775,6 +1775,44 @@ class Reader {
     return content
   }
 
+  // Some EPUB2 collection books expose only volume-level NCX entries while
+  // keeping real chapter headings in the spine documents. Reading Agent may
+  // request this local manifest after an explicit organize action. It never
+  // returns body text and does not invoke a model.
+  getReadingAgentChapterManifest = async () => {
+    if (!this.view?.book?.sections) return []
+    const fractions = this.view.getSectionFractions?.() ?? []
+    const result = []
+    for (const [index, section] of this.view.book.sections.entries()) {
+      if (!section?.createDocument || section.linear === 'no') continue
+      try {
+        const doc = await section.createDocument()
+        const heading = doc?.querySelector?.('h1, h2, h3, h4, h5, h6')
+        const label = (heading?.textContent || doc?.title || '').replace(/\s+/g, ' ').trim()
+        const textLength = (doc?.body?.textContent || '').trim().length
+        const links = doc?.body?.querySelectorAll?.('a[href]')?.length ?? 0
+        const paragraphs = doc?.body?.querySelectorAll?.('p')?.length ?? 0
+        const isNavigation = Boolean(
+          doc?.querySelector?.('nav, .sgc-toc-title, [epub\\:type="toc"]') ||
+          (links >= 5 && links > paragraphs)
+        )
+        const fraction = fractions[index]?.fraction
+        result.push({
+          href: section.id,
+          title: label || `章节 ${index + 1}`,
+          startPercentage: Number.isFinite(fraction)
+            ? fraction
+            : index / this.view.book.sections.length,
+          textLength,
+          isNavigation,
+        })
+      } catch (error) {
+        console.warn('Reading Agent chapter manifest skipped a section', error)
+      }
+    }
+    return result
+  }
+
   getPreviousContent = (count = 2000) => {
     let currentContainer = this.view.lastLocation?.range?.endContainer?.parentElement;
     if (!currentContainer) return '';
@@ -2369,6 +2407,9 @@ window.previousContent = (count = 2000) => reader.getPreviousContent(count)
 
 window.getChapterContentByHref = async (href, opts) =>
   reader.getChapterContentByHref(href, opts)
+
+window.getReadingAgentChapterManifest = async () =>
+  reader.getReadingAgentChapterManifest()
 
 // window.convertChinese = (mode) => reader.convertChinese(mode)
 
