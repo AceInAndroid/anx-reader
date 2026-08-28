@@ -4,6 +4,11 @@ import 'package:anx_reader/service/ai/reading_ai_models.dart';
 /// Stable identifiers persisted in reading profiles and artifacts.
 abstract final class ReadingClosureIds {
   static const fictionImmersion = 'fiction.immersion';
+
+  /// Profile facet for suspense/case-oriented fiction. It is intentionally
+  /// not a fourth closure: suspense books still use the immersive outcome
+  /// declarations and only specialize processing/projection behavior.
+  static const fictionSuspense = 'fiction.suspense';
   static const knowledgeArgument = 'knowledge.argument';
   static const psychologyReflection = 'psychology.reflection';
 
@@ -488,6 +493,14 @@ class ReadingClosurePolicyMatcher {
   }) {
     final text = '$title $author $description'.toLowerCase();
     final facets = <String>{
+      if (RegExp(r'悬疑|推理|侦探|刑侦|法医|案件|谋杀|suspense|mystery|detective')
+          .hasMatch(text)) ...{
+        ReadingProfileFacetIds.suspense,
+        ReadingProfileFacetIds.processingVolumeCaseScene,
+        ReadingProfileFacetIds.entitiesSuspense,
+        ReadingProfileFacetIds.timelineNarrativeOrder,
+        ReadingProfileFacetIds.relationshipsDurableOnly,
+      },
       if (RegExp(r'历史|王朝|战争|history|historical').hasMatch(text)) 'historical',
       if (RegExp(r'外语|英语|日语|法语|english|japanese|french').hasMatch(text))
         'foreign_language',

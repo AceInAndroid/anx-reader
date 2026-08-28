@@ -1,5 +1,6 @@
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_closure_policy.dart';
+import 'package:anx_reader/models/reading_agent.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -34,6 +35,40 @@ void main() {
           .id,
       ReadingClosureIds.psychologyReflection,
     );
+  });
+
+  test(
+      'detects suspense as a BookReadingProfile facet without replacing the fiction closure',
+      () {
+    final detected = matcher.detect(
+      mode: ReadingAiMode.general,
+      title: '法医秦明：悬疑案件',
+      description: '刑侦推理小说',
+    );
+    expect(detected.moduleId, ReadingClosureIds.fictionImmersion);
+    expect(
+        detected.facets,
+        containsAll([
+          ReadingProfileFacetIds.suspense,
+          ReadingProfileFacetIds.processingVolumeCaseScene,
+          ReadingProfileFacetIds.entitiesSuspense,
+          ReadingProfileFacetIds.timelineNarrativeOrder,
+          ReadingProfileFacetIds.relationshipsDurableOnly,
+        ]));
+    final profile = BookReadingProfile(
+      bookId: 1,
+      primaryModuleId: detected.moduleId,
+      facets: detected.facets,
+      confidence: detected.confidence,
+      createdAt: 1,
+      updatedAt: 1,
+    );
+    expect(profile.isSuspense, isTrue);
+    expect(ReadingClosureIds.fictionSuspense, ReadingProfileFacetIds.suspense);
+    expect(profile.processingStrategy,
+        ReadingProfileFacetIds.processingVolumeCaseScene);
+    expect(profile.relationshipStrategy,
+        ReadingProfileFacetIds.relationshipsDurableOnly);
   });
 
   test('pinned closure overrides metadata and exposes distinct behavior', () {
@@ -108,5 +143,12 @@ void main() {
     expect(matched.id, 'history.evidence');
     expect(matched.goalTemplateSpecs.single.title, '核查一条史料');
     expect(matched.quickPrompts.single.label, '核查史料');
+
+    // The outcomes surface consumes declaration fields generically. A fourth
+    // registered type therefore needs no page/type switch to expose its
+    // sections, goals, checkpoint and prompts.
+    expect(registry.definitions, contains(fourth));
+    expect(fourth.outcomeSections.map((item) => item.id), ['goals']);
+    expect(fourth.checkpoint.title, '史料检查');
   });
 }

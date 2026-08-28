@@ -76,6 +76,119 @@ void main() {
     expect(atlas.relationships.single.history, hasLength(2));
   });
 
+  test('filters scoped atlas to the current arc while retaining global cast',
+      () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'main',
+        kind: ReadingArtifactKinds.character,
+        progress: .01,
+        payload: {'name': '主角', 'role': 'main_character', 'scope': 'global'},
+      ),
+      artifact(
+        id: 'case-a',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'name': '甲', 'arcId': 'volume-1-arc-1'},
+      ),
+      artifact(
+        id: 'case-b',
+        kind: ReadingArtifactKinds.character,
+        progress: .2,
+        payload: {'name': '乙', 'arcId': 'volume-1-arc-2'},
+      ),
+      artifact(
+        id: 'event-a',
+        kind: ReadingArtifactKinds.event,
+        progress: .15,
+        payload: {
+          'title': '案件一',
+          'arcId': 'volume-1-arc-1',
+          'participants': ['甲']
+        },
+      ),
+      artifact(
+        id: 'event-b',
+        kind: ReadingArtifactKinds.event,
+        progress: .25,
+        payload: {
+          'title': '案件二',
+          'arcId': 'volume-1-arc-2',
+          'participants': ['乙']
+        },
+      ),
+    ], visibleAtProgress: .3, arcId: 'volume-1-arc-1');
+
+    expect(atlas.arcId, 'volume-1-arc-1');
+    expect(atlas.characters.map((item) => item.name), containsAll(['主角', '甲']));
+    expect(atlas.characters.map((item) => item.name), isNot(contains('乙')));
+    expect(atlas.timeline.map((item) => item.title), ['案件一']);
+  });
+
+  test('does not mix explicitly scoped works inside one collection book', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'white-night-character',
+        kind: ReadingArtifactKinds.character,
+        progress: .3,
+        payload: {
+          'name': '唐泽雪穗',
+          'workId': 'work-white-night',
+        },
+      ),
+      artifact(
+        id: 'white-night-event',
+        kind: ReadingArtifactKinds.event,
+        progress: .31,
+        payload: {
+          'title': '白夜行事件',
+          'workId': 'work-white-night',
+        },
+      ),
+      artifact(
+        id: 'general-store-character',
+        kind: ReadingArtifactKinds.character,
+        progress: .6,
+        payload: {
+          'name': '浪矢雄治',
+          'workId': 'work-general-store',
+        },
+      ),
+      artifact(
+        id: 'general-store-event',
+        kind: ReadingArtifactKinds.event,
+        progress: .61,
+        payload: {
+          'title': '杂货店事件',
+          'workId': 'work-general-store',
+        },
+      ),
+    ], visibleAtProgress: .7, workId: 'work-white-night');
+
+    expect(atlas.workId, 'work-white-night');
+    expect(atlas.characters.map((item) => item.name), ['唐泽雪穗']);
+    expect(atlas.timeline.map((item) => item.title), ['白夜行事件']);
+  });
+
+  test('infers the latest encountered arc from source progress', () {
+    final artifacts = [
+      artifact(
+        id: 'a',
+        kind: ReadingArtifactKinds.event,
+        progress: .1,
+        payload: {'title': '一案', 'arcId': 'arc-1'},
+      ),
+      artifact(
+        id: 'b',
+        kind: ReadingArtifactKinds.event,
+        progress: .2,
+        payload: {'title': '二案', 'arcId': 'arc-2'},
+      ),
+    ];
+    expect(fictionStoryAtlasService.currentArcId(artifacts, .15), 'arc-1');
+    expect(fictionStoryAtlasService.currentArcId(artifacts, .25), 'arc-2');
+  });
+
   test('promotes named event participants when character output is missing',
       () {
     final artifacts = [

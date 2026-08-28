@@ -33,6 +33,19 @@ class ReadingExperienceProfileService {
     if (cachedValue != null) return cachedValue;
     final stored = await _dao.bookReadingProfile(bookId);
     if (stored != null) {
+      // Content facets are additive metadata. Upgrade an older profile with
+      // newly registered genre signals (notably fiction.suspense) while
+      // preserving the user's pinned primary closure and existing confidence.
+      final mergedFacets = <String>{...stored.facets, ...detectedFacets};
+      if (mergedFacets.length != stored.facets.length) {
+        final upgraded = stored.copyWith(
+          facets: mergedFacets.toList(growable: false)..sort(),
+          updatedAt: _clock(),
+        );
+        await _dao.saveBookReadingProfile(upgraded);
+        _cache[bookId] = upgraded;
+        return upgraded;
+      }
       _cache[bookId] = stored;
       return stored;
     }

@@ -1,0 +1,127 @@
+/// Best-effort structural parser for long books. It never assumes that an
+/// EPUB has a reliable TOC: when volume/arc headings cannot be recognised it
+/// returns ordinary chapters and the extraction pipeline can continue.
+class ReadingStructureParser {
+  const ReadingStructureParser();
+
+  ReadingStructure parse(Iterable<ReadingStructureChapter> chapters) {
+    final result = <ReadingStructureUnit>[];
+    String? workId;
+    String? workTitle;
+    String? volumeId;
+    String? arcId;
+    var volumeIndex = 0;
+    var arcIndex = 0;
+    for (final chapter in chapters) {
+      final title = chapter.title.trim();
+      final startsWork = chapter.hasChildren &&
+          chapter.tocDepth == 0 &&
+          !_isUtilityTitle(title) &&
+          !_volumePattern.hasMatch(title);
+      if (startsWork) {
+        workId = 'work-${_stableHrefToken(chapter.href)}';
+        workTitle = title;
+        volumeId = null;
+        arcId = null;
+        volumeIndex = 0;
+        arcIndex = 0;
+      }
+      final volume = _volumePattern.firstMatch(title);
+      if (volume != null) {
+        volumeIndex++;
+        arcIndex = 0;
+        volumeId = 'volume-$volumeIndex';
+        arcId = null;
+      }
+      final arc =
+          (workId == null ? _legacyArcPattern : _casePattern).firstMatch(title);
+      if (arc != null) {
+        arcIndex++;
+        arcId = [
+          if (workId != null) workId,
+          volumeId ?? 'volume-1',
+          'arc-$arcIndex',
+        ].join('-');
+      }
+      result.add(ReadingStructureUnit(
+        chapter: chapter,
+        workId: workId,
+        workTitle: workTitle,
+        volumeId: volumeId,
+        arcId: arcId,
+        sceneId: 'scene-${chapter.href.split('#').first}',
+      ));
+    }
+    return ReadingStructure(result);
+  }
+
+  static final _volumePattern = RegExp(
+    r'(?:第\s*[一二三四五六七八九十百\d]+\s*[册卷部篇]|(?:卷|册|部)\s*[一二三四五六七八九十\d]+|[（(]\s*[一二三四五六七八九十\d]+\s*[）)])',
+    caseSensitive: false,
+  );
+  static final _casePattern = RegExp(
+    r'(?:第\s*[一二三四五六七八九十百\d]+\s*案|(?:案件|案)\s*[一二三四五六七八九十\d]+)',
+    caseSensitive: false,
+  );
+  static final _legacyArcPattern = RegExp(
+    r'(?:第\s*[一二三四五六七八九十百\d]+\s*(?:案|章|节|回)|(?:案件|案)\s*[一二三四五六七八九十\d]+)',
+    caseSensitive: false,
+  );
+
+  static bool _isUtilityTitle(String title) => const {
+        '封面',
+        '版权',
+        '版权信息',
+        '目录',
+        '前言',
+        '序言',
+      }.contains(title);
+
+  static String _stableHrefToken(String href) {
+    final path = href.split('#').first.trim().toLowerCase();
+    final token = path
+        .replaceAll(RegExp(r'[^a-z0-9\u3400-\u9fff]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    return token.isEmpty ? 'unknown' : token;
+  }
+}
+
+class ReadingStructureChapter {
+  const ReadingStructureChapter({
+    required this.href,
+    required this.title,
+    this.startProgress = 0,
+    this.tocDepth = 0,
+    this.hasChildren = false,
+  });
+  final String href;
+  final String title;
+  final double startProgress;
+  final int tocDepth;
+  final bool hasChildren;
+}
+
+class ReadingStructureUnit {
+  const ReadingStructureUnit({
+    required this.chapter,
+    required this.workId,
+    required this.workTitle,
+    required this.volumeId,
+    required this.arcId,
+    required this.sceneId,
+  });
+  final ReadingStructureChapter chapter;
+  final String? workId;
+  final String? workTitle;
+  final String? volumeId;
+  final String? arcId;
+  final String sceneId;
+}
+
+class ReadingStructure {
+  const ReadingStructure(this.units);
+  final List<ReadingStructureUnit> units;
+  bool get hasHierarchy =>
+      units.any((item) => item.volumeId != null || item.arcId != null);
+  bool get usedFallback => !hasHierarchy && units.isNotEmpty;
+}

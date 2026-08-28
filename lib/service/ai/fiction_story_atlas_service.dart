@@ -14,6 +14,8 @@ class FictionStoryAtlas {
     required this.coverageEnd,
     this.lastOrganizedProgress,
     this.lastIngestedAt,
+    this.workId,
+    this.arcId,
   });
 
   final List<FictionCharacterNode> characters;
@@ -24,6 +26,12 @@ class FictionStoryAtlas {
   final double? coverageEnd;
   final double? lastOrganizedProgress;
   final int? lastIngestedAt;
+
+  /// Independent work inside a collection EPUB, when available.
+  final String? workId;
+
+  /// The case/arc scope used to build this projection, when available.
+  final String? arcId;
 
   bool get isEmpty => characters.isEmpty && timeline.isEmpty;
 }
@@ -157,13 +165,57 @@ class FictionStoryAtlasService {
   Future<FictionStoryAtlas> load({
     required int bookId,
     required double visibleAtProgress,
+    String? workId,
+    String? arcId,
   }) async {
     final artifacts = await (_repository ?? readingAgentRepository).artifacts(
       bookId,
       status: ReadingArtifactStatus.active,
       visibleAtProgress: visibleAtProgress,
     );
-    return fromArtifacts(artifacts, visibleAtProgress: visibleAtProgress);
+    return fromArtifacts(
+      artifacts,
+      visibleAtProgress: visibleAtProgress,
+      workId: workId,
+      arcId: arcId,
+    );
+  }
+
+  /// Finds the latest case scope encountered at the reader's position. This
+  /// is deliberately derived from source progress (not ingestion time), so a
+  /// synced artifact cannot switch the reader to a future case.
+  String? currentArcId(
+    Iterable<ReadingArtifact> artifacts,
+    double visibleAtProgress,
+  ) {
+    final scoped = artifacts
+        .where((item) =>
+            item.isVisibleAtProgress(visibleAtProgress) &&
+            item.sourceProgress <= visibleAtProgress + 0.000001)
+        .map((item) {
+          final value = item.payload['arcId']?.toString().trim() ?? '';
+          return (progress: item.sourceProgress, arcId: value);
+        })
+        .where((item) => item.arcId.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.progress.compareTo(b.progress));
+    return scoped.isEmpty ? null : scoped.last.arcId;
+  }
+
+  String? currentWorkId(
+    Iterable<ReadingArtifact> artifacts,
+    double visibleAtProgress,
+  ) {
+    final scoped = artifacts
+        .where((item) => item.sourceProgress <= visibleAtProgress)
+        .map((item) => (
+              progress: item.sourceProgress,
+              workId: item.payload['workId']?.toString().trim() ?? '',
+            ))
+        .where((item) => item.workId.isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.progress.compareTo(b.progress));
+    return scoped.isEmpty ? null : scoped.last.workId;
   }
 
   /// Produces the chapter-level projection used by long timelines. Filtering
@@ -306,12 +358,20 @@ class FictionStoryAtlasService {
   FictionStoryAtlas fromArtifacts(
     Iterable<ReadingArtifact> input, {
     required double visibleAtProgress,
+    String? workId,
+    String? arcId,
   }) {
-    final artifacts = input
+    final visibleArtifacts = input
         .where((item) =>
             item.isVisibleAtProgress(visibleAtProgress) &&
             item.status == ReadingArtifactStatus.active)
         .toList(growable: false);
+    final effectiveWorkId =
+        workId ?? currentWorkId(visibleArtifacts, visibleAtProgress);
+    final workArtifacts = _filterByWork(visibleArtifacts, effectiveWorkId);
+    final effectiveArcId =
+        arcId ?? currentArcId(workArtifacts, visibleAtProgress);
+    final artifacts = _filterByArc(workArtifacts, effectiveArcId);
     final characterIndex = _buildCharacterIndex(artifacts);
     final characters = <String, FictionCharacterNode>{
       for (final character in characterIndex.characters)
@@ -326,6 +386,22 @@ class FictionStoryAtlasService {
     final grouped = <String, List<ReadingArtifact>>{};
     final endpoints = <String, ({String from, String to})>{};
     for (final artifact in relationshipArtifacts) {
+      final artifactArc = artifact.payload['arcId']?.toString().trim() ?? '';
+      if (effectiveArcId != null &&
+          artifactArc.isNotEmpty &&
+          artifactArc != effectiveArcId) {
+        // A relationship from another case is only useful when it explicitly
+        // connects two already-known book-wide characters. Do not create an
+        // unresolved node here: that would leak the other case into the
+        // focused graph.
+        final knownFrom =
+            characterIndex.resolve(_text(artifact.payload['from']));
+        final knownTo = characterIndex.resolve(_text(artifact.payload['to']));
+        if (knownFrom == null || knownTo == null) continue;
+        final hasMainEndpoint = _isMainCharacter(characters[knownFrom]) ||
+            _isMainCharacter(characters[knownTo]);
+        if (!hasMainEndpoint) continue;
+      }
       final from = _resolveRelationshipEndpoint(
         _text(artifact.payload['from']),
         characterIndex,
@@ -418,7 +494,65 @@ class FictionStoryAtlasService {
       lastOrganizedProgress:
           organizedProgress.isEmpty ? null : organizedProgress.reduce(_max),
       lastIngestedAt: ingested.isEmpty ? null : ingested.reduce(_maxInt),
+      workId: effectiveWorkId,
+      arcId: effectiveArcId,
     );
+  }
+
+  List<ReadingArtifact> _filterByWork(
+    List<ReadingArtifact> artifacts,
+    String? workId,
+  ) {
+    if (workId == null || workId.isEmpty) return artifacts;
+    return artifacts.where((artifact) {
+      final artifactWork = artifact.payload['workId']?.toString().trim() ?? '';
+      // Legacy artifacts remain visible for compatibility. Once a work scope
+      // exists, artifacts explicitly assigned to another work never cross it.
+      return artifactWork.isEmpty || artifactWork == workId;
+    }).toList(growable: false);
+  }
+
+  List<ReadingArtifact> _filterByArc(
+    List<ReadingArtifact> artifacts,
+    String? arcId,
+  ) {
+    if (arcId == null || arcId.isEmpty) return artifacts;
+    return artifacts.where((artifact) {
+      final payloadArc = artifact.payload['arcId']?.toString().trim() ?? '';
+      // Legacy/global artifacts have no scope and remain available. Scoped
+      // artifacts from another case are hidden from both graph and timeline.
+      if (payloadArc.isEmpty || payloadArc == arcId) return true;
+      // Main cast metadata is book-wide and should remain visible while the
+      // reader is inside a case. A global scope is an explicit opt-in for the
+      // same behavior; all other scoped artifacts belong to another arc.
+      if (artifact.kind == ReadingArtifactKinds.character) {
+        final role = artifact.payload['role']?.toString().trim().toLowerCase();
+        final scope =
+            artifact.payload['scope']?.toString().trim().toLowerCase();
+        return scope == 'global' ||
+            role == 'main_character' ||
+            role == 'main' ||
+            role == 'protagonist' ||
+            role == '主角';
+      }
+      // Relationships are checked against the current/main cast while the
+      // projection is assembled; keeping them here lets that pass inspect
+      // endpoint identity without exposing unrelated case events.
+      return artifact.kind == ReadingArtifactKinds.relationship;
+    }).toList(growable: false);
+  }
+
+  bool _isMainCharacter(FictionCharacterNode? character) {
+    if (character == null) return false;
+    final role =
+        character.source.payload['role']?.toString().trim().toLowerCase();
+    final scope =
+        character.source.payload['scope']?.toString().trim().toLowerCase();
+    return scope == 'global' ||
+        role == 'main_character' ||
+        role == 'main' ||
+        role == 'protagonist' ||
+        role == '主角';
   }
 
   FictionTimelineEvent _timelineEvent(

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
+import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:flutter/material.dart';
 
 class FictionCharacterGraphPage extends StatefulWidget {
@@ -12,12 +13,14 @@ class FictionCharacterGraphPage extends StatefulWidget {
     this.onOpenLocation,
     this.onRequestOrganize,
     this.initialAtlas,
+    this.arcId,
   });
 
   final Book book;
   final Future<void> Function(String cfi)? onOpenLocation;
   final VoidCallback? onRequestOrganize;
   final FictionStoryAtlas? initialAtlas;
+  final String? arcId;
 
   @override
   State<FictionCharacterGraphPage> createState() =>
@@ -28,6 +31,7 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
   late Future<FictionStoryAtlas> _future;
   FictionCharacterNode? _selected;
   FictionStoryAtlas? _atlas;
+  bool? _fullMode;
 
   @override
   void initState() {
@@ -37,6 +41,7 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
         : fictionStoryAtlasService.load(
             bookId: widget.book.id,
             visibleAtProgress: widget.book.readingPercentage,
+            arcId: widget.arcId,
           );
   }
 
@@ -71,14 +76,17 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
             }
             final atlas = snapshot.requireData;
             _atlas = atlas;
+            _fullMode ??= _savedOrDefaultMode(atlas);
             if (atlas.characters.isEmpty) {
               return _emptyState(atlas);
             }
             return LayoutBuilder(
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 840;
+                final visibleAtlas =
+                    _fullMode == true ? atlas : _compactAtlas(atlas);
                 final graph = _graph(
-                  atlas,
+                  visibleAtlas,
                   wide ? constraints.maxWidth - 320 : constraints.maxWidth,
                 );
                 if (!wide) return graph;
@@ -127,6 +135,9 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
     final layout = _buildRadialGraphLayout(atlas, centerId, width);
     return Column(
       children: [
+        _modeSelector(),
+        if (_fullMode != true && atlas.relationships.isEmpty)
+          _instantRecall(atlas),
         _boundaryBanner(atlas),
         Expanded(
           child: InteractiveViewer(
@@ -179,6 +190,112 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
                 style: Theme.of(context).textTheme.bodySmall),
           ),
       ],
+    );
+  }
+
+  Widget _modeSelector() => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+        child: Row(
+          children: [
+            const Icon(Icons.account_tree_outlined, size: 18),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text('故事人物档案 · 人物关系图'),
+            ),
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: false, label: Text('简洁模式')),
+                ButtonSegment(value: true, label: Text('完整模式')),
+              ],
+              selected: {_fullMode ?? false},
+              onSelectionChanged: (value) {
+                final mode = value.first;
+                setState(() => _fullMode = mode);
+                Prefs().setFictionCharacterArchiveMode(
+                  widget.book.id,
+                  mode ? 'full' : 'compact',
+                );
+              },
+            ),
+          ],
+        ),
+      );
+
+  Widget _instantRecall(FictionStoryAtlas atlas) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '当前人物回忆 · ${atlas.characters.length} 人',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final character in atlas.characters)
+                  ActionChip(
+                    avatar: _InitialAvatar(name: character.name),
+                    label: Text(character.name),
+                    onPressed: () => _select(character),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      );
+
+  bool _savedOrDefaultMode(FictionStoryAtlas atlas) {
+    String? saved;
+    // Widget tests and early startup can build this page before preferences
+    // have finished loading; fall back to the complexity heuristic then.
+    try {
+      saved = Prefs().fictionCharacterArchiveMode(widget.book.id);
+    } on Error {
+      saved = null;
+    }
+    if (saved == 'full') return true;
+    if (saved == 'compact') return false;
+    // Small casts are better served by the low-distraction local archive.
+    return atlas.characters.length > 8 || atlas.relationships.length > 12;
+  }
+
+  FictionStoryAtlas _compactAtlas(FictionStoryAtlas atlas) {
+    if (atlas.characters.length <= 8 && atlas.relationships.length <= 12) {
+      return atlas;
+    }
+    final protagonist = _protagonistId(atlas);
+    final selected = <String>{protagonist};
+    for (final edge in atlas.relationships) {
+      if (edge.from == protagonist) selected.add(edge.to);
+      if (edge.to == protagonist) selected.add(edge.from);
+    }
+    // Keep a small set of recently encountered people as context, while the
+    // full network remains available through the explicit mode switch.
+    final recent = atlas.characters.reversed
+        .where((character) => selected.contains(character.id) == false)
+        .take(4)
+        .map((character) => character.id);
+    selected.addAll(recent);
+    final characters = atlas.characters
+        .where((character) => selected.contains(character.id))
+        .toList(growable: false);
+    final relationships = atlas.relationships
+        .where((edge) =>
+            selected.contains(edge.from) && selected.contains(edge.to))
+        .toList(growable: false);
+    return FictionStoryAtlas(
+      characters: characters,
+      relationships: relationships,
+      timeline: atlas.timeline,
+      visibleProgress: atlas.visibleProgress,
+      coverageStart: atlas.coverageStart,
+      coverageEnd: atlas.coverageEnd,
+      lastOrganizedProgress: atlas.lastOrganizedProgress,
+      lastIngestedAt: atlas.lastIngestedAt,
+      arcId: atlas.arcId,
     );
   }
 

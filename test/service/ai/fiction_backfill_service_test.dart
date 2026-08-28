@@ -707,4 +707,44 @@ void main() {
 
     expect(requests, 1);
   });
+
+  test('persists collection work scope on artifacts and checkpoints', () async {
+    final savedCheckpoints = <ReadingArtifact>[];
+    final artifacts = await fictionBackfillService.build(
+      bookId: 1,
+      moduleId: 'fiction.immersion',
+      safeBoundary: .5,
+      chapters: const [
+        FictionBackfillChapter(
+          href: 'white-night-1.xhtml',
+          title: '第一章',
+          startProgress: .1,
+          endProgress: .2,
+          workId: 'work-white-night',
+          workTitle: '白夜行',
+        ),
+      ],
+      loadChapter: (_) async => '唐泽雪穗走进教室。',
+      generate: (_) async => jsonEncode([
+        {
+          'kind': 'character',
+          'payload': {'name': '唐泽雪穗'}
+        }
+      ]),
+      sessionId: 'session',
+      ingestedAt: 1,
+      onBatchCompleted: ({
+        required artifacts,
+        required checkpoints,
+        required completedChapters,
+        required totalChapters,
+      }) async {
+        savedCheckpoints.addAll(checkpoints);
+      },
+    );
+
+    expect(artifacts.single.payload['workId'], 'work-white-night');
+    expect(artifacts.single.payload['workTitle'], '白夜行');
+    expect(savedCheckpoints.single.payload['workId'], 'work-white-night');
+  });
 }

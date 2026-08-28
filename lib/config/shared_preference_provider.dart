@@ -2075,6 +2075,33 @@ class Prefs extends ChangeNotifier {
     prefs.setString('readingAgentLocalBackfillStarts', jsonEncode(values));
   }
 
+  /// Device-local presentation choice for the fiction character archive. It
+  /// intentionally is not part of the synchronized reading state because
+  /// compact/complete is a per-device display preference.
+  String? fictionCharacterArchiveMode(int bookId) {
+    final raw = prefs.getString('fictionCharacterArchiveModes');
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      return values['$bookId']?.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void setFictionCharacterArchiveMode(int bookId, String mode) {
+    final raw = prefs.getString('fictionCharacterArchiveModes');
+    Map<String, dynamic> values = {};
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        values = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      } catch (_) {}
+    }
+    values['$bookId'] = mode;
+    prefs.setString('fictionCharacterArchiveModes', jsonEncode(values));
+    notifyListeners();
+  }
+
   ReadingAnalysisDepth get defaultReadingAnalysisDepth =>
       ReadingAnalysisDepth.fromJson(
         prefs.getString('defaultReadingAnalysisDepth'),

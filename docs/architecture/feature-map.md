@@ -52,7 +52,7 @@
 | WebDAV 同步 | 已实现 | 设置/同步按钮 | `service/sync/` | 整库兼容 + Agent 包 | 入口必须走 single-flight gate |
 | E-INK/OLED 配置 | 已实现 | 设置 > 外观 | `device_display_profile.dart`、`shared_preference_provider.dart` | 设备本地，不备份 | 不把 E-INK 当普通主题 |
 | Token 用量 | 已实现 | 设置 > AI | `ai_token_usage_service.dart` | 本机诊断计数 | 不把估算值当服务端精确值 |
-| 轻量提取/摘要引擎 | 已实现 | 设置 > AI > 轻量提取与摘要引擎 | `ai_extraction_engine.dart`、`fiction_hybrid_extraction_service.dart` | Provider 角色设备本地；Artifact 正常同步 | 不在失败时静默上传整章 |
+| 轻量提取/摘要引擎 | 已实现 | 设置 > AI > 轻量提取与摘要引擎 | `ai_extraction_engine.dart`、`fiction_hybrid_extraction_service.dart` | Provider 角色设备本地；Artifact 正常同步 | 定位为本地候选提取器 + 证据筛选器；不在失败时静默上传整章 |
 | 阅读成果页 | 已实现 | 阅读页 > 本书阅读成果 | `reading_outcomes_page.dart` | 读取闭环/Atlas/记忆 | 不在成果页自动整理 |
 
 ## 3. AI 底座与上下文
@@ -116,6 +116,12 @@
 - `knowledge.argument`：经济/知识论证。关注主张、证据、假设、反例、应用；mastery 必须用户确认。
 - `psychology.reflection`：心理学概念与反思。关注定义、边界、例子、反例、应用；反思不等于诊断事实。
 
+悬疑书不新增页面分支：`BookReadingProfile` 仍以
+`fiction.immersion` 为主闭环，并附加稳定 facet
+`fiction.suspense`、`processing.volume_case_scene`、
+`entities.character_case_clue_evidence`、`relationships.durable_only`。
+这些 facet 让同一套 Story Atlas 按册/案件作用域处理，并保留小说沉浸体验。
+
 闭环 ID 是稳定字符串，旧 enum 只作兼容层。扩展闭环必须注册声明：目标模板、checkpoint、mastery、成果 Section、快捷问题、能力和文案。
 
 ### Reading Skill 注册规则
@@ -141,6 +147,11 @@ fiction.resume_context  恢复上下文
 fiction.backfill_checkpoint  增量整理 checkpoint
 ```
 
+合集 EPUB 使用 `workId -> volumeId -> arcId -> sceneId` 四级作用域。顶层
+TOC 作品节点建立稳定的 href 派生 `workId`；Artifact 与回填 checkpoint 都
+携带该字段，查询时先过滤作品、再过滤案件，避免同一个 `bookId` 下相邻
+小说互相污染。普通“第一章/第二章”在作品内只作为 scene，不被误判为案件。
+
 每个 Artifact 必须保留 `sourceProgress`（正文发生位置）、`visibleFromProgress`（剧透展示边界）、`ingestedAt`（进入系统时间）、`ingestionMode`、正文快照、章节和创建者。后文 Artifact 即使今天同步到设备，回到早期位置仍不可见。
 
 ### 查询投影
@@ -152,6 +163,9 @@ fiction.backfill_checkpoint  增量整理 checkpoint
 - `mysteryThreads`：悬念及其带 `mysteryId` 等关联字段的线索。
 - `relationshipTimeline`：关系历史按来源进度排序。
 - `fromArtifacts`：应用剧透过滤、人物规范化、关系最新状态和时间线正文顺序。
+- `fromArtifacts(..., arcId:)`：在剧透过滤后按当前案件 `arcId` 投影；无作用域的旧
+  Artifact 保持兼容，明确 global/main_character 人物可跨案件显示。未提供 arcId 时
+  服务按当前 `sourceProgress` 推断最近遇到的案件。
 
 页面只消费这些 ViewModel，不能自行拼接 Artifact 字段。
 
@@ -159,7 +173,7 @@ fiction.backfill_checkpoint  增量整理 checkpoint
 
 `FictionStoryTimelinePage`：故事主线、悬念线索、人物故事线、关系变化四种视图；章节折叠；三档密度；人物/类型筛选；每页 20 个章节；阶段导航；上次查看位置恢复；上次整理边界和“整理新增”入口。
 
-`FictionCharacterGraphPage`：人物关系图、关系历史详情、来源跳转、首字头像占位。E-INK 通过 `MediaQuery.disableAnimations` 关闭 GraphView 布局/镜头动画和详情过渡；OLED/LCD 保留动画。禁止网络头像。
+`FictionCharacterGraphPage`：故事人物档案、人物即时回忆、简洁/完整模式、关系历史详情、来源跳转、首字头像占位。小型人物集默认简洁模式，仅展示主角局部关系；完整关系图需用户主动切换，模式按书按设备保存。E-INK 通过 `MediaQuery.disableAnimations` 关闭 GraphView 布局/镜头动画和详情过渡；OLED/LCD 保留动画。禁止网络头像。
 
 ### 整理和增量
 

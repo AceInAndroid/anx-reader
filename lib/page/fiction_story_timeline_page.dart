@@ -13,12 +13,14 @@ class FictionStoryTimelinePage extends StatefulWidget {
     this.onOpenLocation,
     this.onRequestOrganize,
     this.initialAtlas,
+    this.arcId,
   });
 
   final Book book;
   final Future<void> Function(String cfi)? onOpenLocation;
   final VoidCallback? onRequestOrganize;
   final FictionStoryAtlas? initialAtlas;
+  final String? arcId;
 
   @override
   State<FictionStoryTimelinePage> createState() =>
@@ -47,6 +49,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
         : fictionStoryAtlasService.load(
             bookId: widget.book.id,
             visibleAtProgress: widget.book.readingPercentage,
+            arcId: widget.arcId,
           );
     _restoreLastViewedChapter();
   }

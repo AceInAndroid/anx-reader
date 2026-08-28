@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/service/ai/fiction_hybrid_extraction_service.dart';
 import 'package:crypto/crypto.dart';
 
 class FictionBackfillChapter {
@@ -9,12 +10,26 @@ class FictionBackfillChapter {
     required this.title,
     required this.startProgress,
     this.endProgress,
+    this.workId,
+    this.workTitle,
+    this.volumeId,
+    this.arcId,
+    this.sceneId,
+    this.tocDepth = 0,
+    this.hasChildren = false,
   });
 
   final String href;
   final String title;
   final double startProgress;
   final double? endProgress;
+  final String? workId;
+  final String? workTitle;
+  final String? volumeId;
+  final String? arcId;
+  final String? sceneId;
+  final int tocDepth;
+  final bool hasChildren;
 }
 
 typedef FictionChapterLoader = Future<String> Function(String href);
@@ -59,7 +74,7 @@ class _BackfillBatchAttempt {
 class FictionBackfillService {
   const FictionBackfillService();
 
-  static const extractorVersion = 4;
+  static const extractorVersion = 5;
 
   Future<List<ReadingArtifact>> build({
     required int bookId,
@@ -72,7 +87,9 @@ class FictionBackfillService {
     required int ingestedAt,
     double fromProgress = 0,
     int batchSize = 1,
-    int maxInputCharacters = 24000,
+    // Keep prompts bounded so a malformed/slow model response only affects a
+    // small chapter fragment. This is a character budget (not a token limit).
+    int maxInputCharacters = 7200,
     int concurrency = 1,
     FictionBackfillBatchWriter? onBatchCompleted,
     Iterable<ReadingArtifact> existingArtifacts = const [],
@@ -100,7 +117,12 @@ class FictionBackfillService {
     final existingIds = existingArtifacts.map((item) => item.id).toSet();
     final knownCharacterNames = existingArtifacts
         .where((item) => item.kind == ReadingArtifactKinds.character)
-        .map((item) => _normalizeCharacterName(item.payload['name']))
+        .expand((item) => [
+              item.payload['name'],
+              if (item.payload['aliases'] is List)
+                ...(item.payload['aliases'] as List),
+            ])
+        .map(_normalizeCharacterName)
         .where((name) => name.isNotEmpty)
         .toSet();
     final pending = <_PreparedChapter>[];
@@ -388,7 +410,10 @@ class FictionBackfillService {
         if (kind == null) continue;
         final payload = value['payload'];
         if (payload is! Map || payload.isEmpty) continue;
-        var normalizedPayload = Map<String, dynamic>.from(payload);
+        var normalizedPayload = FictionCandidateRuleValidator.normalizePayload(
+          kind,
+          Map<String, dynamic>.from(payload),
+        );
         if (!_isValid(kind, normalizedPayload)) continue;
         if (validateCandidate != null) {
           final validated = await validateCandidate(
@@ -400,6 +425,19 @@ class FictionBackfillService {
           normalizedPayload = validated;
         }
         normalizedPayload.addAll(artifactMetadata);
+        normalizedPayload.addAll({
+          if (chapter.chapter.workId != null) 'workId': chapter.chapter.workId,
+          if (chapter.chapter.workTitle != null)
+            'workTitle': chapter.chapter.workTitle,
+          if (chapter.chapter.volumeId != null)
+            'volumeId': chapter.chapter.volumeId,
+          if (chapter.chapter.arcId != null) 'arcId': chapter.chapter.arcId,
+          if (chapter.chapter.sceneId != null)
+            'sceneId': chapter.chapter.sceneId,
+          'scope': chapter.chapter.arcId == null ? 'chapter' : 'case',
+          if (kind == ReadingArtifactKinds.character)
+            'role': _characterRole(normalizedPayload),
+        });
         if (kind == ReadingArtifactKinds.character) {
           final normalizedName =
               _normalizeCharacterName(normalizedPayload['name']);
@@ -408,6 +446,14 @@ class FictionBackfillService {
             continue;
           }
           knownCharacterNames.add(normalizedName);
+          final aliases = normalizedPayload['aliases'];
+          if (aliases is List) {
+            knownCharacterNames.addAll(
+              aliases
+                  .map(_normalizeCharacterName)
+                  .where((name) => name.isNotEmpty),
+            );
+          }
         }
         final sourceProgress =
             chapter.chapter.startProgress.clamp(lowerBound, safeBoundary);
@@ -448,6 +494,19 @@ class FictionBackfillService {
       }
     }
     return _BackfillBatchResult(artifacts: artifacts, chapters: batch);
+  }
+
+  String _characterRole(Map<String, dynamic> payload) {
+    final supplied = payload['role']?.toString().trim().toLowerCase();
+    if (supplied == 'protagonist' ||
+        supplied == 'main' ||
+        supplied == 'main_character') {
+      return 'protagonist';
+    }
+    final role = payload['role']?.toString() ?? '';
+    if (role.contains('死者') || role.contains('受害')) return 'case_victim';
+    if (role.contains('背景') || role.contains('典故')) return 'background';
+    return 'case';
   }
 
   List<List<_PreparedChapter>> _makeBatches(
@@ -528,6 +587,8 @@ class FictionBackfillService {
         'contentHash': contentHash,
         'extractorVersion': extractorVersion,
         'status': 'completed',
+        if (chapter.workId != null) 'workId': chapter.workId,
+        if (chapter.workTitle != null) 'workTitle': chapter.workTitle,
         ...metadata,
       },
       epistemicStatus: ReadingArtifactEpistemicStatus.textFact,
@@ -553,10 +614,10 @@ class FictionBackfillService {
 请对每章分别提取，返回严格 JSON 数组，每项格式：
 {"chapterHref":"章节 href","items":[{"kind":"character|relationship|event","payload":{...}}]}
 每个 payload 必须增加 evidence：从本章正文逐字复制、最多 80 字的连续原文；不得改写或用摘要代替证据。
-人物 payload 使用 namingSystem(chinese|western)、name、summary、aliases。中文历史/古典人物可补充 courtesyNames（字）、artNames（号）、titles（官职、尊称）；英文人物可补充 givenName、familyName、titles。若正文明确“诸葛亮，字孔明，号卧龙”，只输出一个 character，name 用完整正式姓名，孔明/卧龙进入对应字段。每个人物在同一批次只输出一次，放在其首次出现的章节，后续章节不要重复输出。
-关系 from、to 和事件 participants 必须使用人物完整规范姓名，不要使用自造 ID、单字简称、官职或代词。关系使用 relation、summary、state(active|changed|ended)、previousRelation，只输出正文明确支持且对理解人物网络有价值的关系；relation 用简短中文（如祖孙、师生、盟友、对手、同僚）。事件使用 title、summary、eventType、storyTimeLabel（不确定则空）、participants、importance(normal|major)。
+人物 payload 使用 namingSystem(chinese|western)、name、summary、aliases、role(protagonist|case|case_victim|background)。第一人称“我”是稳定叙述者：无法从正文确认姓名时输出 name=叙述者、aliases=["我"]；正文明确姓名时使用该姓名并把“我”放入 aliases，不得把“我”生成多个节点。中文历史/古典人物可补充 courtesyNames（字）、artNames（号）、titles（官职、尊称）；英文人物可补充 givenName、familyName、titles。若正文明确“诸葛亮，字孔明，号卧龙”，只输出一个 character，name 用完整正式姓名，孔明/卧龙进入对应字段。每个人物在同一批次只输出一次，放在其首次出现的章节，后续章节不要重复输出。
+关系 from、to 和事件 participants 必须使用人物完整规范姓名；叙述者尚无姓名时统一使用“叙述者”。关系使用 relation、relationType(mentor|partner|schoolmate|colleague|family|ally|rival|other)、summary、state(active|changed|ended)、previousRelation，只输出正文明确支持且对理解人物网络有价值的持久关系；搭档、同桌、同学、老师属于有效关系，同行、对话、尸检对象不属于关系。事件使用 title、summary、eventType、track(case|character|relationship|mystery)、stage(incident|investigation|autopsy|conflict|revelation|resolution|turning_point|other)、storyTimeLabel（不确定则空）、participants、importance(normal|major)。
 中文历史人物的数字姓（如第五、第八、第一）必须作为完整姓名保留，不得截成单字简称。不同数字姓之间不得自行推断为同宗、同族或兄弟；若正文明确写出“同宗兄弟”等关系，则按原文保留。
-人物完整性优先：每一个有明确姓名且实际登场的人物都要输出；稳定称谓只有能唯一指向同一人物时才放 aliases/titles，不得把“众人、男人、侍从”等泛称生成人物。事件只提取重要事件，不生成流水账，不猜测日期。摘要保持一句话，避免重复正文，以节约 Token。
+人物完整性优先，但分层展示：主线人物标 protagonist，当前案件人物标 case，死者/受害者标 case_victim，只在回忆或背景说明出现且不参与当前事件的人物标 background。稳定称谓只有能唯一指向同一人物时才放 aliases/titles，不得把“众人、男人、侍从”等泛称生成人物。事件只提取推动案件、悬念、关系或人物成长的重要节点，不生成流水账，不猜测日期。摘要保持一句话，避免重复正文，以节约 Token。
 ${knownCharacterNames.isEmpty ? '' : '已建档人物（关系和事件可引用，但不要再次输出 character）：${knownCharacterNames.join('、')}\n'}
 ${batch.map((item) => '章节 href：${item.chapter.href}\n章节：${item.chapter.title}\n正文：\n${item.content}').join('\n\n---\n\n')}
 ''';

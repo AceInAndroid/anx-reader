@@ -256,6 +256,10 @@ legacy `readingCoach` or its MaterialBanner behavior.
   the reader pinned the choice. The in-memory cache exists only to support
   synchronous UI and prompt lookups. A legacy SharedPreferences choice is
   lazily migrated to this table and removed after a successful database save.
+- Suspense books keep `fiction.immersion` as their primary closure and add the
+  stable `fiction.suspense` facet. The facet selects the
+  `processing.volume_case_scene` strategy, durable relationship filtering and
+  narrative-order timeline without introducing a genre-specific page branch.
 - A module contributes declarations: goal templates, checkpoint behavior,
   mastery choices, outcome sections, quick prompts, capabilities, and reader-
   facing language. It cannot invoke a model, write persistent data, or open
@@ -290,6 +294,13 @@ legacy `readingCoach` or its MaterialBanner behavior.
 
 ### Fiction Story Atlas
 
+- Collection EPUBs are parsed as `work -> volume -> arc -> scene`. A top-level
+  TOC entry with children establishes a stable href-derived `workId` and
+  `workTitle`; ordinary “第一章/第二章” entries inside that work are scenes, not
+  separate cases. Backfill artifacts and checkpoints carry the work scope,
+  and Atlas filtering applies `workId` before `arcId`, so adjacent novels in a
+  single EPUB can never share characters, relationships, or timeline events.
+  Legacy artifacts without work scope remain readable.
 - The character graph and story timeline are projections of synchronized
   Reading Artifacts, not new database truth sources. `fiction.character`,
   `fiction.relationship`, and `fiction.event` remain forward-compatible kinds;
@@ -298,9 +309,25 @@ legacy `readingCoach` or its MaterialBanner behavior.
   Relationship history is ordered by source position and the latest visible
   revision becomes the current edge. Returning to an earlier position hides
   later characters, events, and relationship revisions.
+- When Artifacts carry an `arcId`, `FictionStoryAtlasService` derives the latest
+  arc encountered at the current source progress and filters the graph and
+  timeline to that case. Explicitly global/main-character Artifacts remain
+  visible; legacy Artifacts without an `arcId` remain compatible. Callers may
+  provide an explicit arc scope for a focused case view.
 - Timeline order is narrative encounter order (`sourceProgress`, source CFI,
   then creation order). `storyTimeLabel` is display-only; missing story time is
   shown as unknown rather than inferred into a false calendar date.
+- Extraction normalizes first-person narration to the stable `narrator.primary`
+  entity (displayed as “叙述者” until a real name is confirmed). Relationship
+  labels use stable types such as `mentor`, `partner`, `schoolmate`,
+  `colleague`, `family`, `ally`, and `rival`, while the original Chinese label
+  remains for display. Character artifacts are layered as `protagonist`,
+  `case`, `case_victim`, or `background`; the graph defaults to protagonist
+  and current-case layers.
+- Event artifacts carry both a semantic `track` (`case`, `character`,
+  `relationship`, or `mystery`) and a deterministic `stage` such as
+  `incident`, `investigation`, `autopsy`, `conflict`, `revelation`, or
+  `resolution`. This keeps case progression separate from character growth.
 - Opening an atlas page never invokes a model. Organizing or updating is only
   available from an active reader, previews the completed safe chapter range,
   and calls AI after explicit confirmation. Stable content-derived Artifact
@@ -321,8 +348,10 @@ legacy `readingCoach` or its MaterialBanner behavior.
   content hash and extractor version. Unchanged completed chapters are skipped;
   changed chapters are processed again. Checkpoints are emitted only after the
   corresponding AI Artifacts have been persisted.
-- Initial backfill groups at most six chapters and 24,000 source characters per
-  model request, with at most two requests in flight. A failed concurrent batch
+- Initial backfill groups chapters within a 7,200 source-character extraction
+  budget and at most two requests in flight. Long chapters split at sentence
+  boundaries before retrying, so one malformed result cannot replay an entire
+  case. A failed concurrent batch
   must not discard checkpoints from successful sibling batches. The default
   extraction surface is deliberately limited to characters, relationships, and
   important events to avoid token-heavy scene-by-scene summaries.
@@ -398,6 +427,17 @@ legacy `readingCoach` or its MaterialBanner behavior.
   remote state can be consumed on every device, but cross-device undo is not
   promised in this phase.
 
+### Fiction character archive presentation
+
+- The fiction entry is named “故事人物档案”; the relationship network remains
+  available as a secondary view rather than a required reading output.
+- Compact mode is selected by default for small casts and shows current-person
+  recall plus the protagonist's local one-hop relationships. Complete mode is
+  an explicit user choice for the full network. The choice is stored per book
+  and per device, not synchronized.
+- Person recall and the mystery ledger are the baseline fiction outputs;
+  generating or opening a relationship graph is optional and never triggers AI.
+
 ## CloudBase Reading Agent Sync
 
 CloudBase is an optional transport for Reading Agent state, not a replacement
@@ -455,7 +495,8 @@ merge rules; the server only isolates and returns packages.
   trusted local or private-network LM Studio/Ollama endpoint; built-in cloud
   providers still require credentials. A local endpoint selection is excluded
   from preference restore because `localhost` and LAN addresses are not
-  portable between devices.
+  portable between devices. Its product role is explicitly “local candidate
+  extractor + evidence filter”, not a full-book relationship-graph generator.
 - User-visible chapter and book summaries remain on the general model. The
   lightweight role is limited to Story Atlas candidate extraction, cached
   rolling conversation summaries, and reading-memory topic grouping. These

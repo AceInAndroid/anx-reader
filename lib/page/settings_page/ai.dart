@@ -1423,7 +1423,7 @@ class _AiProviderConfigurationSection extends ConsumerWidget {
         key: const ValueKey('ai-extraction-provider-card'),
         icon: Icons.compress_rounded,
         title: '轻量提取与摘要引擎',
-        description: '本地或小参数模型：故事档案、内部摘要和阅读记忆。疑难项才交给通用模型复核。',
+        description: '本地候选提取器 + 证据筛选器：提取故事档案候选并保留原文证据，疑难项才交给通用模型复核。',
         status: extraction == null
             ? '未启用'
             : '${extraction.title} · ${extraction.model} · ${extraction.deployment == AiProviderDeployment.localPrivate ? '本地/内网' : '云端'}',

@@ -17,6 +17,18 @@ enum BookReadingProfileMatchSource {
   legacyPreference,
 }
 
+/// Stable, namespaced facets used to specialize a book profile without
+/// coupling persisted data to a Dart enum. Facets are intentionally additive:
+/// the primary closure can remain `fiction.immersion` while suspense books
+/// opt into case-aware processing and scoped projections.
+abstract final class ReadingProfileFacetIds {
+  static const suspense = 'fiction.suspense';
+  static const processingVolumeCaseScene = 'processing.volume_case_scene';
+  static const entitiesSuspense = 'entities.character_case_clue_evidence';
+  static const timelineNarrativeOrder = 'timeline.narrative_order';
+  static const relationshipsDurableOnly = 'relationships.durable_only';
+}
+
 /// Per-book reading experience selection. This row lives in the synchronized
 /// database; [primaryModuleId] is a stable registry id rather than a Dart enum.
 class BookReadingProfile {
@@ -41,6 +53,29 @@ class BookReadingProfile {
   final int schemaVersion;
   final int createdAt;
   final int updatedAt;
+
+  bool hasFacet(String facet) => facets.contains(facet);
+
+  /// Whether this book should use the suspense/case-oriented story pipeline.
+  bool get isSuspense => hasFacet(ReadingProfileFacetIds.suspense);
+
+  String get processingStrategy => hasFacet(
+        ReadingProfileFacetIds.processingVolumeCaseScene,
+      )
+          ? ReadingProfileFacetIds.processingVolumeCaseScene
+          : 'processing.chapter_scene';
+
+  String get timelineStrategy => hasFacet(
+        ReadingProfileFacetIds.timelineNarrativeOrder,
+      )
+          ? ReadingProfileFacetIds.timelineNarrativeOrder
+          : 'timeline.narrative_order';
+
+  String get relationshipStrategy => hasFacet(
+        ReadingProfileFacetIds.relationshipsDurableOnly,
+      )
+          ? ReadingProfileFacetIds.relationshipsDurableOnly
+          : 'relationships.default';
 
   BookReadingProfile copyWith({
     String? primaryModuleId,

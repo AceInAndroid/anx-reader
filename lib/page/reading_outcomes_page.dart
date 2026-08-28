@@ -334,6 +334,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
                 builder: (_) => FictionCharacterGraphPage(
                   book: widget.book,
                   initialAtlas: atlas,
+                  arcId: atlas.arcId,
                   onOpenLocation: _openLocation,
                   onRequestOrganize: widget.onOrganizeStoryArchive == null
                       ? null
@@ -348,6 +349,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
                 builder: (_) => FictionStoryTimelinePage(
                   book: widget.book,
                   initialAtlas: atlas,
+                  arcId: atlas.arcId,
                   onOpenLocation: _openLocation,
                   onRequestOrganize: widget.onOrganizeStoryArchive == null
                       ? null

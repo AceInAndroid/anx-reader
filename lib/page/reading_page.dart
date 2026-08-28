@@ -42,6 +42,7 @@ import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
 import 'package:anx_reader/service/ai/fiction_reading_service.dart';
 import 'package:anx_reader/service/ai/fiction_backfill_service.dart';
+import 'package:anx_reader/service/ai/reading_structure_parser.dart';
 import 'package:anx_reader/service/ai/fiction_hybrid_extraction_service.dart';
 import 'package:anx_reader/service/ai/reading_coverage_service.dart';
 import 'package:anx_reader/service/ai/reading_device_identity.dart';
@@ -1525,16 +1526,18 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     double fromProgress = 0,
   }) {
     final result = <FictionBackfillChapter>[];
-    void addItems(List<TocItem> items) {
+    void addItems(List<TocItem> items, [int depth = 0]) {
       for (final item in items) {
         if (item.href.isNotEmpty) {
           result.add(FictionBackfillChapter(
             href: item.href,
             title: item.label,
             startProgress: item.startPercentage,
+            tocDepth: depth,
+            hasChildren: item.subitems.isNotEmpty,
           ));
         }
-        addItems(item.subitems);
+        addItems(item.subitems, depth + 1);
       }
     }
 
@@ -1545,6 +1548,19 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
     final unique = byHref.values.toList()
       ..sort((a, b) => a.startProgress.compareTo(b.startProgress));
+    final structure = const ReadingStructureParser().parse([
+      for (final chapter in unique)
+        ReadingStructureChapter(
+          href: chapter.href,
+          title: chapter.title,
+          startProgress: chapter.startProgress,
+          tocDepth: chapter.tocDepth,
+          hasChildren: chapter.hasChildren,
+        ),
+    ]);
+    final unitsByHref = {
+      for (final unit in structure.units) unit.chapter.href: unit,
+    };
     return [
       for (var index = 0; index < unique.length; index++)
         FictionBackfillChapter(
@@ -1555,6 +1571,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           // text could cross the safe boundary.
           endProgress:
               index + 1 < unique.length ? unique[index + 1].startProgress : 1,
+          workId: unitsByHref[unique[index].href]?.workId,
+          workTitle: unitsByHref[unique[index].href]?.workTitle,
+          volumeId: unitsByHref[unique[index].href]?.volumeId,
+          arcId: unitsByHref[unique[index].href]?.arcId,
+          sceneId: unitsByHref[unique[index].href]?.sceneId,
         ),
     ]
         .where((chapter) =>

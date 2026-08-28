@@ -71,7 +71,7 @@ class AiProviderListPage extends ConsumerWidget {
                 AiProviderListMode.translation =>
                   l10n.settingsAiTranslationProvidersTip,
                 AiProviderListMode.extraction =>
-                  '用于故事档案、内部上下文摘要和阅读记忆整理。完整正文默认只发送到此引擎。',
+                  '本地候选提取器 + 证据筛选器：用于故事档案、内部摘要和阅读记忆。完整正文只进入此引擎，最终结果还会经过确定性校验。',
                 AiProviderListMode.general =>
                   l10n.settingsAiGeneralProvidersTip,
               },
@@ -148,7 +148,7 @@ class AiProviderListPage extends ConsumerWidget {
               '兼容地址：http://<主机IP>:11434/v1/chat/completions\n\n'
               'Android 上 localhost 指手机本身。连接电脑或 NAS '
               '时请使用局域网 IP，并只在受信任网络中启用无认证服务。\n\n'
-              '完整正文默认只发送到此引擎；通用线上模型只复核疑难候选和短证据。',
+              '定位是“本地候选提取器 + 证据筛选器”，不是全书关系图生成器。完整正文默认只发送到此引擎；通用线上模型只复核疑难候选和短证据。',
             ),
           ),
           actions: [
