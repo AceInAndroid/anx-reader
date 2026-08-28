@@ -501,7 +501,13 @@ class ReadingClosurePolicyMatcher {
         ReadingProfileFacetIds.timelineNarrativeOrder,
         ReadingProfileFacetIds.relationshipsDurableOnly,
       },
-      if (RegExp(r'历史|王朝|战争|history|historical').hasMatch(text)) 'historical',
+      if (RegExp(r'历史|王朝|战争|history|historical').hasMatch(text)) ...{
+        'historical',
+        ReadingProfileFacetIds.timelineHistoricalDefault,
+      },
+      if (RegExp(r'家族|家庭|亲情|现实主义|family|realist').hasMatch(text)) ...{
+        ReadingProfileFacetIds.timelineFamilyDefault,
+      },
       if (RegExp(r'外语|英语|日语|法语|english|japanese|french').hasMatch(text))
         'foreign_language',
       if (RegExp(r'投资|金融|财务|估值|finance|invest').hasMatch(text)) 'finance',
@@ -513,6 +519,16 @@ class ReadingClosurePolicyMatcher {
       author: author,
       description: description,
     );
+    final hasDefaultTimeline =
+        facets.any((facet) => facet.startsWith('timeline.default.'));
+    if (policy.id == ReadingClosureIds.fictionImmersion &&
+        !hasDefaultTimeline &&
+        !facets.contains(ReadingProfileFacetIds.suspense)) {
+      facets.add(ReadingProfileFacetIds.timelineCharacterDefault);
+    }
+    if (facets.contains(ReadingProfileFacetIds.suspense)) {
+      facets.add(ReadingProfileFacetIds.timelineCaseDefault);
+    }
     final explicitSignal =
         policy.id != ReadingClosureIds.knowledgeArgument || facets.isNotEmpty;
     return DetectedReadingProfile(

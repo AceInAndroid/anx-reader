@@ -16,7 +16,7 @@ class ReadingStructureParser {
       final title = chapter.title.trim();
       final startsWork = chapter.hasChildren &&
           chapter.tocDepth == 0 &&
-          !_isUtilityTitle(title) &&
+          !isNonStoryTitle(title) &&
           !_volumePattern.hasMatch(title);
       if (startsWork) {
         workId = 'work-${_stableHrefToken(chapter.href)}';
@@ -68,13 +68,17 @@ class ReadingStructureParser {
     caseSensitive: false,
   );
 
-  static bool _isUtilityTitle(String title) => const {
+  static bool isNonStoryTitle(String title) => const {
         '封面',
         '版权',
         '版权信息',
         '目录',
         '前言',
         '序言',
+        '作者简介',
+        '译者序',
+        '编者按',
+        '后记',
       }.contains(title);
 
   static String _stableHrefToken(String href) {

@@ -1,6 +1,7 @@
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
+import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,6 +15,7 @@ class FictionStoryTimelinePage extends StatefulWidget {
     this.onRequestOrganize,
     this.initialAtlas,
     this.arcId,
+    this.readingProfile,
   });
 
   final Book book;
@@ -21,6 +23,7 @@ class FictionStoryTimelinePage extends StatefulWidget {
   final VoidCallback? onRequestOrganize;
   final FictionStoryAtlas? initialAtlas;
   final String? arcId;
+  final BookReadingProfile? readingProfile;
 
   @override
   State<FictionStoryTimelinePage> createState() =>
@@ -40,6 +43,8 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
   String? _lastViewedChapter;
   bool _restoreJumpPending = false;
   final Map<String, GlobalKey> _chapterKeys = {};
+  BookReadingProfile? _profile;
+  String? _selectedStoryTrack;
 
   @override
   void initState() {
@@ -51,6 +56,9 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             visibleAtProgress: widget.book.readingPercentage,
             arcId: widget.arcId,
           );
+    _profile = widget.readingProfile ??
+        readingExperienceProfileService.cached(widget.book.id);
+    _selectedStoryTrack = _profile?.defaultStoryTrack;
     _restoreLastViewedChapter();
   }
 
@@ -145,9 +153,19 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
       );
 
   Widget _timelineBody(FictionStoryAtlas atlas) {
-    final sourceEvents = _view == _StoryTimelineView.relationship
+    var sourceEvents = _view == _StoryTimelineView.relationship
         ? fictionStoryAtlasService.relationshipTimeline(atlas)
         : atlas.timeline;
+    if (_view == _StoryTimelineView.story && _selectedStoryTrack != null) {
+      final preferred = _selectedStoryTrack!;
+      final preferredEvents = sourceEvents.where((event) {
+        final raw = event.source.payload['track'];
+        return raw == null || FictionEventTrackIds.normalize(raw) == preferred;
+      }).toList(growable: false);
+      // A profile should never make a valid archive appear empty. If this
+      // track has no data yet, show the complete story until it is populated.
+      if (preferredEvents.isNotEmpty) sourceEvents = preferredEvents;
+    }
     if (_view == _StoryTimelineView.mystery) {
       return _mysteryTimelineBody(atlas);
     }
@@ -363,36 +381,64 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
               onChanged: (value) => setState(() => _participant = value),
             ),
           if (_view == _StoryTimelineView.story)
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                FilterChip(
-                  label: const Text('全部类型'),
-                  selected: _kinds.isEmpty,
-                  onSelected: (_) => setState(_kinds.clear),
-                ),
-                for (final entry in const {
-                  ReadingArtifactKinds.event: '事件',
-                  ReadingArtifactKinds.scene: '场景',
-                  ReadingArtifactKinds.clue: '线索',
-                  ReadingArtifactKinds.mystery: '悬念',
-                }.entries)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 6),
-                    child: FilterChip(
-                      label: Text(entry.value),
-                      selected: _kinds.contains(entry.key),
-                      onSelected: (selected) => setState(() {
-                        if (selected) {
-                          _kinds.add(entry.key);
-                        } else {
-                          _kinds.remove(entry.key);
-                        }
-                      }),
-                    ),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  FilterChip(
+                    label: const Text('全部故事线'),
+                    selected: _selectedStoryTrack == null,
+                    onSelected: (_) =>
+                        setState(() => _selectedStoryTrack = null),
                   ),
-              ]),
-            ),
+                  for (final entry in const {
+                    FictionEventTrackIds.caseInvestigation: '案件线',
+                    FictionEventTrackIds.family: '家庭线',
+                    FictionEventTrackIds.historical: '历史线',
+                    FictionEventTrackIds.character: '人物成长线',
+                  }.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: FilterChip(
+                        label: Text(entry.value),
+                        selected: _selectedStoryTrack == entry.key,
+                        onSelected: (_) =>
+                            setState(() => _selectedStoryTrack = entry.key),
+                      ),
+                    ),
+                ]),
+              ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  FilterChip(
+                    label: const Text('全部类型'),
+                    selected: _kinds.isEmpty,
+                    onSelected: (_) => setState(_kinds.clear),
+                  ),
+                  for (final entry in const {
+                    ReadingArtifactKinds.event: '事件',
+                    ReadingArtifactKinds.scene: '场景',
+                    ReadingArtifactKinds.clue: '线索',
+                    ReadingArtifactKinds.mystery: '悬念',
+                  }.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: FilterChip(
+                        label: Text(entry.value),
+                        selected: _kinds.contains(entry.key),
+                        onSelected: (selected) => setState(() {
+                          if (selected) {
+                            _kinds.add(entry.key);
+                          } else {
+                            _kinds.remove(entry.key);
+                          }
+                        }),
+                      ),
+                    ),
+                ]),
+              ),
+            ]),
           Text('$chapterCount 个章节分组 · 仅在展开章节时显示事件',
               style: Theme.of(context).textTheme.bodySmall),
         ]),

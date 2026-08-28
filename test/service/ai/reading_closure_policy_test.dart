@@ -69,6 +69,31 @@ void main() {
         ReadingProfileFacetIds.processingVolumeCaseScene);
     expect(profile.relationshipStrategy,
         ReadingProfileFacetIds.relationshipsDurableOnly);
+    expect(profile.defaultStoryTrack, FictionEventTrackIds.caseInvestigation);
+  });
+
+  test('book profile selects a stable default story track by genre', () {
+    BookReadingProfile profileFor(String title, String description) {
+      final detected = matcher.detect(
+        mode: ReadingAiMode.general,
+        title: title,
+        description: description,
+      );
+      return BookReadingProfile(
+        bookId: 1,
+        primaryModuleId: detected.moduleId,
+        facets: detected.facets,
+        createdAt: 1,
+        updatedAt: 1,
+      );
+    }
+
+    expect(profileFor('家族往事', '现实主义家庭小说').defaultStoryTrack,
+        FictionEventTrackIds.family);
+    expect(profileFor('王朝兴亡', '历史小说').defaultStoryTrack,
+        FictionEventTrackIds.historical);
+    expect(profileFor('普通小说', '一个人的成长').defaultStoryTrack,
+        FictionEventTrackIds.character);
   });
 
   test('pinned closure overrides metadata and exposes distinct behavior', () {

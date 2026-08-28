@@ -317,17 +317,25 @@ legacy `readingCoach` or its MaterialBanner behavior.
 - Timeline order is narrative encounter order (`sourceProgress`, source CFI,
   then creation order). `storyTimeLabel` is display-only; missing story time is
   shown as unknown rather than inferred into a false calendar date.
-- Extraction normalizes first-person narration to the stable `narrator.primary`
-  entity (displayed as “叙述者” until a real name is confirmed). Relationship
-  labels use stable types such as `mentor`, `partner`, `schoolmate`,
-  `colleague`, `family`, `ally`, and `rival`, while the original Chinese label
+- Extraction distinguishes the frame/outer narrator (`narrator.outer`,
+  `narrative.outer`) from a named character narrating their own story
+  (`narrative.inner`). Legacy `narrator.primary` data resolves to the outer
+  narrator but is not written by new extraction. Relationship labels use
+  stable namespaced types such as `relation.mentor`, `relation.partner`,
+  `relation.schoolmate`, `relation.colleague`, `relation.family`,
+  `relation.ally`, and `relation.rival`, while the original Chinese label
   remains for display. Character artifacts are layered as `protagonist`,
   `case`, `case_victim`, or `background`; the graph defaults to protagonist
   and current-case layers.
-- Event artifacts carry both a semantic `track` (`case`, `character`,
-  `relationship`, or `mystery`) and a deterministic `stage` such as
-  `incident`, `investigation`, `autopsy`, `conflict`, `revelation`, or
-  `resolution`. This keeps case progression separate from character growth.
+- Event artifacts carry namespaced semantic tracks (`story.case`,
+  `story.family`, `story.historical`, `story.character`, and related tracks)
+  and deterministic stages (`stage.incident`, `stage.investigation`,
+  `stage.autopsy`, `stage.conflict`, `stage.revelation`, etc.). Legacy and
+  localized values are normalized on read; unknown model values become the
+  corresponding `*.other/general` ID instead of entering persistence as a new
+  taxonomy. `BookReadingProfile` selects the default case, family, historical,
+  or character-growth track; a missing preferred track falls back to all
+  visible events rather than showing an empty archive.
 - Opening an atlas page never invokes a model. Organizing or updating is only
   available from an active reader, previews the completed safe chapter range,
   and calls AI after explicit confirmation. Stable content-derived Artifact

@@ -27,6 +27,126 @@ abstract final class ReadingProfileFacetIds {
   static const entitiesSuspense = 'entities.character_case_clue_evidence';
   static const timelineNarrativeOrder = 'timeline.narrative_order';
   static const relationshipsDurableOnly = 'relationships.durable_only';
+  static const timelineCaseDefault = 'timeline.default.case';
+  static const timelineFamilyDefault = 'timeline.default.family';
+  static const timelineHistoricalDefault = 'timeline.default.historical';
+  static const timelineCharacterDefault = 'timeline.default.character';
+}
+
+/// Persisted story taxonomy. These are deliberately strings (rather than
+/// enums) so new clients can add values without changing the database schema.
+abstract final class FictionEventTrackIds {
+  static const caseInvestigation = 'story.case';
+  static const family = 'story.family';
+  static const historical = 'story.historical';
+  static const character = 'story.character';
+  static const relationship = 'story.relationship';
+  static const mystery = 'story.mystery';
+  static const social = 'story.social';
+  static const general = 'story.general';
+
+  static String normalize(Object? value) {
+    final raw = value?.toString().trim().toLowerCase() ?? '';
+    return switch (raw) {
+      'case' ||
+      '案件' ||
+      '案情' ||
+      'investigation' ||
+      caseInvestigation =>
+        caseInvestigation,
+      'family' || '家庭' || '家族' => family,
+      'historical' || 'history' || '历史' => historical,
+      'character' || '人物' || '成长' => character,
+      'relationship' || '关系' => relationship,
+      'mystery' || '悬念' => mystery,
+      'social' || '社会' => social,
+      'general' || '' => general,
+      _ => general,
+    };
+  }
+}
+
+abstract final class FictionEventStageIds {
+  static const opening = 'stage.opening';
+  static const incident = 'stage.incident';
+  static const investigation = 'stage.investigation';
+  static const autopsy = 'stage.autopsy';
+  static const development = 'stage.development';
+  static const conflict = 'stage.conflict';
+  static const revelation = 'stage.revelation';
+  static const climax = 'stage.climax';
+  static const resolution = 'stage.resolution';
+  static const turningPoint = 'stage.turning_point';
+  static const background = 'stage.background';
+  static const other = 'stage.other';
+
+  static String normalize(Object? value) {
+    final raw = value?.toString().trim().toLowerCase() ?? '';
+    return switch (raw) {
+      '开端' || 'opening' || opening => opening,
+      '案发' || 'incident' || incident => incident,
+      '勘查' || '调查' || '侦查' || 'investigation' || investigation => investigation,
+      '尸检' || 'autopsy' || autopsy => autopsy,
+      '发展' || 'development' || development => development,
+      '冲突' || 'conflict' || conflict => conflict,
+      '揭示' || 'revelation' || revelation => revelation,
+      '高潮' || 'climax' || climax => climax,
+      '结案' || '结论' || 'resolution' || resolution => resolution,
+      '转折' ||
+      'turning_point' ||
+      'turning point' ||
+      turningPoint =>
+        turningPoint,
+      '背景' || 'background' || background => background,
+      _ => other,
+    };
+  }
+}
+
+abstract final class FictionRelationTypeIds {
+  static const mentor = 'relation.mentor';
+  static const partner = 'relation.partner';
+  static const schoolmate = 'relation.schoolmate';
+  static const colleague = 'relation.colleague';
+  static const comrade = 'relation.comrade';
+  static const family = 'relation.family';
+  static const spouse = 'relation.spouse';
+  static const parentChild = 'relation.parent_child';
+  static const ally = 'relation.ally';
+  static const rival = 'relation.rival';
+  static const other = 'relation.other';
+
+  static String normalize(Object? value) {
+    final raw = value?.toString().trim().toLowerCase() ?? '';
+    return switch (raw) {
+      'mentor' || '师徒' || '导师' || '老师' || mentor => mentor,
+      'partner' || '搭档' || '队友' || partner => partner,
+      'schoolmate' || '同桌' || '同学' || schoolmate => schoolmate,
+      'colleague' || '同事' || '同僚' || colleague => colleague,
+      'comrade' || '战友' || comrade => comrade,
+      'spouse' || '夫妻' || '配偶' || spouse => spouse,
+      'parent_child' || '亲子' || parentChild => parentChild,
+      'family' || '家人' || '亲属' || family => family,
+      'ally' || '盟友' || '朋友' || ally => ally,
+      'rival' || '敌对' || '对手' || rival => rival,
+      _ => other,
+    };
+  }
+}
+
+abstract final class FictionNarrativeLayerIds {
+  static const outer = 'narrative.outer';
+  static const inner = 'narrative.inner';
+  static const none = 'narrative.none';
+
+  static String normalize(Object? value) {
+    final raw = value?.toString().trim().toLowerCase() ?? '';
+    return switch (raw) {
+      'outer' || '外层' || '框架' || outer => outer,
+      'inner' || '内层' || '人物叙述' || inner => inner,
+      _ => none,
+    };
+  }
 }
 
 /// Per-book reading experience selection. This row lives in the synchronized
@@ -76,6 +196,22 @@ class BookReadingProfile {
       )
           ? ReadingProfileFacetIds.relationshipsDurableOnly
           : 'relationships.default';
+
+  String get defaultStoryTrack {
+    if (hasFacet(ReadingProfileFacetIds.timelineCaseDefault) || isSuspense) {
+      return FictionEventTrackIds.caseInvestigation;
+    }
+    if (hasFacet(ReadingProfileFacetIds.timelineFamilyDefault) ||
+        hasFacet('family') ||
+        hasFacet('realist')) {
+      return FictionEventTrackIds.family;
+    }
+    if (hasFacet(ReadingProfileFacetIds.timelineHistoricalDefault) ||
+        hasFacet('historical')) {
+      return FictionEventTrackIds.historical;
+    }
+    return FictionEventTrackIds.character;
+  }
 
   BookReadingProfile copyWith({
     String? primaryModuleId,

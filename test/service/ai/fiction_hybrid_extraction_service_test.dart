@@ -116,8 +116,31 @@ void main() {
       },
     );
     expect(narrator['name'], '叙述者');
-    expect(narrator['entityId'], 'narrator.primary');
+    expect(narrator['entityId'], 'narrator.outer');
+    expect(narrator['narrativeLayer'], FictionNarrativeLayerIds.outer);
     expect(narrator['role'], 'protagonist');
+
+    final narratorDescriptor = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.character,
+      {
+        'name': '采歌人',
+        'aliases': ['我'],
+      },
+    );
+    expect(narratorDescriptor['name'], '叙述者');
+    expect(narratorDescriptor['entityId'], 'narrator.outer');
+
+    final innerNarrator = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.character,
+      {
+        'name': '福贵',
+        'aliases': ['我'],
+        'narrativeLayer': 'inner',
+      },
+    );
+    expect(innerNarrator['name'], '福贵');
+    expect(innerNarrator['entityId'], isNull);
+    expect(innerNarrator['narrativeLayer'], FictionNarrativeLayerIds.inner);
 
     final relation = FictionCandidateRuleValidator.normalizePayload(
       ReadingArtifactKinds.relationship,
@@ -127,7 +150,13 @@ void main() {
         'relation': '搭档',
       },
     );
-    expect(relation['relationType'], 'partner');
+    expect(relation['relationType'], FictionRelationTypeIds.partner);
+
+    final comrade = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.relationship,
+      {'from': '福贵', 'to': '春生', 'relation': '战友'},
+    );
+    expect(comrade['relationType'], FictionRelationTypeIds.comrade);
   });
 
   test('normalizes event track and stage', () {
@@ -135,7 +164,14 @@ void main() {
       ReadingArtifactKinds.event,
       {'eventType': '揭示'},
     );
-    expect(event['track'], 'case');
-    expect(event['stage'], 'revelation');
+    expect(event['track'], FictionEventTrackIds.caseInvestigation);
+    expect(event['stage'], FictionEventStageIds.revelation);
+
+    final unknown = FictionCandidateRuleValidator.normalizePayload(
+      ReadingArtifactKinds.event,
+      {'eventType': '其他', 'track': '模型自创轨道', 'stage': '模型自创阶段'},
+    );
+    expect(unknown['track'], FictionEventTrackIds.general);
+    expect(unknown['stage'], FictionEventStageIds.other);
   });
 }

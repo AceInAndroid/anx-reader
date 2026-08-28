@@ -4,6 +4,13 @@
 > 目的：让后续开发先复用已有能力、数据模型和入口，避免重复造轮子或绕过权限/同步规则。  
 > 产品决策以仓库根目录 [`DESIGN.md`](../../DESIGN.md) 为准；本文是“代码在哪里、已经做到什么、哪些还没有”的导航，不替代源码和测试。
 
+小说 Story Atlas 的 `track`、`stage`、`relationType` 使用稳定的
+namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在读取
+和整理时由 taxonomy 兼容层归一。叙述层以 `narrative.outer/inner` 区分
+框架叙述者与故事内人物第一人称叙述。`BookReadingProfile.defaultStoryTrack`
+按书籍特征选择案件线、家庭线、历史线或人物成长线；对应轨道尚无数据时，
+时间线安全回退为全部故事线。
+
 ## 0. AI 开发前的强制检查顺序
 
 1. 先查本地图对应的“代码入口”和“已有服务”，不要在页面直接访问数据库、直接创建模型客户端或新增平行状态。

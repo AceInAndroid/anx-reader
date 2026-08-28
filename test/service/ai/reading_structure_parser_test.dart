@@ -29,6 +29,12 @@ void main() {
     expect(structure.units.first.sceneId, 'scene-a');
   });
 
+  test('marks front matter as non-story content', () {
+    expect(ReadingStructureParser.isNonStoryTitle('前言'), isTrue);
+    expect(ReadingStructureParser.isNonStoryTitle('作者简介'), isTrue);
+    expect(ReadingStructureParser.isNonStoryTitle('第一章'), isFalse);
+  });
+
   test('scopes chapters to independent works inside a collection EPUB', () {
     final structure = parser.parse(const [
       ReadingStructureChapter(

@@ -1528,7 +1528,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     final result = <FictionBackfillChapter>[];
     void addItems(List<TocItem> items, [int depth = 0]) {
       for (final item in items) {
-        if (item.href.isNotEmpty) {
+        if (item.href.isNotEmpty &&
+            !ReadingStructureParser.isNonStoryTitle(item.label.trim())) {
           result.add(FictionBackfillChapter(
             href: item.href,
             title: item.label,

@@ -63,7 +63,24 @@ class FictionCharacterNode {
   final String? givenName;
   final String? familyName;
 
-  String get initial => name.trim().isEmpty ? '?' : name.trim()[0];
+  /// Prefer the given-name character for Chinese names; western names use
+  /// their conventional first-letter initial.
+  String get initial {
+    final value = name.trim();
+    if (value.isEmpty) return '?';
+    final han = RegExp(r'[\u3400-\u9fff\uf900-\ufaff]')
+        .allMatches(value)
+        .map((match) => match.group(0)!)
+        .toList(growable: false);
+    return han.isNotEmpty ? han.last : value[0].toUpperCase();
+  }
+
+  String get narrativeLayer => FictionNarrativeLayerIds.normalize(
+        source.payload['narrativeLayer'] ??
+            (source.payload['entityId'] == 'narrator.primary'
+                ? FictionNarrativeLayerIds.outer
+                : null),
+      );
 }
 
 class FictionRelationshipEdge {
@@ -86,6 +103,8 @@ class FictionRelationshipEdge {
   final ReadingArtifact source;
 
   bool get isChanged => state == 'changed' || state == 'ended';
+  String get relationType =>
+      FictionRelationTypeIds.normalize(source.payload['relationType']);
 }
 
 class FictionTimelineEvent {
@@ -111,6 +130,8 @@ class FictionTimelineEvent {
   bool get isMystery => kind == ReadingArtifactKinds.mystery;
   bool get isClue => kind == ReadingArtifactKinds.clue;
   bool get isRelationship => kind == ReadingArtifactKinds.relationship;
+  String get track => FictionEventTrackIds.normalize(source.payload['track']);
+  String get stage => FictionEventStageIds.normalize(source.payload['stage']);
 }
 
 enum FictionTimelineDensity { compact, standard, complete }
@@ -696,7 +717,9 @@ class FictionStoryAtlasService {
           );
           return _CharacterRecord(
             name: name,
-            entityId: _cleanReference(_text(payload['entityId'])),
+            entityId: _normalizeNarratorEntityId(
+              _cleanReference(_text(payload['entityId'])),
+            ),
             summary: _text(payload['summary']),
             namingSystem: namingSystem,
             courtesyNames: List.unmodifiable({
@@ -944,6 +967,9 @@ class FictionStoryAtlasService {
       clean: _cleanReference,
     );
   }
+
+  String _normalizeNarratorEntityId(String value) =>
+      value == 'narrator.primary' ? 'narrator.outer' : value;
 
   int _characterRecordPreference(
       _CharacterRecord left, _CharacterRecord right) {

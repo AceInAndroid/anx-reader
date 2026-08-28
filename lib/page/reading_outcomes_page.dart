@@ -350,6 +350,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
                   book: widget.book,
                   initialAtlas: atlas,
                   arcId: atlas.arcId,
+                  readingProfile: _readingProfile,
                   onOpenLocation: _openLocation,
                   onRequestOrganize: widget.onOrganizeStoryArchive == null
                       ? null

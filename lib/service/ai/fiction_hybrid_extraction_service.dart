@@ -165,10 +165,12 @@ class FictionCandidateRuleValidator {
     Map<String, dynamic> payload,
   ) {
     final result = Map<String, dynamic>.from(payload);
+    final narrativeLayer =
+        FictionNarrativeLayerIds.normalize(result['narrativeLayer']);
     String normalizePerson(Object? value) {
       final text = value?.toString().trim() ?? '';
-      if (text == '我' || text == '叙述者' || text == 'narrator') {
-        return '叙述者';
+      if ({'我', '叙述者', 'narrator', '采歌人', '讲故事的人'}.contains(text)) {
+        return narrativeLayer == FictionNarrativeLayerIds.inner ? text : '叙述者';
       }
       return text;
     }
@@ -180,12 +182,24 @@ class FictionCandidateRuleValidator {
               .where((e) => e.isNotEmpty)
               .toSet() ??
           <String>{};
-      if (name == '叙述者' || aliases.contains('我')) {
-        result['name'] = name;
-        result['entityId'] = 'narrator.primary';
+      if (narrativeLayer != FictionNarrativeLayerIds.inner &&
+          (name == '叙述者' || aliases.contains('我'))) {
+        if (name != '叙述者' && name.isNotEmpty) {
+          result['titles'] = {
+            ...((result['titles'] as List?)?.map((e) => e.toString()) ??
+                const <String>[]),
+            name,
+          }.toList();
+        }
+        result['name'] = '叙述者';
+        result['entityId'] = 'narrator.outer';
+        result['narrativeLayer'] = FictionNarrativeLayerIds.outer;
         result['role'] = result['role'] ?? 'protagonist';
         result['namingSystem'] = result['namingSystem'] ?? 'chinese';
         result['aliases'] = {...aliases, '我'}.toList();
+      } else if (narrativeLayer == FictionNarrativeLayerIds.inner) {
+        result['narrativeLayer'] = FictionNarrativeLayerIds.inner;
+        result['narratorRole'] ??= 'first_person';
       }
     } else if (kind == ReadingArtifactKinds.relationship) {
       // Accept the common subject/predicate/object spelling emitted by
@@ -195,11 +209,12 @@ class FictionCandidateRuleValidator {
       result['relation'] ??= result['predicate'];
       result['from'] = normalizePerson(result['from']);
       result['to'] = normalizePerson(result['to']);
-      if (result['from'] == '叙述者') result['fromEntityId'] = 'narrator.primary';
-      if (result['to'] == '叙述者') result['toEntityId'] = 'narrator.primary';
+      if (result['from'] == '叙述者') result['fromEntityId'] = 'narrator.outer';
+      if (result['to'] == '叙述者') result['toEntityId'] = 'narrator.outer';
       final relation = result['relation']?.toString().trim() ?? '';
-      result['relationType'] =
-          result['relationType'] ?? _relationTypeFor(relation);
+      result['relationType'] = FictionRelationTypeIds.normalize(
+        result['relationType'] ?? _relationTypeFor(relation),
+      );
     } else if (kind == ReadingArtifactKinds.event) {
       final type = result['eventType']?.toString().trim() ?? '';
       if ((result['title']?.toString().trim().isEmpty ?? true) &&
@@ -210,19 +225,10 @@ class FictionCandidateRuleValidator {
       if (participants is List) {
         result['participants'] = participants.map(normalizePerson).toList();
       }
-      final track = result['track']?.toString().trim();
-      result['track'] = track == '人物' || track == '成长'
-          ? 'character'
-          : track == '关系'
-              ? 'relationship'
-              : track == '悬念'
-                  ? 'mystery'
-                  : track == '案件' ||
-                          track == '案情' ||
-                          track == null ||
-                          track.isEmpty
-                      ? (type == '转折' ? 'character' : 'case')
-                      : track;
+      result['track'] = result['track'] == null && type != '转折'
+          ? FictionEventTrackIds.caseInvestigation
+          : FictionEventTrackIds.normalize(
+              result['track'] ?? FictionEventTrackIds.character);
       result['stage'] = _normalizeStage(result['stage'], type);
     }
     return result;
@@ -232,41 +238,47 @@ class FictionCandidateRuleValidator {
     if (relation.contains('师') ||
         relation.contains('导师') ||
         relation.contains('老师')) {
-      return 'mentor';
+      return FictionRelationTypeIds.mentor;
     }
-    if (relation.contains('搭档') || relation.contains('队友')) return 'partner';
-    if (relation.contains('同桌') || relation.contains('同学')) return 'schoolmate';
-    if (relation.contains('同事') || relation.contains('同僚')) return 'colleague';
+    if (relation.contains('搭档') || relation.contains('队友')) {
+      return FictionRelationTypeIds.partner;
+    }
+    if (relation.contains('同桌') || relation.contains('同学')) {
+      return FictionRelationTypeIds.schoolmate;
+    }
+    if (relation.contains('同事') || relation.contains('同僚')) {
+      return FictionRelationTypeIds.colleague;
+    }
+    if (relation.contains('战友')) return FictionRelationTypeIds.comrade;
+    if (RegExp(r'夫妻|婚|丈夫|妻子|配偶').hasMatch(relation)) {
+      return FictionRelationTypeIds.spouse;
+    }
+    if (RegExp(r'父|母|子|女').hasMatch(relation)) {
+      return FictionRelationTypeIds.parentChild;
+    }
     if (RegExp(r'父|母|子|女|兄|弟|姐|妹|祖|孙|夫妻|婚|亲属').hasMatch(relation)) {
-      return 'family';
+      return FictionRelationTypeIds.family;
     }
-    if (relation.contains('盟友') || relation.contains('朋友')) return 'ally';
-    if (relation.contains('敌') || relation.contains('对手')) return 'rival';
-    return 'other';
+    if (relation.contains('盟友') || relation.contains('朋友')) {
+      return FictionRelationTypeIds.ally;
+    }
+    if (relation.contains('敌') || relation.contains('对手')) {
+      return FictionRelationTypeIds.rival;
+    }
+    return FictionRelationTypeIds.other;
   }
 
   static String _stageForEvent(String eventType) => switch (eventType) {
-        '冲突' => 'conflict',
-        '相遇' => 'encounter',
-        '揭示' => 'revelation',
-        '离别' => 'separation',
-        '转折' => 'turning_point',
-        _ => 'other',
+        '冲突' => FictionEventStageIds.conflict,
+        '揭示' => FictionEventStageIds.revelation,
+        '转折' => FictionEventStageIds.turningPoint,
+        _ => FictionEventStageIds.other,
       };
 
   static String _normalizeStage(Object? value, String eventType) {
     final stage = value?.toString().trim() ?? '';
     if (stage.isNotEmpty) {
-      return switch (stage) {
-        '案发' => 'incident',
-        '勘查' || '调查' || '侦查' => 'investigation',
-        '尸检' => 'autopsy',
-        '冲突' => 'conflict',
-        '揭示' => 'revelation',
-        '结案' || '结论' => 'resolution',
-        '转折' => 'turning_point',
-        _ => stage,
-      };
+      return FictionEventStageIds.normalize(stage);
     }
     return _stageForEvent(eventType);
   }
@@ -440,8 +452,10 @@ class FictionCandidateRuleValidator {
     '导师',
     '老师',
     '启蒙老师',
+    '战友',
     '师兄',
     '师姐',
+    '战友',
   ];
   static const _explicitRelationTerms = [
     '父亲',
