@@ -7,10 +7,9 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/models/selection_snapshot.dart';
+import 'package:anx_reader/models/reading_lookup.dart';
 import 'package:anx_reader/service/reading_note/reading_note_capture_service.dart';
 import 'package:anx_reader/page/reading_page.dart';
-import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
-import 'package:anx_reader/service/dictionary/english_dictionary.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/tts/tts_handler.dart';
 import 'package:anx_reader/service/vocabulary_capture_service.dart';
@@ -43,6 +42,8 @@ class ExcerptMenu extends StatefulWidget {
   final Axis axis;
   final bool reverse;
   final SelectionSnapshot? selectionSnapshot;
+  final bool offlineDictionaryMode;
+  final ReadingLookupCandidate lookupCandidate;
 
   const ExcerptMenu({
     super.key,
@@ -61,6 +62,8 @@ class ExcerptMenu extends StatefulWidget {
     required this.axis,
     required this.reverse,
     this.selectionSnapshot,
+    this.offlineDictionaryMode = false,
+    required this.lookupCandidate,
   });
 
   @override
@@ -88,9 +91,7 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     }
   }
 
-  bool get _isDictionaryLookup =>
-      EnglishDictionaryService.isEnglishWord(widget.annoContent) ||
-      ChineseDictionaryService.isLookupCandidate(widget.annoContent);
+  bool get _isDictionaryLookup => widget.lookupCandidate.isDictionaryLookup;
 
   bool get _isVocabularyEnabled => Prefs().bottomNavigatorShowVocabulary;
 
@@ -101,6 +102,7 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         footnote: widget.footnote,
         actionOrder: Prefs().selectionMenuActionOrder,
         enabledActions: Prefs().enabledSelectionMenuActions,
+        candidate: widget.lookupCandidate,
       );
 
   Future<void> _loadVocabularyState() async {
@@ -436,12 +438,24 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     );
   }
 
-  Widget _sentenceButton(int direction, String label, bool enabled) {
+  Widget _moveButton(
+    int direction,
+    String label,
+    bool enabled, {
+    required bool character,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
       child: OutlinedButton.icon(
         onPressed: enabled
-            ? () => epubPlayerKey.currentState?.moveSelectionSentence(direction)
+            ? () {
+                final player = epubPlayerKey.currentState;
+                if (character) {
+                  player?.moveSelectionCharacter(direction);
+                } else {
+                  player?.moveSelectionSentence(direction);
+                }
+              }
             : null,
         icon: Icon(direction < 0 ? Icons.chevron_left : Icons.chevron_right),
         label: Text(label),
@@ -618,6 +632,11 @@ class ExcerptMenuState extends State<ExcerptMenu> {
     final snapshot = widget.selectionSnapshot;
     final showRangeControls =
         snapshot != null && snapshot.supportsRangeSelection;
+    final showRangeTypeControls =
+        showRangeControls && !widget.offlineDictionaryMode;
+    final characterMovement =
+        snapshot?.rangeType == SelectionRangeType.character;
+    final showRangeMenu = showRangeTypeControls || characterMovement;
     Widget annotationMenu = Container(
       padding: const EdgeInsets.all(6),
       decoration: widget.decoration,
@@ -659,24 +678,37 @@ class ExcerptMenuState extends State<ExcerptMenu> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (showRangeTypeControls)
+            Wrap(
+              children: [
+                _rangeButton(SelectionRangeType.character,
+                    L10n.of(context).selectionRangeCharacter),
+                _rangeButton(SelectionRangeType.word,
+                    L10n.of(context).selectionRangeWord),
+                _rangeButton(SelectionRangeType.sentence,
+                    L10n.of(context).selectionRangeSentence),
+                _rangeButton(SelectionRangeType.paragraph,
+                    L10n.of(context).selectionRangeParagraph),
+              ],
+            ),
           Wrap(
             children: [
-              _rangeButton(SelectionRangeType.character,
-                  L10n.of(context).selectionRangeCharacter),
-              _rangeButton(
-                  SelectionRangeType.word, L10n.of(context).selectionRangeWord),
-              _rangeButton(SelectionRangeType.sentence,
-                  L10n.of(context).selectionRangeSentence),
-              _rangeButton(SelectionRangeType.paragraph,
-                  L10n.of(context).selectionRangeParagraph),
-            ],
-          ),
-          Wrap(
-            children: [
-              _sentenceButton(-1, L10n.of(context).selectionPreviousSentence,
-                  snapshot?.canMovePrevious ?? false),
-              _sentenceButton(1, L10n.of(context).selectionNextSentence,
-                  snapshot?.canMoveNext ?? false),
+              _moveButton(
+                -1,
+                characterMovement
+                    ? L10n.of(context).selectionPreviousCharacter
+                    : L10n.of(context).selectionPreviousSentence,
+                snapshot?.canMovePrevious ?? false,
+                character: characterMovement,
+              ),
+              _moveButton(
+                1,
+                characterMovement
+                    ? L10n.of(context).selectionNextCharacter
+                    : L10n.of(context).selectionNextSentence,
+                snapshot?.canMoveNext ?? false,
+                character: characterMovement,
+              ),
             ],
           ),
         ],
@@ -691,7 +723,7 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         mainAxisAlignment: MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showRangeControls) ...[
+          if (showRangeMenu) ...[
             SingleChildScrollView(
               scrollDirection: widget.axis,
               child: rangeMenu,

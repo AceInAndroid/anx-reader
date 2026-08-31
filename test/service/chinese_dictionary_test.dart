@@ -35,6 +35,17 @@ void main() {
       expect(entry!.word, '作家');
     });
 
+    test('can disable context expansion for exact offline lookup', () async {
+      final entry = await ChineseDictionaryService.lookup(
+        '家',
+        contextText: '他是一位著名作家。',
+        allowContextExpansion: false,
+      );
+
+      expect(entry, isNotNull);
+      expect(entry!.word, '家');
+    });
+
     test('returns null for a missing phrase without network access', () async {
       final entry = await ChineseDictionaryService.lookup('龘龘龘');
 

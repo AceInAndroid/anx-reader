@@ -37,4 +37,15 @@ void main() {
     expect(snapshot.canMoveNext, isFalse);
     expect(snapshot.supportsRangeSelection, isTrue);
   });
+
+  test('accepts stable character movement triggers', () {
+    expect(
+      SelectionTrigger.fromCode('previousCharacter'),
+      SelectionTrigger.previousCharacter,
+    );
+    expect(
+      SelectionTrigger.fromCode('nextCharacter'),
+      SelectionTrigger.nextCharacter,
+    );
+  });
 }

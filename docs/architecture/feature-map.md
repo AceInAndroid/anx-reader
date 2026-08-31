@@ -66,6 +66,7 @@ namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在�
 | 阅读成果页 | 已实现 | 阅读页 > 本书阅读成果 | `reading_outcomes_page.dart` | 读取闭环/Atlas/记忆 | 不在成果页自动整理 |
 | 书籍 Wiki | 已实现（一期） | 阅读页 AI 旁、书籍详情 | `book_wiki_page.dart`、`book_wiki_service.dart` | `tb_book_wikis`/entries/sources/revisions，进入 Agent 增量同步 | 打开页面不扫描正文；详情页不启动隐藏阅读器 |
 | 阅读分块与证据解析 | 已实现 | 用户确认的 Wiki/Story Atlas 整理任务 | `reading_chunker.dart`、`reading_evidence_resolver.dart` | ReadingChunk 为任务中间产物；证据回到原文 offset | 不持久化完整 chunk；普通阅读不触发 |
+| 阅读查词路由 | 已实现 | 阅读页长按/选区菜单 | `reading_lookup_candidate_resolver.dart`、`reading_lookup_router.dart` | 词典缓存与用户导入 MDX | 页面不自行判断词类或决定联网；离线单字禁止上下文扩词 |
 
 ## 3. AI 底座与上下文
 

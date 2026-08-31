@@ -21,6 +21,8 @@ enum SelectionTrigger {
   rangeButton,
   previousSentence,
   nextSentence,
+  previousCharacter,
+  nextCharacter,
   api;
 
   static SelectionTrigger fromCode(Object? value) {

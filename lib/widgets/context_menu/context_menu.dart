@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/models/reading_lookup.dart';
 import 'package:anx_reader/page/reading_page.dart';
-import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
-import 'package:anx_reader/service/dictionary/english_dictionary.dart';
+import 'package:anx_reader/service/dictionary/reading_lookup_candidate_resolver.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/widgets/common/axis_flex.dart';
 import 'package:anx_reader/widgets/context_menu/excerpt_menu.dart';
@@ -27,6 +27,7 @@ Future<void> showContextMenu(
     Axis axis,
     {String? contextText,
     SelectionSnapshot? selectionSnapshot,
+    bool offlineDictionaryMode = false,
     bool Function()? isCurrentRequest}) async {
   final playerKey = epubPlayerKey.currentState;
   if (playerKey == null) return;
@@ -35,9 +36,11 @@ Future<void> showContextMenu(
   final secondaryContainerColor =
       Theme.of(context).colorScheme.secondaryContainer;
   bool isNewNote = false;
-  final isDictionaryLookup =
-      EnglishDictionaryService.isEnglishWord(annoContent) ||
-          ChineseDictionaryService.isLookupCandidate(annoContent);
+  final lookupCandidate = ReadingLookupCandidateResolver.resolve(
+    annoContent,
+    selection: selectionSnapshot,
+    offline: offlineDictionaryMode,
+  );
 
   if (annoId == null && selectionSnapshot != null) {
     annoId = await playerKey.upsertSelectionAutoMark(selectionSnapshot);
@@ -146,11 +149,13 @@ Future<void> showContextMenu(
       footnote: footnote,
       contextText: contextText,
       selectionSnapshot: selectionSnapshot,
+      offlineDictionaryMode: offlineDictionaryMode,
       decoration: decoration,
       onClose: onClose,
       menuConstraints: menuConstraints,
       initialPlacement: initialPlacement,
-      showTranslationDefault: isDictionaryLookup ||
+      lookupCandidate: lookupCandidate,
+      showTranslationDefault: lookupCandidate.isDictionaryLookup ||
           (!isNewNote &&
               Prefs().autoTranslateSelection &&
               !AnxPlatform.isAndroid),
@@ -257,6 +262,8 @@ class _ContextMenuOverlay extends StatefulWidget {
     required this.menuConstraints,
     required this.initialPlacement,
     required this.showTranslationDefault,
+    required this.offlineDictionaryMode,
+    required this.lookupCandidate,
     required this.horizontalMargin,
     required this.verticalMargin,
     required this.gap,
@@ -277,6 +284,8 @@ class _ContextMenuOverlay extends StatefulWidget {
   final BoxConstraints menuConstraints;
   final _MenuPlacement initialPlacement;
   final bool showTranslationDefault;
+  final bool offlineDictionaryMode;
+  final ReadingLookupCandidate lookupCandidate;
   final double horizontalMargin;
   final double verticalMargin;
   final double gap;
@@ -527,6 +536,9 @@ class _ContextMenuOverlayState extends State<_ContextMenuOverlay>
                                   reverse: _reverse,
                                   contextText: widget.contextText,
                                   selectionSnapshot: widget.selectionSnapshot,
+                                  offlineDictionaryMode:
+                                      widget.offlineDictionaryMode,
+                                  lookupCandidate: widget.lookupCandidate,
                                 ),
                               ],
                             ),
@@ -560,6 +572,8 @@ class _ContextMenuOverlayState extends State<_ContextMenuOverlay>
                                 axis: widget.axis,
                                 contextText: widget.contextText,
                                 position: widget.annoCfi,
+                                offline: widget.offlineDictionaryMode,
+                                candidate: widget.lookupCandidate,
                               ),
                             ],
                           ),

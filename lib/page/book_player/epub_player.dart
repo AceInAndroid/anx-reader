@@ -57,6 +57,7 @@ import 'package:anx_reader/widgets/reading_page/more_settings/page_turning/diagr
 import 'package:anx_reader/widgets/reading_page/more_settings/page_turning/types_and_icons.dart';
 import 'package:anx_reader/widgets/reading_page/style_widget.dart';
 import 'package:battery_plus/battery_plus.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -188,12 +189,18 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   bool _translationProgressActive = false;
   Timer? _currentPageTranslationTimer;
   bool _webViewReady = false;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   Future<void> configureSelection() async {
     if (!_webViewReady) return;
+    final connectivity = await Connectivity().checkConnectivity();
+    final offline = connectivity.contains(ConnectivityResult.none);
+    final longPressMode =
+        offline ? 'word' : Prefs().longPressSelectionMode.name;
     await webViewController.evaluateJavascript(source: '''
       window.configureSelection && window.configureSelection({
-        longPressMode: ${jsonEncode(Prefs().longPressSelectionMode.name)},
+        longPressMode: ${jsonEncode(longPressMode)},
+        offlineDictionaryMode: $offline,
         eInkMode: ${Prefs().eInkMode},
         platform: ${jsonEncode(AnxPlatform.type.name)}
       });
@@ -211,6 +218,13 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     await webViewController.evaluateJavascript(
       source:
           'window.moveSelectionSentence && window.moveSelectionSentence(${direction < 0 ? -1 : 1});',
+    );
+  }
+
+  Future<void> moveSelectionCharacter(int direction) async {
+    await webViewController.evaluateJavascript(
+      source:
+          'window.moveSelectionCharacter && window.moveSelectionCharacter(${direction < 0 ? -1 : 1});',
     );
   }
 
@@ -1147,7 +1161,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
         });
     controller.addJavaScriptHandler(
         handlerName: 'onSelectionEnd',
-        callback: (args) {
+        callback: (args) async {
           final menuGeneration = ++_selectionMenuGeneration;
           removeOverlay(preserveAutoMarkSession: true);
           if (args.isEmpty || args.first is! Map) {
@@ -1156,6 +1170,24 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
           }
           final location = Map<String, dynamic>.from(args.first as Map);
           final snapshot = SelectionSnapshot.fromJson(location);
+          final offline = (await Connectivity().checkConnectivity())
+              .contains(ConnectivityResult.none);
+          if (!mounted || menuGeneration != _selectionMenuGeneration) return;
+          // If preferences request sentence/paragraph selection, disconnected
+          // lookup still uses the exact touch unit. Re-select as a word; the
+          // resulting callback opens one menu only.
+          if (offline &&
+              (snapshot.rangeType == SelectionRangeType.sentence ||
+                  snapshot.rangeType == SelectionRangeType.paragraph)) {
+            await webViewController.evaluateJavascript(
+              source: '''
+                window.configureSelection && window.configureSelection({offlineDictionaryMode: true});
+                (window.selectOfflineDictionaryAtLastTouch && window.selectOfflineDictionaryAtLastTouch()) ||
+                  (window.changeSelectionRange && window.changeSelectionRange('word'));
+              ''',
+            );
+            return;
+          }
           final cfi = snapshot.cfi;
           final text = snapshot.text;
           final footnote = location['footnote'] == true;
@@ -1191,6 +1223,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
               writingMode.isVertical ? Axis.vertical : Axis.horizontal,
               contextText: _lastSelectionContextText,
               selectionSnapshot: snapshot,
+              offlineDictionaryMode: offline,
               isCurrentRequest: () =>
                   mounted && menuGeneration == _selectionMenuGeneration,
             ).catchError((Object error, StackTrace stack) {
@@ -1754,6 +1787,9 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     _activeTranslationDomCacheNamespace = _translationDomCacheStorageKey();
     _lastEInkMode = Prefs().isEInkMode;
     Prefs().addListener(_handleTranslationPrefsChanged);
+    _connectivitySubscription = Connectivity()
+        .onConnectivityChanged
+        .listen((_) => unawaited(configureSelection()));
     getThemeColor();
 
     contextMenu = ContextMenu(
@@ -1865,6 +1901,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   @override
   void dispose() {
     Prefs().removeListener(_handleTranslationPrefsChanged);
+    _connectivitySubscription?.cancel();
     unawaited(_flushTranslationTextCacheNow());
     _translationSettingsRefreshTimer?.cancel();
     _currentPageTranslationTimer?.cancel();

@@ -1,6 +1,6 @@
 import 'package:anx_reader/enums/selection_menu_action.dart';
-import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
-import 'package:anx_reader/service/dictionary/english_dictionary.dart';
+import 'package:anx_reader/models/reading_lookup.dart';
+import 'package:anx_reader/service/dictionary/reading_lookup_candidate_resolver.dart';
 
 class SelectionActionPolicy {
   const SelectionActionPolicy._({
@@ -20,9 +20,11 @@ class SelectionActionPolicy {
     required bool footnote,
     List<SelectionMenuAction>? actionOrder,
     Set<SelectionMenuAction>? enabledActions,
+    ReadingLookupCandidate? candidate,
   }) {
-    final isDictionaryLookup = EnglishDictionaryService.isEnglishWord(text) ||
-        ChineseDictionaryService.isLookupCandidate(text);
+    final isDictionaryLookup =
+        (candidate ?? ReadingLookupCandidateResolver.resolve(text))
+            .isDictionaryLookup;
     final enabled = enabledActions ?? SelectionMenuAction.values.toSet();
     final ordered = actionOrder ?? SelectionMenuAction.values;
     final eligible = ordered.where((action) {

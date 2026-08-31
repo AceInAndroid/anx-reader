@@ -82,6 +82,7 @@ class ChineseDictionaryService {
   static Future<ChineseDictionaryEntry?> lookup(
     String selection, {
     String? contextText,
+    bool allowContextExpansion = true,
   }) async {
     final selected = selection.trim();
     if (!isLookupCandidate(selected)) return null;
@@ -89,6 +90,7 @@ class ChineseDictionaryService {
     final exact = await _lookupExact(selected);
     if (selected.runes.length > 1 && exact != null) return exact;
 
+    if (!allowContextExpansion) return exact;
     final candidates = _boundaryCandidates(selected, contextText);
     for (final candidate in candidates) {
       final entry = await _lookupExact(candidate);

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/models/reading_lookup.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:dio/dio.dart';
 
@@ -67,13 +68,17 @@ class EnglishDictionaryService {
   );
 
   static final Map<String, EnglishDictionaryEntry?> _memoryCache = {};
+  static final Map<String, Future<EnglishDictionaryEntry?>> _inFlight = {};
   static const int _maxCacheSize = 1200;
 
   static bool isEnglishWord(String text) {
     return _normalizeLookupWord(text) != null;
   }
 
-  static Future<EnglishDictionaryEntry?> lookup(String text) async {
+  static Future<EnglishDictionaryEntry?> lookup(
+    String text, {
+    NetworkPolicy networkPolicy = NetworkPolicy.networkAllowed,
+  }) async {
     final word = _normalizeLookupWord(text);
     if (word == null) return null;
 
@@ -87,18 +92,24 @@ class EnglishDictionaryService {
       return cached;
     }
 
-    try {
-      final response = await _dio.get(
-        'https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word)}',
-      );
-      final entry = _parseResponse(response.data);
-      _remember(word, entry);
-      _writeCached(word, entry);
-      return entry;
-    } catch (e) {
-      AnxLog.warning('English dictionary lookup failed for "$word": $e');
-      return null;
-    }
+    if (!networkPolicy.allowsNetwork) return null;
+
+    return _inFlight.putIfAbsent(word, () async {
+      try {
+        final response = await _dio.get(
+          'https://api.dictionaryapi.dev/api/v2/entries/en/${Uri.encodeComponent(word)}',
+        );
+        final entry = _parseResponse(response.data);
+        _remember(word, entry);
+        _writeCached(word, entry);
+        return entry;
+      } catch (e) {
+        AnxLog.warning('English dictionary lookup failed for "$word": $e');
+        return null;
+      } finally {
+        _inFlight.remove(word);
+      }
+    });
   }
 
   static EnglishDictionaryEntry? _parseResponse(dynamic data) {

@@ -1,11 +1,12 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/vocabulary.dart';
 import 'package:anx_reader/enums/lang_list.dart';
+import 'package:anx_reader/models/reading_lookup.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/page/reading_page.dart';
 import 'package:anx_reader/service/dictionary/chinese_dictionary.dart';
 import 'package:anx_reader/service/dictionary/english_dictionary.dart';
-import 'package:anx_reader/service/dictionary/local_dictionary.dart';
+import 'package:anx_reader/service/dictionary/reading_lookup_router.dart';
 import 'package:anx_reader/service/dictionary/pronunciation_player.dart';
 import 'package:anx_reader/service/translate/index.dart';
 import 'package:anx_reader/service/vocabulary_capture_service.dart';
@@ -24,12 +25,16 @@ class TranslationMenu extends StatefulWidget {
     required this.axis,
     this.contextText,
     this.position,
+    this.offline = false,
+    required this.candidate,
   });
   final String content;
   final BoxDecoration decoration;
   final Axis axis;
   final String? contextText;
   final String? position;
+  final bool offline;
+  final ReadingLookupCandidate candidate;
 
   @override
   State<TranslationMenu> createState() => _TranslationMenuState();
@@ -47,7 +52,7 @@ class _TranslationMenuState extends State<TranslationMenu> {
   void initState() {
     super.initState();
     _initializeTranslation();
-    _loadPronunciation();
+    if (!widget.offline) _loadPronunciation();
     if (_isVocabularyEnabled) {
       _loadVocabularyState();
       _warmVocabularyCapture();
@@ -63,7 +68,7 @@ class _TranslationMenuState extends State<TranslationMenu> {
       _dictionaryEntry = null;
       _isLoadingPronunciation = false;
       _translationWidget = null;
-      _loadPronunciation();
+      if (!widget.offline) _loadPronunciation();
       _initializeTranslation();
       if (_isVocabularyEnabled) {
         _loadVocabularyState();
@@ -75,6 +80,7 @@ class _TranslationMenuState extends State<TranslationMenu> {
   bool get _isVocabularyEnabled => Prefs().bottomNavigatorShowVocabulary;
 
   void _warmVocabularyCapture() {
+    if (widget.offline) return;
     final player = epubPlayerKey.currentState;
     final book = player?.book;
     final word = widget.content.trim();
@@ -94,14 +100,10 @@ class _TranslationMenuState extends State<TranslationMenu> {
     final word = widget.content.trim();
     final preferredService = Prefs().translateService;
 
-    final fallback = ChineseDictionaryService.isLookupCandidate(word)
-        ? _ChineseDictionaryTranslation(
-            word: word,
-            contextText: effectiveContextText,
-            preferredService: preferredService,
-          )
+    final translation = widget.offline
+        ? const _OfflineDictionaryEmpty()
         : preferredService.isWebView &&
-                EnglishDictionaryService.isEnglishWord(word)
+                widget.candidate.kind == ReadingLookupCandidateKind.englishWord
             ? _FastSingleWordTranslation(
                 word: word,
                 contextText: effectiveContextText,
@@ -112,9 +114,13 @@ class _TranslationMenuState extends State<TranslationMenu> {
                 widget.content,
                 contextText: effectiveContextText,
               );
-    _translationWidget = _LocalDictionaryFirst(
-      word: word,
-      fallback: fallback,
+    _translationWidget = _ReadingLookupView(
+      candidate: widget.candidate,
+      contextText: effectiveContextText,
+      networkPolicy: widget.offline
+          ? NetworkPolicy.offlineOnly
+          : NetworkPolicy.networkAllowed,
+      translation: translation,
     );
   }
 
@@ -373,7 +379,7 @@ class _TranslationMenuState extends State<TranslationMenu> {
                           height: 20,
                           child: Center(child: Text('...')),
                         ),
-                    if (EnvVar.enableAIFeature)
+                    if (EnvVar.enableAIFeature && !widget.offline)
                       OutlinedButton.icon(
                         onPressed: _explainWithAi,
                         icon: const Icon(Icons.auto_awesome, size: 18),
@@ -422,51 +428,130 @@ class _TranslationMenuState extends State<TranslationMenu> {
   }
 }
 
-class _LocalDictionaryFirst extends StatefulWidget {
-  const _LocalDictionaryFirst({required this.word, required this.fallback});
-
-  final String word;
-  final Widget fallback;
+class _OfflineDictionaryEmpty extends StatelessWidget {
+  const _OfflineDictionaryEmpty();
 
   @override
-  State<_LocalDictionaryFirst> createState() => _LocalDictionaryFirstState();
+  Widget build(BuildContext context) => Text(L10n.of(context).dictionaryEmpty);
 }
 
-class _LocalDictionaryFirstState extends State<_LocalDictionaryFirst> {
-  late Future<LocalDictionaryMatch?> _future;
+class _ReadingLookupView extends StatefulWidget {
+  const _ReadingLookupView({
+    required this.candidate,
+    required this.contextText,
+    required this.networkPolicy,
+    required this.translation,
+  });
+
+  final ReadingLookupCandidate candidate;
+  final String? contextText;
+  final NetworkPolicy networkPolicy;
+  final Widget translation;
+
+  @override
+  State<_ReadingLookupView> createState() => _ReadingLookupViewState();
+}
+
+class _ReadingLookupViewState extends State<_ReadingLookupView> {
+  late Future<ReadingLookupResult> _future;
 
   @override
   void initState() {
     super.initState();
-    _future = LocalDictionaryService.lookup(widget.word);
+    _future = _lookup();
   }
 
   @override
-  void didUpdateWidget(covariant _LocalDictionaryFirst oldWidget) {
+  void didUpdateWidget(covariant _ReadingLookupView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.word != widget.word) {
-      _future = LocalDictionaryService.lookup(widget.word);
+    if (oldWidget.candidate.text != widget.candidate.text ||
+        oldWidget.contextText != widget.contextText ||
+        oldWidget.networkPolicy != widget.networkPolicy ||
+        oldWidget.candidate.allowContextExpansion !=
+            widget.candidate.allowContextExpansion) {
+      _future = _lookup();
     }
   }
 
+  Future<ReadingLookupResult> _lookup() => ReadingLookupRouter.lookup(
+        candidate: widget.candidate,
+        networkPolicy: widget.networkPolicy,
+        contextText: widget.contextText,
+      );
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<LocalDictionaryMatch?>(
+    return FutureBuilder<ReadingLookupResult>(
       future: _future,
       builder: (context, snapshot) {
-        final match = snapshot.data;
-        if (match == null) return widget.fallback;
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LinearProgressIndicator(minHeight: 2);
+        }
+        final result = snapshot.data;
+        if (result == null || !result.found) return widget.translation;
+        if (result.source == ReadingLookupSource.localMdx) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${result.matchedWord} · ${result.dictionaryName}',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              Html(data: result.html ?? ''),
+            ],
+          );
+        }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '${match.word} · ${match.dictionaryName}',
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w700,
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    result.matchedWord ?? result.query,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                   ),
+                ),
+                if (result.pronunciation?.isNotEmpty ?? false) ...[
+                  const SizedBox(width: 8),
+                  Flexible(child: Text(result.pronunciation!)),
+                ],
+              ],
             ),
-            Html(data: match.html),
+            if (result.partOfSpeech?.isNotEmpty ?? false)
+              Text(
+                result.partOfSpeech!,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            if (result.definition?.isNotEmpty ?? false)
+              Text(result.definition!),
+            for (var index = 0; index < result.senses.length; index++) ...[
+              Text('${index + 1}. ${result.senses[index].definition}'),
+              if (result.senses[index].example?.isNotEmpty ?? false)
+                Padding(
+                  padding: const EdgeInsets.only(left: 14, top: 3),
+                  child: Text(result.senses[index].example!),
+                ),
+            ],
+            if (result.example?.isNotEmpty ?? false) ...[
+              const SizedBox(height: 6),
+              Text(
+                result.example!,
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(fontStyle: FontStyle.italic),
+              ),
+            ],
+            if (widget.networkPolicy.allowsNetwork) ...[
+              const Divider(),
+              widget.translation,
+            ],
           ],
         );
       },
@@ -514,7 +599,6 @@ class _FastSingleWordTranslationState
   }
 
   Future<_FastSingleWordData> _load() async {
-    final dictionaryFuture = EnglishDictionaryService.lookup(widget.word);
     String? translatedText;
 
     final fastService = widget.fastService;
@@ -530,9 +614,8 @@ class _FastSingleWordTranslationState
       }
     }
 
-    final dictionaryEntry = await dictionaryFuture;
     return _FastSingleWordData(
-      dictionaryEntry: dictionaryEntry,
+      dictionaryEntry: null,
       translatedText: translatedText,
     );
   }
@@ -619,16 +702,21 @@ class _FastSingleWordData {
   final String? translatedText;
 }
 
+/* Legacy renderer retained below only for compatibility with old snapshots. */
 class _ChineseDictionaryTranslation extends StatefulWidget {
   const _ChineseDictionaryTranslation({
     required this.word,
     required this.contextText,
     required this.preferredService,
+    required this.offline,
+    required this.allowContextExpansion,
   });
 
   final String word;
   final String? contextText;
   final TranslateService preferredService;
+  final bool offline;
+  final bool allowContextExpansion;
 
   @override
   State<_ChineseDictionaryTranslation> createState() =>
@@ -658,6 +746,7 @@ class _ChineseDictionaryTranslationState
     return ChineseDictionaryService.lookup(
       widget.word,
       contextText: widget.contextText,
+      allowContextExpansion: widget.allowContextExpansion,
     );
   }
 
@@ -716,11 +805,12 @@ class _ChineseDictionaryTranslationState
               ],
               const Divider(),
             ],
-            translateText(
-              entry?.word ?? widget.word,
-              service: widget.preferredService,
-              contextText: widget.contextText,
-            ),
+            if (!widget.offline)
+              translateText(
+                entry?.word ?? widget.word,
+                service: widget.preferredService,
+                contextText: widget.contextText,
+              ),
           ],
         );
       },

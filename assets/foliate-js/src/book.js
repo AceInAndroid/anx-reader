@@ -2281,9 +2281,19 @@ window.changeSelectionRange = rangeType => {
   return activeSelectionController.changeRange(rangeType)
 }
 
+window.selectOfflineDictionaryAtLastTouch = () => {
+  if (!activeSelectionController) return false
+  return activeSelectionController.selectOfflineDictionaryAtLastTouch()
+}
+
 window.moveSelectionSentence = direction => {
   if (!activeSelectionController) return false
   return activeSelectionController.moveSentence(Number(direction) < 0 ? -1 : 1)
+}
+
+window.moveSelectionCharacter = direction => {
+  if (!activeSelectionController) return false
+  return activeSelectionController.moveCharacter(Number(direction) < 0 ? -1 : 1)
 }
 
 window.applyResolvedWord = result => {

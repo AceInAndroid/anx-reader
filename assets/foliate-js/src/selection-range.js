@@ -191,6 +191,7 @@ export class SelectionRangeController {
     this.emitSelection = emitSelection
     this.requestWordBoundary = requestWordBoundary
     this.longPressMode = longPressMode
+    this.offlineDictionaryMode = false
     this.sessionId = 0
     this.rangeType = 'custom'
     this.trigger = 'manual'
@@ -209,6 +210,9 @@ export class SelectionRangeController {
   configure(config) {
     if (config.longPressMode === 'word' || config.longPressMode === 'sentence') {
       this.longPressMode = config.longPressMode
+    }
+    if (typeof config.offlineDictionaryMode === 'boolean') {
+      this.offlineDictionaryMode = config.offlineDictionaryMode
     }
   }
 
@@ -321,6 +325,13 @@ export class SelectionRangeController {
     }
     const bounds = wordBounds(map.text, offset)
     if (!bounds) return false
+    // A disconnected long press is a local dictionary lookup. Keep CJK at
+    // the touched character instead of expanding it into a dictionary phrase.
+    if (this.offlineDictionaryMode &&
+        trigger === 'longPress' &&
+        bounds.needsDictionary) {
+      return this.applyBounds(bounds.start, bounds.end, 'character')
+    }
     if (!bounds.needsDictionary || !this.requestWordBoundary) {
       return this.applyBounds(bounds.start, bounds.end, 'word')
     }
@@ -337,6 +348,11 @@ export class SelectionRangeController {
       if (this.sessionId === requestSession) this.applyBounds(bounds.start, bounds.end, 'word')
     }, 180)
     return true
+  }
+
+  selectOfflineDictionaryAtLastTouch() {
+    if (!this.lastTouch) return false
+    return this.selectAtPoint(this.lastTouch.x, this.lastTouch.y, 'word', 'longPress')
   }
 
   applyResolvedWord({ sessionId, startOffset, endOffset }) {
@@ -431,6 +447,50 @@ export class SelectionRangeController {
     return this.adjacentSentence(direction < 0 ? -1 : 1, true)
   }
 
+  adjacentCharacter(direction, apply) {
+    const selection = this.doc.getSelection()
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return false
+    const range = selection.getRangeAt(0)
+    const block = nearestBlock(this.doc, range.startContainer)
+    if (!block) return false
+    let targetBlock = block
+    let map = buildTextMap(block)
+    const boundary = direction < 0
+      ? offsetForPoint(map, range.startContainer, range.startOffset) - 1
+      : offsetForPoint(map, range.endContainer, range.endOffset)
+    const findCharacter = (text, start) => {
+      let index = start
+      while (index >= 0 && index < text.length) {
+        if (!/\s/.test(text[index])) return index
+        index += direction
+      }
+      return -1
+    }
+    let probe = findCharacter(map.text, boundary)
+    if (probe < 0) {
+      const blocks = [block].concat(readableBlocks(this.doc, block)).sort((a, b) => {
+        const position = a.compareDocumentPosition(b)
+        return position & domConstants(this.doc).Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1
+      })
+      const targetIndex = blocks.indexOf(block) + direction
+      if (targetIndex < 0 || targetIndex >= blocks.length) return false
+      targetBlock = blocks[targetIndex]
+      map = buildTextMap(targetBlock)
+      probe = findCharacter(map.text, direction < 0 ? map.text.length - 1 : 0)
+    }
+    if (probe < 0) return false
+    const bounds = characterBounds(map.text, probe)
+    if (!bounds) return false
+    if (!apply) return true
+    this.anchor = { block: targetBlock, map, offset: bounds.start }
+    this.trigger = direction < 0 ? 'previousCharacter' : 'nextCharacter'
+    return this.applyBounds(bounds.start, bounds.end, 'character')
+  }
+
+  moveCharacter(direction) {
+    return this.adjacentCharacter(direction < 0 ? -1 : 1, true)
+  }
+
   snapshot() {
     const selection = this.doc.getSelection()
     const range = selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0) : null
@@ -439,8 +499,12 @@ export class SelectionRangeController {
       sessionId: this.sessionId,
       rangeType: this.rangeType,
       trigger: this.trigger,
-      canMovePrevious: this.adjacentSentence(-1, false),
-      canMoveNext: this.adjacentSentence(1, false),
+      canMovePrevious: this.rangeType === 'character'
+        ? this.adjacentCharacter(-1, false)
+        : this.adjacentSentence(-1, false),
+      canMoveNext: this.rangeType === 'character'
+        ? this.adjacentCharacter(1, false)
+        : this.adjacentSentence(1, false),
       supportsRangeSelection: Boolean(block && buildTextMap(block).entries.length),
     }
   }

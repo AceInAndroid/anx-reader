@@ -186,6 +186,8 @@
   "selectionRangeParagraph": "Paragraph",
   "selectionPreviousSentence": "Previous",
   "selectionNextSentence": "Next",
+  "selectionPreviousCharacter": "Previous character",
+  "selectionNextCharacter": "Next character",
   "selectionMenuSettingsTitle": "Selection menu",
   "selectionMenuSettingsTips": "Choose actions and order them. The first three available actions appear directly; the rest are under More.",
   "selectionMenuLookupOrTranslate": "Look up / Translate",

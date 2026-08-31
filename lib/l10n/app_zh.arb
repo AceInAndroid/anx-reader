@@ -147,6 +147,8 @@
   "selectionRangeParagraph": "段落",
   "selectionPreviousSentence": "上一句",
   "selectionNextSentence": "下一句",
+  "selectionPreviousCharacter": "上一个字",
+  "selectionNextCharacter": "下一个字",
   "selectionMenuSettingsTitle": "选中菜单设置",
   "selectionMenuSettingsTips": "选择需要的功能并调整顺序。当前场景可用的前三项直接显示，其余收进“更多”。",
   "selectionMenuLookupOrTranslate": "查词 / 翻译",
