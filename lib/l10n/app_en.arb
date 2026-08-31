@@ -181,6 +181,7 @@
   "readingPageLongPressSelection": "Long-press selection",
   "readingPageLongPressSelectionTips": "Choose the default range selected by touch long press",
   "selectionRangeWord": "Word",
+  "selectionRangeCharacter": "Character",
   "selectionRangeSentence": "Sentence",
   "selectionRangeParagraph": "Paragraph",
   "selectionPreviousSentence": "Previous",

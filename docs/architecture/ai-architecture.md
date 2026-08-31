@@ -2,7 +2,7 @@
 
 > 状态：随代码维护的实现架构说明（2026-08）。本文记录当前已经落地的能力、边界和扩展契约；产品交互与权限决策以 [`DESIGN.md`](../../DESIGN.md) 为准。
 
-开发者快速索引：先看 [`feature-map.md`](feature-map.md) 的能力总表和“不要重复实现”列，再回到本文阅读 AI 执行链路。
+开发者快速索引：先看 [`ai-system-map.md`](ai-system-map.md) 的 AI 全景、处理流程和演进建议，再用 [`feature-map.md`](feature-map.md) 检查“不要重复实现”项，最后回到本文阅读当前 AI 执行链路的实现细节。
 
 ## 1. 目标与原则
 
@@ -79,6 +79,19 @@ flowchart TD
 
 ## 4. 一次 AI 请求的调用链
 
+### 统一请求与追踪契约（1.16.0）
+
+新代码通过 `AiRequestGateway` 提交 `AiRequest`，由 workload descriptor 同时声明
+上下文任务、Provider 角色、输出协议与 fallback 策略。旧的 `aiGenerateStream`、
+`aiGenerateText` 和 `aiGenerateTextWithMetadata` 保留为兼容 facade，并在内部转换成
+同一请求对象。每次请求自动生成 `requestId`，响应元数据统一包含 workload、
+Provider/model/deployment、输入输出 Token、估算标记、耗时、重试次数、fallback 与
+结构化输出校验结果。
+
+Provider 的 streaming、JSON、tools、vision、thinking、上下文和输出限制由
+`AiProviderCapabilities` 描述；旧 Provider JSON 缺少该字段时使用兼容默认值，不要求
+用户迁移配置。
+
 ### 普通对话/阅读问答
 
 1. `AiChat.sendMessageStream` 捕获当前书、章节、CFI、进度和会话。
@@ -97,6 +110,12 @@ flowchart TD
 ### 明确写入与撤销
 
 用户明确要求保存/创建/标记时，工具先校验当前书、有效来源和 Beta 权限，再由 `AgentActionService` 在同一事务中写入业务表和动作快照。返回结果包含撤销入口；撤销会检查版本/更新时间，若用户后来修改过则拒绝覆盖并报告冲突。导航不进入动作日志。
+
+`ValidatedAiMutation` 是统一写入前置契约：确认授权后，将正文解析、Artifact、Wiki、
+笔记与专家来源适配为 `EvidenceEnvelope`，校验可追溯性、当前书和
+`visibleFromProgress`，再调用原有 Repository 事务。目标、笔记、难点、Markdown
+记忆、Reader Profile、Artifact 与 Wiki 均经过这一入口；不需要正文来源的用户明确
+操作允许空 Evidence，但不能绕过授权和动作事务。
 
 ### 小说档案整理
 
@@ -133,7 +152,7 @@ flowchart TD
 
 ## 8. 持久化真相层
 
-SQLite 是本地真相源，当前数据库版本为 21。主要表按职责分为：
+SQLite 是本地真相源，当前数据库版本为 22。主要表按职责分为：
 
 - 会话：`tb_ai_sessions`。
 - 阅读状态：`tb_reading_goals`、`tb_reading_checkpoints`、`tb_reading_mastery`、`tb_reading_difficulties`、`tb_knowledge_cards`。

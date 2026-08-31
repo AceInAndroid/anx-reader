@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
@@ -9,6 +10,7 @@ import 'package:anx_reader/models/ai_extraction_config.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
 import 'package:anx_reader/service/ai/ai_context_assembler.dart';
+import 'package:anx_reader/service/ai/ai_request.dart';
 import 'package:anx_reader/service/ai/ai_token_usage_service.dart';
 import 'package:anx_reader/service/ai/langchain_ai_config.dart';
 import 'package:anx_reader/service/ai/langchain_registry.dart';
@@ -30,11 +32,18 @@ class _AiExecutionResult {
     required this.providerId,
     required this.isError,
     required this.model,
-  });
+    this.deployment,
+    DateTime? startedAt,
+    AiRequestMetrics? metrics,
+  })  : startedAt = startedAt ?? DateTime.now(),
+        metrics = metrics ?? AiRequestMetrics();
 
   final Stream<String> stream;
   final String? providerId;
   final String? model;
+  final AiProviderDeployment? deployment;
+  final DateTime startedAt;
+  final AiRequestMetrics metrics;
   bool isError;
   void Function()? onSuccess;
 
@@ -42,6 +51,8 @@ class _AiExecutionResult {
     isError = false;
     onSuccess?.call();
   }
+
+  Duration get elapsed => DateTime.now().difference(startedAt);
 }
 
 class AiGenerationResult<T> {
@@ -50,12 +61,14 @@ class AiGenerationResult<T> {
     this.providerId,
     this.model,
     this.usedFallback = false,
+    this.metadata,
   });
 
   final T value;
   final String? providerId;
   final String? model;
   final bool usedFallback;
+  final AiResponseMetadata? metadata;
 }
 
 const Duration defaultAiStreamTimeout = Duration(seconds: 60);
@@ -67,6 +80,22 @@ Duration effectiveAiStreamTimeout(int configuredSeconds) =>
 
 // Global request timestamps list for RPM throttling
 final List<DateTime> _aiRequestTimestamps = [];
+
+void _logRequestAttempt(
+  AiRequest request,
+  _AiExecutionResult execution, {
+  required bool fallback,
+}) {
+  AnxLog.info(
+    'AI request ${request.trace.requestId} workload=${request.workloadId} '
+    'provider=${execution.providerId} model=${execution.model} '
+    'fallback=$fallback elapsedMs=${execution.elapsed.inMilliseconds} '
+    'inputTokens=${execution.metrics.inputTokens} '
+    'outputTokens=${execution.metrics.outputTokens} '
+    'estimated=${execution.metrics.usageEstimated} '
+    'retries=${execution.metrics.retryCount}',
+  );
+}
 
 /// Throttle AI requests if RPM limit is configured (sliding 1-minute window).
 Future<void> _throttleIfNeeded() async {
@@ -108,60 +137,204 @@ Stream<String> aiGenerateStream(
   ReadingSkillSelection? readingSkill,
   bool allowFallback = true,
   AiContextTask task = AiContextTask.general,
+}) =>
+    executeAiRequestStream(
+      AiRequest(
+        messages: messages,
+        providerId: identifier,
+        overrideConfig: config,
+        regenerate: regenerate,
+        useAgent: useAgent,
+        ref: ref,
+        readingMode: readingMode,
+        readingSkill: readingSkill,
+        fallbackPolicy: allowFallback
+            ? AiFallbackPolicy.configuredProvider
+            : AiFallbackPolicy.none,
+        contextTask: task,
+      ),
+    );
+
+AiStreamResult executeAiRequest(AiRequest request) {
+  final metadata = Completer<AiResponseMetadata>();
+  return AiStreamResult(
+    stream: executeAiRequestStream(request, metadataCompleter: metadata),
+    metadata: metadata.future,
+  );
+}
+
+Stream<String> executeAiRequestStream(
+  AiRequest request, {
+  Completer<AiResponseMetadata>? metadataCompleter,
 }) async* {
-  if (useAgent) {
-    assert(ref != null, 'ref must be provided when useAgent is true');
+  if (request.useAgent) {
+    assert(request.ref != null, 'ref must be provided when useAgent is true');
   }
   final registry = LangchainAiRegistry(
-    ref,
-    readingModeOverride: readingMode,
-    readingSkillOverride: readingSkill,
+    request.ref,
+    readingModeOverride: request.readingMode,
+    readingSkillOverride: request.readingSkill,
   );
 
   await _prepareRollingSummary(
-    messages: messages,
-    task: task,
-    ref: ref,
+    messages: request.messages,
+    task: request.contextTask,
+    ref: request.ref,
   );
 
   final primary = await _generateStream(
-    messages: messages,
-    identifier: identifier,
-    overrideConfig: config,
-    regenerate: regenerate,
-    useAgent: useAgent,
+    messages: request.messages,
+    identifier: request.providerId,
+    overrideConfig: request.overrideConfig,
+    regenerate: request.regenerate,
+    useAgent: request.useAgent,
     registry: registry,
-    task: task,
+    task: request.contextTask,
+    trace: request.trace,
+    outputContract: request.outputContract,
   );
+  final executions = <_AiExecutionResult>[primary];
+  var usedFallback = false;
+  String? finalValue;
 
   await for (final chunk in primary.stream) {
+    finalValue = chunk;
     yield chunk;
   }
 
-  if (!primary.isError || !allowFallback) return;
+  _logRequestAttempt(request, primary, fallback: false);
+  if (!primary.isError || !request.allowAutomaticFallback) {
+    _completeRequestMetadata(
+      metadataCompleter,
+      request,
+      executions,
+      finalExecution: primary,
+      usedFallback: false,
+      finalValue: finalValue,
+    );
+    return;
+  }
 
   final fallbackId = _resolveRunnableFallbackId(
     registry: registry,
-    primaryIdentifier: primary.providerId ?? identifier,
+    primaryIdentifier: primary.providerId ?? request.providerId,
   );
-  if (fallbackId == null) return;
+  if (fallbackId == null) {
+    _completeRequestMetadata(
+      metadataCompleter,
+      request,
+      executions,
+      finalExecution: primary,
+      usedFallback: false,
+      finalValue: finalValue,
+    );
+    return;
+  }
 
   AnxLog.info('Trying fallback provider: $fallbackId');
+  usedFallback = true;
 
   final fallback = await _generateStream(
-    messages: messages,
+    messages: request.messages,
     identifier: fallbackId,
     // A fallback must use its own stored URL, key and model. Passing the
     // primary override here can silently route it back through bad config.
     overrideConfig: null,
-    regenerate: regenerate,
-    useAgent: useAgent,
+    regenerate: request.regenerate,
+    useAgent: request.useAgent,
     registry: registry,
-    task: task,
+    task: request.contextTask,
+    trace: request.trace,
+    outputContract: request.outputContract,
   );
+  executions.add(fallback);
 
   await for (final chunk in fallback.stream) {
+    finalValue = chunk;
     yield chunk;
+  }
+  _logRequestAttempt(request, fallback, fallback: true);
+  _completeRequestMetadata(
+    metadataCompleter,
+    request,
+    executions,
+    finalExecution: fallback,
+    usedFallback: usedFallback,
+    finalValue: finalValue,
+  );
+}
+
+void _completeRequestMetadata(
+  Completer<AiResponseMetadata>? completer,
+  AiRequest request,
+  List<_AiExecutionResult> executions, {
+  required _AiExecutionResult finalExecution,
+  required bool usedFallback,
+  required String? finalValue,
+}) {
+  if (completer == null || completer.isCompleted) return;
+  completer.complete(
+    _responseMetadata(
+      request,
+      executions,
+      finalExecution: finalExecution,
+      usedFallback: usedFallback,
+      finalValue: finalValue,
+    ),
+  );
+}
+
+AiResponseMetadata _responseMetadata(
+  AiRequest request,
+  List<_AiExecutionResult> executions, {
+  required _AiExecutionResult finalExecution,
+  required bool usedFallback,
+  required String? finalValue,
+}) {
+  final validationErrors = <String>[];
+  if (request.outputContract.kind == AiOutputKind.json &&
+      !_isJsonResponse(finalValue ?? '')) {
+    validationErrors.add('Response is not valid JSON');
+  }
+  return AiResponseMetadata(
+    requestId: request.trace.requestId,
+    workloadId: request.workloadId,
+    providerId: finalExecution.providerId,
+    model: finalExecution.model,
+    deployment: finalExecution.deployment,
+    inputTokens: executions.fold<int>(
+      0,
+      (total, item) => total + item.metrics.inputTokens,
+    ),
+    outputTokens: executions.fold<int>(
+      0,
+      (total, item) => total + item.metrics.outputTokens,
+    ),
+    usageEstimated: executions.any((item) => item.metrics.usageEstimated),
+    elapsed: executions.fold<Duration>(
+      Duration.zero,
+      (total, item) => total + item.elapsed,
+    ),
+    retryCount: executions.fold<int>(
+      0,
+      (total, item) => total + item.metrics.retryCount,
+    ),
+    usedFallback: usedFallback,
+    validationErrors: validationErrors,
+  );
+}
+
+bool _isJsonResponse(String value) {
+  final cleaned = value
+      .replaceFirst(RegExp(r'^\s*```(?:json)?', caseSensitive: false), '')
+      .replaceFirst(RegExp(r'```\s*$'), '')
+      .trim();
+  if (cleaned.isEmpty) return false;
+  try {
+    jsonDecode(cleaned);
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 
@@ -247,20 +420,27 @@ Future<String> aiGenerateText(
   ReadingSkillSelection? readingSkill,
   bool allowFallback = true,
   AiContextTask task = AiContextTask.general,
-}) async {
+}) =>
+    executeAiRequestText(
+      AiRequest(
+        messages: messages,
+        providerId: identifier,
+        overrideConfig: config,
+        regenerate: regenerate,
+        useAgent: useAgent,
+        ref: ref,
+        readingMode: readingMode,
+        readingSkill: readingSkill,
+        fallbackPolicy: allowFallback
+            ? AiFallbackPolicy.configuredProvider
+            : AiFallbackPolicy.none,
+        contextTask: task,
+      ),
+    );
+
+Future<String> executeAiRequestText(AiRequest request) async {
   String? lastResult;
-  await for (final chunk in aiGenerateStream(
-    messages,
-    identifier: identifier,
-    config: config,
-    regenerate: regenerate,
-    useAgent: useAgent,
-    ref: ref,
-    readingMode: readingMode,
-    readingSkill: readingSkill,
-    allowFallback: allowFallback,
-    task: task,
-  )) {
+  await for (final chunk in executeAiRequestStream(request)) {
     lastResult = chunk;
   }
   return lastResult ?? '';
@@ -274,44 +454,78 @@ Future<AiGenerationResult<String>> aiGenerateTextWithMetadata(
   WidgetRef? ref,
   AiContextTask task = AiContextTask.general,
   bool allowFallback = true,
-}) async {
-  final registry = LangchainAiRegistry(ref);
+}) =>
+    executeAiRequestTextWithMetadata(
+      AiRequest(
+        messages: messages,
+        providerId: identifier,
+        overrideConfig: config,
+        regenerate: regenerate,
+        ref: ref,
+        fallbackPolicy: allowFallback
+            ? AiFallbackPolicy.configuredProvider
+            : AiFallbackPolicy.none,
+        contextTask: task,
+      ),
+    );
+
+Future<AiGenerationResult<String>> executeAiRequestTextWithMetadata(
+  AiRequest request,
+) async {
+  final registry = LangchainAiRegistry(request.ref);
+  final executions = <_AiExecutionResult>[];
   var execution = await _generateStream(
-    messages: messages,
-    identifier: identifier,
-    overrideConfig: config,
-    regenerate: regenerate,
+    messages: request.messages,
+    identifier: request.providerId,
+    overrideConfig: request.overrideConfig,
+    regenerate: request.regenerate,
     useAgent: false,
     registry: registry,
-    task: task,
+    task: request.contextTask,
+    trace: request.trace,
+    outputContract: request.outputContract,
   );
+  executions.add(execution);
   var value = await _consumeExecution(execution);
+  _logRequestAttempt(request, execution, fallback: false);
   var usedFallback = false;
-  if (execution.isError && allowFallback) {
+  if (execution.isError && request.allowAutomaticFallback) {
     final fallbackId = _resolveRunnableFallbackId(
       registry: registry,
-      primaryIdentifier: execution.providerId ?? identifier,
+      primaryIdentifier: execution.providerId ?? request.providerId,
     );
     if (fallbackId != null) {
       usedFallback = true;
       execution = await _generateStream(
-        messages: messages,
+        messages: request.messages,
         identifier: fallbackId,
         overrideConfig: null,
-        regenerate: regenerate,
+        regenerate: request.regenerate,
         useAgent: false,
         registry: registry,
-        task: task,
+        task: request.contextTask,
+        trace: request.trace,
+        outputContract: request.outputContract,
       );
+      executions.add(execution);
       value = await _consumeExecution(execution);
+      _logRequestAttempt(request, execution, fallback: true);
     }
   }
   if (execution.isError) throw StateError(value);
+  final metadata = _responseMetadata(
+    request,
+    executions,
+    finalExecution: execution,
+    usedFallback: usedFallback,
+    finalValue: value,
+  );
   return AiGenerationResult(
     value: value,
     providerId: execution.providerId,
     model: execution.model,
     usedFallback: usedFallback,
+    metadata: metadata,
   );
 }
 
@@ -372,6 +586,51 @@ String? _resolveRunnableFallbackId({
   return null;
 }
 
+String? _providerCapabilityError(
+  AiProvider provider, {
+  required AiOutputContract? outputContract,
+  required bool useAgent,
+}) {
+  final capabilities = provider.effectiveCapabilities;
+  if (!capabilities.supportsStreaming) {
+    return 'Provider ${provider.title} does not support streaming requests';
+  }
+  if (outputContract?.kind == AiOutputKind.json && !capabilities.supportsJson) {
+    return 'Provider ${provider.title} does not support structured JSON output';
+  }
+  if (useAgent && !capabilities.supportsTools) {
+    return 'Provider ${provider.title} does not support Agent tools';
+  }
+  return null;
+}
+
+_AiExecutionResult _capabilityFailure(
+  AiProvider provider,
+  String message,
+) =>
+    _AiExecutionResult(
+      stream: Stream.value('Error: $message'),
+      providerId: provider.id,
+      isError: true,
+      model: provider.model,
+      deployment: provider.deployment,
+    );
+
+LangchainAiConfig _applyProviderLimits(
+  LangchainAiConfig config,
+  AiProviderCapabilities capabilities,
+) {
+  int? cap(int? configured, int? limit) {
+    if (limit == null || limit <= 0) return configured;
+    return configured == null ? limit : configured.clamp(1, limit);
+  }
+
+  return config.copyWith(
+    maxTokens: cap(config.maxTokens, capabilities.maxOutputTokens),
+    maxOutputTokens: cap(config.maxOutputTokens, capabilities.maxOutputTokens),
+  );
+}
+
 Future<_AiExecutionResult> _generateStream({
   required List<ChatMessage> messages,
   String? identifier,
@@ -380,6 +639,8 @@ Future<_AiExecutionResult> _generateStream({
   required bool useAgent,
   required LangchainAiRegistry registry,
   required AiContextTask task,
+  AiTraceContext? trace,
+  AiOutputContract? outputContract,
 }) async {
   AnxLog.info('aiGenerateStream called identifier: $identifier');
   final sanitizedMessages = _sanitizeMessagesForPrompt(messages);
@@ -397,19 +658,30 @@ Future<_AiExecutionResult> _generateStream({
           ? notifier.getRunnableProviderById(identifier)
           : notifier.getRunnableSelectedProvider();
       if (provider != null) {
+        final capabilityError = _providerCapabilityError(
+          provider,
+          outputContract: outputContract,
+          useAgent: useAgent,
+        );
+        if (capabilityError != null) {
+          return _capabilityFailure(provider, capabilityError);
+        }
         final apiKey = AiKeyRotator.getNextKey(provider);
         if (apiKey != null) {
           resolvedProviderId = provider.id;
-          config = aiContextAssembler.applyOutputBudget(
-            LangchainAiConfig.fromProvider(
-              providerId: provider.id,
-              model: provider.model,
-              apiKey: apiKey,
-              url: provider.url,
-              reasoningEffort: provider.reasoningEffort,
-              requestTimeoutSeconds: provider.requestTimeoutSeconds,
+          config = _applyProviderLimits(
+            aiContextAssembler.applyOutputBudget(
+              LangchainAiConfig.fromProvider(
+                providerId: provider.id,
+                model: provider.model,
+                apiKey: apiKey,
+                url: provider.url,
+                reasoningEffort: provider.reasoningEffort,
+                requestTimeoutSeconds: provider.requestTimeoutSeconds,
+              ),
+              task,
             ),
-            task,
+            provider.effectiveCapabilities,
           );
 
           AnxLog.info(
@@ -433,6 +705,10 @@ Future<_AiExecutionResult> _generateStream({
             config: config,
             protocol: provider.protocol,
             task: task,
+            trace: trace,
+            outputContract: outputContract,
+            deployment: provider.deployment,
+            maxInputTokens: provider.effectiveCapabilities.maxContextTokens,
           );
 
           result.onSuccess = () {
@@ -480,19 +756,30 @@ Future<_AiExecutionResult> _generateStream({
         }
 
         if (provider != null) {
+          final capabilityError = _providerCapabilityError(
+            provider,
+            outputContract: outputContract,
+            useAgent: useAgent,
+          );
+          if (capabilityError != null) {
+            return _capabilityFailure(provider, capabilityError);
+          }
           final apiKey = AiKeyRotator.getNextKey(provider);
           if (apiKey != null) {
             resolvedProviderId = provider.id;
-            config = aiContextAssembler.applyOutputBudget(
-              LangchainAiConfig.fromProvider(
-                providerId: provider.id,
-                model: provider.model,
-                apiKey: apiKey,
-                url: provider.url,
-                reasoningEffort: provider.reasoningEffort,
-                requestTimeoutSeconds: provider.requestTimeoutSeconds,
+            config = _applyProviderLimits(
+              aiContextAssembler.applyOutputBudget(
+                LangchainAiConfig.fromProvider(
+                  providerId: provider.id,
+                  model: provider.model,
+                  apiKey: apiKey,
+                  url: provider.url,
+                  reasoningEffort: provider.reasoningEffort,
+                  requestTimeoutSeconds: provider.requestTimeoutSeconds,
+                ),
+                task,
               ),
-              task,
+              provider.effectiveCapabilities,
             );
 
             AnxLog.info(
@@ -516,6 +803,10 @@ Future<_AiExecutionResult> _generateStream({
               config: config,
               protocol: provider.protocol,
               task: task,
+              trace: trace,
+              outputContract: outputContract,
+              deployment: provider.deployment,
+              maxInputTokens: provider.effectiveCapabilities.maxContextTokens,
             );
 
             result.onSuccess = () {
@@ -608,6 +899,8 @@ Future<_AiExecutionResult> _generateStream({
     registry: registry,
     config: config,
     task: task,
+    trace: trace,
+    outputContract: outputContract,
   );
   return result;
 }
@@ -623,8 +916,13 @@ Future<_AiExecutionResult> _executeStream({
   required LangchainAiConfig config,
   AiProtocol? protocol,
   required AiContextTask task,
+  AiTraceContext? trace,
+  AiOutputContract? outputContract,
+  AiProviderDeployment? deployment,
+  int? maxInputTokens,
 }) async {
   const maxRetries = 3;
+  final metrics = AiRequestMetrics();
   late final _AiExecutionResult result;
 
   Stream<String> generateOutput() async* {
@@ -642,6 +940,8 @@ Future<_AiExecutionResult> _executeStream({
             sanitizedMessages: sanitizedMessages,
             useAgent: useAgent,
             task: task,
+            metrics: metrics,
+            maxInputTokens: maxInputTokens,
           ).timeout(timeout);
 
           await for (final chunk in stream) {
@@ -661,6 +961,7 @@ Future<_AiExecutionResult> _executeStream({
           }
 
           retryCount++;
+          metrics.retryCount = retryCount;
           final delay = calculateRetryDelay(errorType, retryCount);
           AnxLog.info(
             'AI request failed, retry $retryCount/$maxRetries after ${delay.inSeconds}s: $error',
@@ -693,6 +994,8 @@ Future<_AiExecutionResult> _executeStream({
     providerId: config.identifier,
     isError: false,
     model: config.model,
+    deployment: deployment,
+    metrics: metrics,
   );
   return result;
 }
@@ -704,9 +1007,26 @@ Stream<String> _createStream({
   required List<ChatMessage> sanitizedMessages,
   required bool useAgent,
   required AiContextTask task,
+  required AiRequestMetrics metrics,
+  int? maxInputTokens,
 }) async* {
   final runner = CancelableLangchainRunner(
-    onTokenUsage: aiTokenUsageService.record,
+    onTokenUsage: ({
+      required inputTokens,
+      required outputTokens,
+      required estimated,
+    }) {
+      aiTokenUsageService.record(
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        estimated: estimated,
+      );
+      metrics.addUsage(
+        inputTokens: inputTokens,
+        outputTokens: outputTokens,
+        estimated: estimated,
+      );
+    },
   );
   _activeRunners.add(runner);
   try {
@@ -715,6 +1035,7 @@ Stream<String> _createStream({
       task: task,
       systemMessage: pipeline.systemMessage,
       cacheScope: 'ai:${task.name}',
+      maxInputTokens: maxInputTokens,
     );
     final promptMessages = assembly.messages;
     if (assembly.summarizedMessages > 0 || assembly.droppedMessages > 0) {

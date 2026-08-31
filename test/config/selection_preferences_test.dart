@@ -7,16 +7,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('long press selection defaults to sentence and persists word mode',
+  test('long press selection defaults to word and persists sentence mode',
       () async {
     SharedPreferences.setMockInitialValues({});
     Prefs().prefs = await SharedPreferences.getInstance();
 
-    expect(Prefs().longPressSelectionMode, LongPressSelectionMode.sentence);
-    Prefs().longPressSelectionMode = LongPressSelectionMode.word;
-
     expect(Prefs().longPressSelectionMode, LongPressSelectionMode.word);
-    expect(Prefs().prefs.getString('longPressSelectionMode'), 'word');
+    Prefs().longPressSelectionMode = LongPressSelectionMode.sentence;
+
+    expect(Prefs().longPressSelectionMode, LongPressSelectionMode.sentence);
+    expect(Prefs().prefs.getString('longPressSelectionMode'), 'sentence');
   });
 
   test('selection menu actions persist order, enabled state, and reset',

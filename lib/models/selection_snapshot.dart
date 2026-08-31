@@ -1,4 +1,5 @@
 enum SelectionRangeType {
+  character,
   word,
   sentence,
   paragraph,

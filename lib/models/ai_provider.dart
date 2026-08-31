@@ -42,6 +42,22 @@ enum AiProviderDeployment {
 }
 
 @freezed
+abstract class AiProviderCapabilities with _$AiProviderCapabilities {
+  const factory AiProviderCapabilities({
+    @Default(true) bool supportsStreaming,
+    @Default(true) bool supportsJson,
+    @Default(true) bool supportsTools,
+    @Default(false) bool supportsVision,
+    @Default(false) bool supportsThinking,
+    int? maxContextTokens,
+    int? maxOutputTokens,
+  }) = _AiProviderCapabilities;
+
+  factory AiProviderCapabilities.fromJson(Map<String, dynamic> json) =>
+      _$AiProviderCapabilitiesFromJson(json);
+}
+
+@freezed
 abstract class AiProvider with _$AiProvider {
   const AiProvider._();
 
@@ -58,6 +74,7 @@ abstract class AiProvider with _$AiProvider {
     @Default('') String model, // Current selected model
     @Default(AiProviderAuthMode.bearer) AiProviderAuthMode authMode,
     @Default(AiProviderDeployment.cloud) AiProviderDeployment deployment,
+    AiProviderCapabilities? capabilities,
     @Default(AiReasoningEffort.auto)
     AiReasoningEffort reasoningEffort, // AI reasoning effort
     @Default(0) int requestTimeoutSeconds, // 0 means no app-level timeout
@@ -95,6 +112,12 @@ abstract class AiProvider with _$AiProvider {
                 protocol == AiProtocol.openai) ||
             hasValidKey);
   }
+
+  /// Old provider JSON has no capability descriptor. Preserve its historical
+  /// behavior with permissive protocol defaults until the user saves an
+  /// explicit descriptor.
+  AiProviderCapabilities get effectiveCapabilities =>
+      capabilities ?? const AiProviderCapabilities();
 }
 
 @freezed

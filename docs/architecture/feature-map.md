@@ -1,8 +1,11 @@
 # Anx Reader 功能地图（供 AI 开发前必读）
 
-> 状态：实现事实索引。更新日期：2026-08-25。  
+> 状态：实现事实索引。更新日期：2026-08-31。
 > 目的：让后续开发先复用已有能力、数据模型和入口，避免重复造轮子或绕过权限/同步规则。  
 > 产品决策以仓库根目录 [`DESIGN.md`](../../DESIGN.md) 为准；本文是“代码在哪里、已经做到什么、哪些还没有”的导航，不替代源码和测试。
+
+AI 子系统的完整功能、端到端处理流程、数据分层和高复用演进建议见
+[`ai-system-map.md`](ai-system-map.md)。
 
 小说 Story Atlas 的 `track`、`stage`、`relationType` 使用稳定的
 namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在读取

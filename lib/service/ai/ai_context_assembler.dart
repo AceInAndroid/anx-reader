@@ -245,8 +245,18 @@ class AiContextAssembler {
     required AiContextTask task,
     ChatMessage? systemMessage,
     String cacheScope = 'conversation',
+    int? maxInputTokens,
   }) {
-    final budget = budgetFor(task);
+    final configuredBudget = budgetFor(task);
+    final budget = maxInputTokens == null
+        ? configuredBudget
+        : AiContextBudget(
+            maxInputTokens:
+                configuredBudget.maxInputTokens.clamp(1, maxInputTokens),
+            reservedOutputTokens: configuredBudget.reservedOutputTokens,
+            recentMessages: configuredBudget.recentMessages,
+            summaryTokens: configuredBudget.summaryTokens,
+          );
     final messages = _deduplicateSystemMessages(source);
     final systemTokens = systemMessage == null
         ? 0

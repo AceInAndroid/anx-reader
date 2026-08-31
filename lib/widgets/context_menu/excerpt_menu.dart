@@ -661,6 +661,8 @@ class ExcerptMenuState extends State<ExcerptMenu> {
         children: [
           Wrap(
             children: [
+              _rangeButton(SelectionRangeType.character,
+                  L10n.of(context).selectionRangeCharacter),
               _rangeButton(
                   SelectionRangeType.word, L10n.of(context).selectionRangeWord),
               _rangeButton(SelectionRangeType.sentence,

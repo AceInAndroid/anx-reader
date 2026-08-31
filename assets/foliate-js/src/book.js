@@ -191,7 +191,7 @@ const buildRangeContextText = (range) => {
 const selectionControllers = new Map()
 let activeSelectionController = null
 let selectionConfiguration = {
-  longPressMode: 'sentence',
+  longPressMode: 'word',
   eInkMode: false,
   platform: 'android',
 }

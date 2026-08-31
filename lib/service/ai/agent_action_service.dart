@@ -1,4 +1,5 @@
 import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/models/reading_evidence.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/reading_note.dart';
 import 'package:anx_reader/models/book_note.dart';
@@ -7,6 +8,9 @@ import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:uuid/uuid.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
 import 'package:anx_reader/service/ai/reading_agent_runtime.dart';
+import 'package:anx_reader/service/ai/reading_evidence_adapter.dart';
+import 'package:anx_reader/service/ai/validated_ai_mutation.dart';
+import 'package:anx_reader/utils/log/common.dart';
 
 /// Single mutation boundary used by Reading Agent tools and UI commands.
 /// Repository transactions persist both the mutation and its undo journal.
@@ -20,6 +24,70 @@ class AgentActionService {
   final ReadingAgentRepository _repository;
   final ReadingAgentRuntimeController _runtime;
 
+  Future<AgentMutation<T>> applyValidated<T>(
+    ValidatedAiMutation<T> mutation,
+    Future<AgentMutation<T>> Function() apply,
+  ) async {
+    _validateMutation(mutation);
+    final result = await apply();
+    _logAppliedMutation(mutation, result.action.id);
+    return result;
+  }
+
+  Future<AgentMutation<T>?> applyValidatedNullable<T>(
+    ValidatedAiMutation<T> mutation,
+    Future<AgentMutation<T>?> Function() apply,
+  ) async {
+    _validateMutation(mutation);
+    final result = await apply();
+    if (result != null) _logAppliedMutation(mutation, result.action.id);
+    return result;
+  }
+
+  void _validateMutation<T>(ValidatedAiMutation<T> mutation) {
+    if (!mutation.isAuthorized) {
+      throw StateError('Proactive AI suggestions require user confirmation');
+    }
+    validateEvidenceForMutation(
+      evidence: mutation.evidence,
+      bookId: mutation.bookId,
+      visibleProgress: mutation.visibleProgress,
+    );
+  }
+
+  void _logAppliedMutation<T>(
+    ValidatedAiMutation<T> mutation,
+    String actionId,
+  ) {
+    AnxLog.info(
+      'AI mutation applied action=${mutation.actionType} '
+      'target=${mutation.targetType} actionId=$actionId '
+      'requestId=${mutation.requestId ?? '-'} taskId=${mutation.taskId ?? '-'} '
+      'workloadId=${mutation.workloadId ?? '-'}',
+    );
+  }
+
+  /// Common validation boundary for new AI write commands. Existing typed
+  /// methods remain the compatibility facade and continue to own domain
+  /// validation and repository transactions.
+  void validateEvidenceForMutation({
+    required Iterable<EvidenceEnvelope> evidence,
+    required int bookId,
+    required double visibleProgress,
+  }) {
+    for (final item in evidence) {
+      if (!item.isTraceable) {
+        throw ArgumentError('AI mutation contains untraceable evidence');
+      }
+      if (item.bookId != null && item.bookId != bookId) {
+        throw ArgumentError('AI mutation evidence belongs to another book');
+      }
+      if (!item.isVisibleAtProgress(visibleProgress)) {
+        throw ArgumentError('AI mutation evidence exceeds spoiler boundary');
+      }
+    }
+  }
+
   String get _sessionId {
     final value = _runtime.state.sessionId;
     if (value == null) throw StateError('No active reading session');
@@ -27,9 +95,17 @@ class AgentActionService {
   }
 
   Future<AgentMutation<ReadingGoal>> saveGoal(ReadingGoal goal) async {
-    final mutation = await _repository.saveGoal(
-      goal,
-      sessionId: _sessionId,
+    final mutation = await applyValidated(
+      ValidatedAiMutation<ReadingGoal>(
+        actionType: 'reading_goal_save',
+        targetType: 'reading_goal',
+        targetId: goal.id,
+        bookId: goal.bookId,
+        value: goal,
+        authorization: AiMutationAuthorization.confirmedTask,
+        visibleProgress: _runtime.state.totalProgress,
+      ),
+      () => _repository.saveGoal(goal, sessionId: _sessionId),
     );
     _runtime.goalChanged(goal.status == ReadingGoalStatus.active ? goal : null);
     _runtime.actionApplied(mutation.action);
@@ -41,11 +117,32 @@ class AgentActionService {
     int? ownedAnnotationId,
     BookNote? ownedAnnotation,
   }) async {
-    final mutation = await _repository.createNote(
-      document,
-      sessionId: _sessionId,
-      ownedAnnotationId: ownedAnnotationId,
-      ownedAnnotation: ownedAnnotation,
+    final mutation = await applyValidated(
+      ValidatedAiMutation<ReadingNoteDocument>(
+        actionType: 'reading_note_create',
+        targetType: 'reading_note',
+        targetId: document.note.id,
+        bookId: document.note.bookId,
+        value: document,
+        authorization: AiMutationAuthorization.confirmedTask,
+        evidence: [
+          for (final source in document.sources)
+            if (ReadingEvidenceAdapter.fromNoteSource(
+              source,
+              bookId: document.note.bookId,
+              visibleFromProgress: _runtime.state.totalProgress,
+            )
+                case final item?)
+              item,
+        ],
+        visibleProgress: _runtime.state.totalProgress,
+      ),
+      () => _repository.createNote(
+        document,
+        sessionId: _sessionId,
+        ownedAnnotationId: ownedAnnotationId,
+        ownedAnnotation: ownedAnnotation,
+      ),
     );
     if (ownedAnnotation != null) {
       ReaderCommandGateway.instance.showAnnotation(ownedAnnotation);
@@ -139,9 +236,17 @@ class AgentActionService {
   Future<AgentMutation<ReadingDifficulty>> saveDifficulty(
     ReadingDifficulty difficulty,
   ) async {
-    final mutation = await _repository.saveDifficulty(
-      difficulty,
-      sessionId: _sessionId,
+    final mutation = await applyValidated(
+      ValidatedAiMutation<ReadingDifficulty>(
+        actionType: 'reading_difficulty_save',
+        targetType: 'reading_difficulty',
+        targetId: difficulty.id,
+        bookId: difficulty.bookId,
+        value: difficulty,
+        authorization: AiMutationAuthorization.confirmedTask,
+        visibleProgress: _runtime.state.totalProgress,
+      ),
+      () => _repository.saveDifficulty(difficulty, sessionId: _sessionId),
     );
     ReaderCommandGateway.instance.showDifficulty(
       id: mutation.value.id,
@@ -153,8 +258,18 @@ class AgentActionService {
 
   Future<AgentMutation<ReadingMemoryDocument>> appendMemory(
       ReadingMemoryDocument document) async {
-    final mutation =
-        await _repository.appendMemory(document, sessionId: _sessionId);
+    final mutation = await applyValidated(
+      ValidatedAiMutation<ReadingMemoryDocument>(
+        actionType: 'reading_memory_append',
+        targetType: 'reading_memory',
+        targetId: document.id,
+        bookId: document.bookId,
+        value: document,
+        authorization: AiMutationAuthorization.confirmedTask,
+        visibleProgress: _runtime.state.totalProgress,
+      ),
+      () => _repository.appendMemory(document, sessionId: _sessionId),
+    );
     _runtime.memoryAdded(document.title);
     _runtime.actionApplied(mutation.action);
     return mutation;
@@ -162,8 +277,20 @@ class AgentActionService {
 
   Future<AgentMutation<ReadingArtifact>> saveArtifact(
       ReadingArtifact artifact) async {
-    final mutation =
-        await _repository.saveArtifact(artifact, sessionId: _sessionId);
+    final source = ReadingEvidenceAdapter.fromArtifact(artifact);
+    final mutation = await applyValidated(
+      ValidatedAiMutation<ReadingArtifact>(
+        actionType: 'reading_artifact_save',
+        targetType: 'reading_artifact',
+        targetId: artifact.id,
+        bookId: artifact.bookId,
+        value: artifact,
+        authorization: AiMutationAuthorization.confirmedTask,
+        evidence: source == null ? const [] : [source],
+        visibleProgress: _runtime.state.totalProgress,
+      ),
+      () => _repository.saveArtifact(artifact, sessionId: _sessionId),
+    );
     _runtime.actionApplied(mutation.action);
     return mutation;
   }
@@ -174,13 +301,37 @@ class AgentActionService {
     BookWikiRevision? revision,
     String? sessionId,
   }) async {
-    final mutation = await _repository.saveWikiEntry(
-      entry,
-      wiki: wiki,
-      revision: revision,
-      sessionId: sessionId ??
-          _runtime.state.sessionId ??
-          'wiki-${entry.bookId}-${DateTime.now().millisecondsSinceEpoch}',
+    final evidence = [
+      for (final source in entry.sources)
+        if (ReadingEvidenceAdapter.fromWikiSource(
+          source,
+          visibleFromProgress: entry.visibleFromProgress,
+          epistemicStatus: entry.epistemicStatus,
+        )
+            case final resolved?)
+          resolved,
+    ];
+    final mutation = await applyValidated(
+      ValidatedAiMutation<BookWikiEntry>(
+        actionType: 'book_wiki_entry_save',
+        targetType: 'book_wiki_entry',
+        targetId: entry.id,
+        bookId: entry.bookId,
+        value: entry,
+        authorization: AiMutationAuthorization.confirmedTask,
+        evidence: evidence,
+        // Full-book Wiki generation is explicitly confirmed and may persist
+        // future entries while keeping them hidden by visibleFromProgress.
+        visibleProgress: 1,
+      ),
+      () => _repository.saveWikiEntry(
+        entry,
+        wiki: wiki,
+        revision: revision,
+        sessionId: sessionId ??
+            _runtime.state.sessionId ??
+            'wiki-${entry.bookId}-${DateTime.now().millisecondsSinceEpoch}',
+      ),
     );
     if (_runtime.state.sessionId != null) {
       _runtime.actionApplied(mutation.action);
@@ -193,11 +344,28 @@ class AgentActionService {
     required Map<String, dynamic> value,
     bool explicit = false,
   }) async {
-    final mutation = await _repository.recordProfileEvidence(
-      key: key,
-      value: value,
-      sessionId: _sessionId,
-      explicit: explicit,
+    final mutation = await applyValidatedNullable(
+      ValidatedAiMutation<ReaderProfileItem>(
+        actionType: 'reader_profile_evidence',
+        targetType: 'reader_profile',
+        targetId: key,
+        bookId: _runtime.state.bookId ?? 0,
+        value: ReaderProfileItem(
+          key: key,
+          value: value,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+        authorization: explicit
+            ? AiMutationAuthorization.explicitUserRequest
+            : AiMutationAuthorization.confirmedTask,
+      ),
+      () => _repository.recordProfileEvidence(
+        key: key,
+        value: value,
+        sessionId: _sessionId,
+        explicit: explicit,
+      ),
     );
     if (mutation != null) _runtime.actionApplied(mutation.action);
     return mutation;
@@ -207,10 +375,25 @@ class AgentActionService {
     required String key,
     required ReaderProfileStatus status,
   }) async {
-    final mutation = await _repository.setProfileStatus(
-      key: key,
-      status: status,
-      sessionId: _sessionId,
+    final mutation = await applyValidated(
+      ValidatedAiMutation<ReaderProfileItem>(
+        actionType: 'reader_profile_status',
+        targetType: 'reader_profile',
+        targetId: key,
+        bookId: _runtime.state.bookId ?? 0,
+        value: ReaderProfileItem(
+          key: key,
+          status: status,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+        ),
+        authorization: AiMutationAuthorization.explicitUserRequest,
+      ),
+      () => _repository.setProfileStatus(
+        key: key,
+        status: status,
+        sessionId: _sessionId,
+      ),
     );
     _runtime.actionApplied(mutation.action);
     return mutation;

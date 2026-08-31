@@ -2,6 +2,19 @@ import 'package:anx_reader/models/selection_snapshot.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('selection snapshot accepts the stable character range type', () {
+    final snapshot = SelectionSnapshot.fromJson(const {
+      'sessionId': 1,
+      'rangeType': 'character',
+      'trigger': 'rangeButton',
+      'text': '阅',
+      'cfi': 'epubcfi(/6/2)',
+    });
+
+    expect(snapshot.rangeType, SelectionRangeType.character);
+    expect(snapshot.text, '阅');
+  });
+
   test('parses selection range metadata and safe defaults', () {
     final snapshot = SelectionSnapshot.fromJson({
       'sessionId': 4,

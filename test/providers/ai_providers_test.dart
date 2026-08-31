@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
@@ -124,7 +126,29 @@ void main() {
     });
     expect(provider.authMode, AiProviderAuthMode.bearer);
     expect(provider.deployment, AiProviderDeployment.cloud);
+    expect(provider.capabilities, isNull);
+    expect(provider.effectiveCapabilities.supportsStreaming, isTrue);
     expect(provider.isRunnable, isFalse);
+  });
+
+  test('provider capabilities round-trip and preserve explicit limits', () {
+    final provider = _provider('capable').copyWith(
+      capabilities: const AiProviderCapabilities(
+        supportsTools: false,
+        supportsVision: true,
+        maxContextTokens: 8192,
+        maxOutputTokens: 1024,
+      ),
+    );
+
+    final restored = AiProvider.fromJson(
+      Map<String, dynamic>.from(jsonDecode(jsonEncode(provider)) as Map),
+    );
+
+    expect(restored.effectiveCapabilities.supportsTools, isFalse);
+    expect(restored.effectiveCapabilities.supportsVision, isTrue);
+    expect(restored.effectiveCapabilities.maxContextTokens, 8192);
+    expect(restored.effectiveCapabilities.maxOutputTokens, 1024);
   });
 
   test('extraction role is excluded from preferences backup', () async {

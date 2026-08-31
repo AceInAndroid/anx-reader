@@ -140,6 +140,15 @@ const wordBounds = (text, offset) => {
   return start < end ? { start, end, needsDictionary: false } : null
 }
 
+const characterBounds = (text, offset) => {
+  if (!text.length) return null
+  let index = Math.max(0, Math.min(text.length - 1, offset === text.length ? offset - 1 : offset))
+  // Keep a supplementary Unicode character (surrogate pair) intact.
+  if (index > 0 && /[\uDC00-\uDFFF]/.test(text[index])) index--
+  const width = text.codePointAt(index) > 0xFFFF ? 2 : 1
+  return { start: index, end: Math.min(text.length, index + width) }
+}
+
 const isSentenceEnd = (text, index) => {
   const char = text[index]
   if (!SENTENCE_END.test(char || '')) return false
@@ -176,7 +185,7 @@ const readableBlocks = (doc, current) => {
 }
 
 export class SelectionRangeController {
-  constructor({ doc, index, emitSelection, requestWordBoundary, longPressMode = 'sentence' }) {
+  constructor({ doc, index, emitSelection, requestWordBoundary, longPressMode = 'word' }) {
     this.doc = doc
     this.index = index
     this.emitSelection = emitSelection
@@ -306,6 +315,10 @@ export class SelectionRangeController {
       const bounds = sentenceBounds(map.text, offset)
       return bounds ? this.applyBounds(bounds.start, bounds.end, 'sentence') : false
     }
+    if (type === 'character') {
+      const bounds = characterBounds(map.text, offset)
+      return bounds ? this.applyBounds(bounds.start, bounds.end, 'character') : false
+    }
     const bounds = wordBounds(map.text, offset)
     if (!bounds) return false
     if (!bounds.needsDictionary || !this.requestWordBoundary) {
@@ -348,7 +361,7 @@ export class SelectionRangeController {
   }
 
   changeRange(type) {
-    if (!['word', 'sentence', 'paragraph'].includes(type)) return false
+    if (!['character', 'word', 'sentence', 'paragraph'].includes(type)) return false
     const selection = this.doc.getSelection()
     if (!selection || selection.isCollapsed || !selection.rangeCount) return false
     const range = selection.getRangeAt(0)
@@ -364,7 +377,11 @@ export class SelectionRangeController {
     this.anchor = { block, map, offset }
     this.trigger = 'rangeButton'
     if (type === 'paragraph') return this.applyBounds(0, map.text.length, type)
-    const bounds = type === 'word' ? wordBounds(map.text, offset) : sentenceBounds(map.text, offset)
+    const bounds = type === 'character'
+      ? characterBounds(map.text, offset)
+      : type === 'word'
+        ? wordBounds(map.text, offset)
+        : sentenceBounds(map.text, offset)
     if (!bounds) return false
     if (type === 'word' && bounds.needsDictionary && this.requestWordBoundary) {
       return this.selectAtPointFromRange(range, type)
@@ -429,4 +446,4 @@ export class SelectionRangeController {
   }
 }
 
-export const selectionAlgorithms = { wordBounds, sentenceBounds }
+export const selectionAlgorithms = { characterBounds, wordBounds, sentenceBounds }

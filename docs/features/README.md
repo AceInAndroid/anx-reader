@@ -4,8 +4,9 @@ This directory records implementation context, architecture decisions, user
 entry points, verification evidence, and known limitations for substantial
 features already present in the codebase.
 
-开发前请先阅读 [功能地图](../architecture/feature-map.md)。它按能力列出
-代码入口、数据边界、用户入口和明确未实现项，避免重复开发。
+开发前请先阅读 [AI 系统地图](../architecture/ai-system-map.md) 和
+[功能地图](../architecture/feature-map.md)。前者梳理 AI 功能、处理流程、
+数据边界与高复用架构方向；后者列出全项目代码入口和明确未实现项，避免重复开发。
 
 ## AI
 
