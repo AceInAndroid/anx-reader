@@ -1003,6 +1003,27 @@ const getCSS = ({ fontSize,
         width: initial !important;
     }
 
+    /*
+     * Covers and image-only EPUB chapters should use the reading viewport.
+     * The paginator applies the final pixel constraints after it knows the
+     * column size; these rules also neutralize common fixed-width wrappers.
+     */
+    body.anx-image-only-page,
+    .anx-image-page-wrapper {
+        width: 100% !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+
+    .anx-page-media,
+    .anx-expandable-image {
+        display: block !important;
+        width: 100% !important;
+        height: auto !important;
+        margin-inline: auto !important;
+        object-fit: contain !important;
+    }
+
     /* Keep headings with the content they introduce. */
     h1, h2, h3, h4, h5, h6 {
         break-after: avoid !important;
@@ -1252,6 +1273,51 @@ const markLayoutElements = (doc) => {
     const hasMedia = element.querySelector('img, svg, video') !== null
     if (hasMedia && element.textContent.trim() === '') {
       element.classList.add('anx-image-container')
+    }
+  })
+
+  const media = Array.from(doc.body?.querySelectorAll('img, svg, video') ?? [])
+  const meaningfulText = (doc.body?.textContent ?? '')
+    .replace(/[\s\u200b\u00ad]+/g, '')
+  const isImageOnlyPage = media.length > 0 && meaningfulText.length <= 40
+
+  if (isImageOnlyPage) {
+    doc.body.classList.add('anx-image-only-page')
+    media.forEach(element => element.classList.add('anx-page-media'))
+
+    // Publisher cover pages often wrap the image in several fixed-width
+    // elements. Mark that wrapper chain so the paginator can reclaim the
+    // available page width without changing inline icons elsewhere.
+    media.forEach(element => {
+      let parent = element.parentElement
+      while (parent && parent !== doc.body) {
+        parent.classList.add('anx-image-page-wrapper')
+        parent = parent.parentElement
+      }
+    })
+  }
+
+  const refreshLayout = () => {
+    const renderer = globalThis.reader?.view?.renderer
+    renderer?.setImageSize?.()
+    renderer?.expand?.()
+  }
+
+  doc.querySelectorAll('.anx-image-container img').forEach(image => {
+    const classifyLargeImage = () => {
+      const source = `${image.currentSrc || image.src || ''}`.toLowerCase()
+      const looksLikeCover = /(^|[\/_-])(cover|front|title[-_ ]?page)([._/-]|$)/.test(source)
+      const isLargeRaster = image.naturalWidth >= 480 || image.naturalHeight >= 480
+      if (!looksLikeCover && !isLargeRaster) return
+      if (image.classList.contains('anx-expandable-image')) return
+      image.classList.add('anx-expandable-image')
+      refreshLayout()
+    }
+
+    if (image.complete) classifyLargeImage()
+    else if (!image.__anxImageSizingListener) {
+      image.__anxImageSizingListener = true
+      image.addEventListener('load', classifyLargeImage, { once: true })
     }
   })
 }
@@ -1654,6 +1720,11 @@ class Reader {
     this.#saveOriginalContent()
 
     this.readingFeatures(readingRules)
+    // readingFeatures marks cover/image-only chapters after the paginator's
+    // initial layout pass. Re-run media sizing so those pages immediately use
+    // the available viewport instead of waiting for another resize event.
+    this.view.renderer?.setImageSize?.()
+    this.view.renderer?.expand?.()
     
     // Apply code highlighting to newly loaded content
     if (style && style.codeHighlightTheme && style.codeHighlightTheme !== 'off') {

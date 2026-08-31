@@ -322,6 +322,23 @@ class View {
     const doc = this.document
     const availablePageHeight = Math.max(1, height - topMargin - bottomMargin)
     const availablePageWidth = Math.max(1, width - topMargin - bottomMargin)
+
+    if (doc.body.classList.contains('anx-image-only-page')) {
+      setStylesImportant(doc.body, {
+        'width': '100%',
+        'max-width': '100%',
+        'box-sizing': 'border-box',
+      })
+      for (const wrapper of doc.body.querySelectorAll('.anx-image-page-wrapper')) {
+        setStylesImportant(wrapper, {
+          'width': '100%',
+          'max-width': '100%',
+          'height': 'auto',
+          'box-sizing': 'border-box',
+        })
+      }
+    }
+
     for (const el of doc.body.querySelectorAll('img, svg, video')) {
       // preserve max size if they are already set
       const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
@@ -334,6 +351,10 @@ class View {
         : columnWidth
           ? `${columnWidth}px`
           : (maxWidth !== 'none' && maxWidth !== '0px' ? maxWidth : '100%')
+      const shouldExpand = !el.closest('table') && (
+        el.classList.contains('anx-page-media')
+        || el.classList.contains('anx-expandable-image')
+      )
       setStylesImportant(el, {
         'max-height': vertical
           ? (maxHeight !== 'none' && maxHeight !== '0px' ? maxHeight : '100%')
@@ -343,6 +364,18 @@ class View {
         'page-break-inside': 'avoid',
         'break-inside': 'avoid',
         'box-sizing': 'border-box',
+        ...(shouldExpand ? {
+          // Override publisher width attributes/styles only for full-page or
+          // high-resolution standalone images. Height remains proportional
+          // and max-height prevents spill into the next page.
+          'width': vertical
+            ? `${availablePageWidth}px`
+            : (columnWidth ? `${columnWidth}px` : '100%'),
+          'height': 'auto',
+          'display': 'block',
+          'margin-left': 'auto',
+          'margin-right': 'auto',
+        } : {}),
       })
     }
   }
