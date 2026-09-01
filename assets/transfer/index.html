@@ -151,6 +151,16 @@ input[type="file"] { display: none; }
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.48);
 }
+.file-remove {
+  border: 0;
+  padding: 8px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+}
+.file-remove:hover { color: var(--danger); background: rgba(195, 56, 50, 0.1); }
 .file-icon {
   display: grid;
   width: 42px;
@@ -219,6 +229,19 @@ input[type="file"] { display: none; }
   font-size: 12px;
   line-height: 1.7;
 }
+.history { margin-top: 22px; }
+.section-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.section-heading h2 { font-size: 18px; letter-spacing: -0.02em; }
+.history-count { color: var(--muted); font-size: 12px; }
+.history-list { display: grid; gap: 9px; margin-top: 12px; }
+.history-item { display: flex; gap: 10px; align-items: center; padding: 11px 12px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.32); }
+.history-mark { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--success); }
+.history-mark.error { background: var(--danger); }
+.history-main { min-width: 0; flex: 1; }
+.history-name { overflow: hidden; font-size: 13px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.history-empty { padding: 18px 8px; color: var(--muted); font-size: 13px; text-align: center; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }
 @media (max-width: 520px) {
   body { padding: 20px 12px; }
   .panel { padding: 14px; border-radius: 22px; }
@@ -241,11 +264,22 @@ input[type="file"] { display: none; }
         <div class="drop-title">拖拽书籍到这里，或点击选择文件</div>
         <div class="drop-hint">支持 EPUB、PDF、TXT、MOBI、AZW3、FB2，单文件最大 500MB</div>
       </div>
-      <input type="file" id="fileInput" multiple accept=".epub,.pdf,.txt,.mobi,.azw3,.fb2">
+      <input type="file" id="fileInput" multiple accept=".epub,.pdf,.txt,.md,.markdown,.mobi,.azw3,.fb2">
     </div>
 
     <button class="upload-btn" id="uploadBtn" hidden>上传选中的书籍</button>
+    <div class="status-bar" id="batchSummary" hidden aria-live="polite"></div>
     <div class="file-list" id="fileList"></div>
+
+    <section class="history" aria-labelledby="historyTitle">
+      <div class="section-heading">
+        <h2 id="historyTitle">上传历史</h2>
+        <span class="history-count" id="historyCount">本次服务启动后</span>
+      </div>
+      <div class="history-list" id="uploadHistory" aria-live="polite">
+        <div class="history-empty">还没有上传记录</div>
+      </div>
+    </section>
 
     <div class="status-bar">
       <span class="status-dot" id="statusDot"></span>
@@ -256,7 +290,7 @@ input[type="file"] { display: none; }
 </main>
 
 <script>
-const supportedExtensions = new Set(['epub', 'pdf', 'txt', 'mobi', 'azw3', 'fb2']);
+const supportedExtensions = new Set(['epub', 'pdf', 'txt', 'md', 'markdown', 'mobi', 'azw3', 'fb2']);
 const maxFileSize = 500 * 1024 * 1024;
 
 const dropZone = document.getElementById('dropZone');
@@ -265,6 +299,9 @@ const fileList = document.getElementById('fileList');
 const uploadBtn = document.getElementById('uploadBtn');
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+const batchSummary = document.getElementById('batchSummary');
+const uploadHistory = document.getElementById('uploadHistory');
+const historyCount = document.getElementById('historyCount');
 
 let selectedFiles = [];
 
@@ -283,7 +320,9 @@ fileInput.addEventListener('change', () => handleFiles(fileInput.files));
 uploadBtn.addEventListener('click', uploadSelectedFiles);
 
 function handleFiles(fileListInput) {
-  selectedFiles = Array.from(fileListInput);
+  const incoming = Array.from(fileListInput);
+  const seen = new Set(selectedFiles.map(file => `${file.name}:${file.size}:${file.lastModified}`));
+  selectedFiles = selectedFiles.concat(incoming.filter(file => !seen.has(`${file.name}:${file.size}:${file.lastModified}`)));
   uploadBtn.hidden = selectedFiles.length === 0;
   renderFileList();
 }
@@ -324,7 +363,18 @@ function renderFileList() {
     progress.appendChild(fill);
 
     info.append(name, status, progress);
-    item.append(icon, info);
+    const remove = document.createElement('button');
+    remove.className = 'file-remove';
+    remove.type = 'button';
+    remove.title = '移除';
+    remove.setAttribute('aria-label', `移除 ${file.name}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      selectedFiles.splice(index, 1);
+      uploadBtn.hidden = selectedFiles.length === 0;
+      renderFileList();
+    });
+    item.append(icon, info, remove);
     fileList.appendChild(item);
   });
 }
@@ -336,13 +386,23 @@ async function uploadSelectedFiles() {
   uploadBtn.disabled = true;
   uploadBtn.textContent = '上传中...';
 
-  for (const file of filesToUpload) {
-    const index = selectedFiles.indexOf(file);
-    await uploadFile(file, index);
-  }
+  let completed = 0;
+  const outcomes = [];
+  // Keep three streams active so a large batch does not wait on one slow file.
+  const workers = Array.from({ length: Math.min(3, filesToUpload.length) }, async () => {
+    while (completed < filesToUpload.length) {
+      const position = completed++;
+      const file = filesToUpload[position];
+      outcomes.push(await uploadFile(file, selectedFiles.indexOf(file)));
+    }
+  });
+  await Promise.all(workers);
 
   uploadBtn.disabled = false;
   uploadBtn.textContent = '上传选中的书籍';
+  const successful = outcomes.filter(Boolean).length;
+  batchSummary.hidden = false;
+  batchSummary.textContent = `本批完成：${successful} 个成功，${filesToUpload.length - successful} 个失败`;
   selectedFiles = [];
   fileInput.value = '';
   uploadBtn.hidden = true;
@@ -370,11 +430,13 @@ async function uploadFile(file, index) {
     statusEl.textContent = '上传成功';
     statusEl.className = 'file-status success';
     fillEl.style.width = '100%';
+    return true;
   } catch (error) {
     statusEl.textContent = `失败：${error.message}`;
     statusEl.className = 'file-status error';
     fillEl.style.width = '100%';
     fillEl.style.background = 'var(--danger)';
+    return false;
   }
 }
 
@@ -392,7 +454,7 @@ function sendFile(file, onProgress) {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(data);
         } else {
-          reject(new Error(data.error || `HTTP ${xhr.status}`));
+          reject(new Error(data.error || data.results?.[0]?.error || `HTTP ${xhr.status}`));
         }
       } catch (error) {
         reject(error);
@@ -415,6 +477,7 @@ async function checkStatus() {
     if (data.running) {
       statusDot.className = 'status-dot';
       statusText.textContent = `已连接，端口 ${data.port}`;
+      renderHistory(Array.isArray(data.uploads) ? data.uploads : []);
     } else {
       statusDot.className = 'status-dot offline';
       statusText.textContent = '服务已停止';
@@ -423,6 +486,36 @@ async function checkStatus() {
     statusDot.className = 'status-dot offline';
     statusText.textContent = '连接已断开';
   }
+}
+
+function renderHistory(items) {
+  historyCount.textContent = items.length ? `最近 ${items.length} 条` : '本次服务启动后';
+  uploadHistory.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = '还没有上传记录';
+    uploadHistory.appendChild(empty);
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'history-item';
+    const mark = document.createElement('span');
+    mark.className = `history-mark${item.success ? '' : ' error'}`;
+    const main = document.createElement('div');
+    main.className = 'history-main';
+    const name = document.createElement('div');
+    name.className = 'history-name';
+    name.textContent = item.filename || '未命名文件';
+    const meta = document.createElement('div');
+    meta.className = 'history-meta';
+    const time = item.time ? new Date(item.time).toLocaleString() : '';
+    meta.textContent = item.success ? `上传成功 · ${formatSize(item.size || 0)} · ${time}` : `上传失败 · ${item.error || '未知错误'} · ${time}`;
+    main.append(name, meta);
+    row.append(mark, main);
+    uploadHistory.appendChild(row);
+  });
 }
 
 function validateFile(file) {

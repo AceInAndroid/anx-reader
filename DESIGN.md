@@ -711,3 +711,21 @@ pipeline 版本。它只在用户确认生成/更新后创建，不是新的事�
 - E-ink uses the same static cards and native navigation with no required
   animation. New book types register Wiki mappings; Wiki pages do not branch
   on book genre.
+
+## Wireless book transfer web client
+
+- The browser client is a lightweight local-network inbox. File selection is
+  additive, supports drag-and-drop and multi-select, and keeps per-file progress
+  and results visible after a batch finishes.
+- A batch uploads individual files through the streaming `/upload-file`
+  endpoint with limited concurrency. One failed file does not cancel successful
+  siblings, and the completion summary reports success and failure counts.
+- `/status` is the source of truth for the current server-session upload
+  history. The web client renders recent successful and failed imports, newest
+  first, and refreshes that history without reloading the page.
+- History is intentionally device-local and in-memory for the running transfer
+  server session. It is not reading data, is not synchronized, and does not
+  require a database schema or a parallel persistence path.
+- The page remains usable on phone and desktop browsers, provides keyboard
+  access to file selection and removal, honors reduced-motion preferences, and
+  exposes status changes through an ARIA live region.

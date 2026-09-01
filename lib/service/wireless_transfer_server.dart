@@ -189,6 +189,12 @@ class WirelessTransferServer {
 
     final validationError = _validateUpload(fileName, contentLength);
     if (validationError != null) {
+      _recordUpload(
+        fileName,
+        false,
+        size: contentLength,
+        error: validationError,
+      );
       return _jsonResponse({
         'results': [
           {
