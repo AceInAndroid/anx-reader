@@ -489,4 +489,46 @@ void main() {
     });
     expect(await db.query('tb_agent_actions'), hasLength(1));
   });
+
+  test('upgrade from version 15 preserves forward-created AI actions',
+      () async {
+    final db = await openTempDb('forward_ai_actions_v15.db');
+    addTearDown(db.close);
+    for (final statement in createReadingAgentSQL.split(';')) {
+      if (statement.trim().isNotEmpty) await db.execute(statement);
+    }
+    await helper.onUpgradeDatabase(db, 15, currentDbVersion);
+    await db.insert('tb_agent_actions', {
+      'id': 'artifact-before-version-repair',
+      'action_type': 'artifact',
+      'target_id': 'artifact-1',
+      'book_id': 1,
+      'after_hash': 'hash',
+      'session_id': 'session',
+      'created_at': 1,
+      'expires_at': 2,
+    });
+    await db.insert('tb_agent_actions', {
+      'id': 'wiki-before-version-repair',
+      'action_type': 'wiki',
+      'target_id': 'wiki-1',
+      'book_id': 1,
+      'after_hash': 'hash',
+      'session_id': 'session',
+      'created_at': 1,
+      'expires_at': 2,
+    });
+
+    // Some development builds created newer AI data while the database
+    // user_version still reported 15. Replaying the complete migration chain
+    // must preserve those forward-created actions instead of narrowing the
+    // action_type constraint temporarily.
+    await helper.onUpgradeDatabase(db, 15, currentDbVersion);
+
+    final actions = await db.query(
+      'tb_agent_actions',
+      orderBy: 'id',
+    );
+    expect(actions.map((row) => row['action_type']), ['artifact', 'wiki']);
+  });
 }

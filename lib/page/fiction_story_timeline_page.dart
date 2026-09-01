@@ -55,6 +55,7 @@ class _FictionStoryTimelinePageState extends State<FictionStoryTimelinePage> {
             bookId: widget.book.id,
             visibleAtProgress: widget.book.readingPercentage,
             arcId: widget.arcId,
+            arcScoped: widget.readingProfile?.usesArcScopedStoryAtlas == true,
           );
     _profile = widget.readingProfile ??
         readingExperienceProfileService.cached(widget.book.id);

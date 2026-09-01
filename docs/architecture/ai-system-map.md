@@ -261,6 +261,12 @@ flowchart TB
 
 ### 4.5 小说 Story Atlas 整理
 
+`ReadingStructureParser` 是 Story Atlas 的内容准入边界：先排除版权、扉页、
+版本/编校说明等出版元信息，再把普通章/节/回视为 scene。是否按当前案件 arc
+过滤由 `BookReadingProfile` 的 suspense/case facet 声明；页面不得自行根据书名
+或章节标题切换作用域。结构化事件/关系通过证据校验后若引用了尚未建档的人物，
+仍须由同一确定性校验层找到逐字身份或出场证据，才能补齐 character Artifact。
+
 ```text
 用户点击“整理/更新故事档案”
   -> 预览当前设备整理范围和 Token

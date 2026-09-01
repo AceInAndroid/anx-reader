@@ -14,6 +14,7 @@ class FictionCharacterGraphPage extends StatefulWidget {
     this.onRequestOrganize,
     this.initialAtlas,
     this.arcId,
+    this.readingProfile,
   });
 
   final Book book;
@@ -21,6 +22,7 @@ class FictionCharacterGraphPage extends StatefulWidget {
   final VoidCallback? onRequestOrganize;
   final FictionStoryAtlas? initialAtlas;
   final String? arcId;
+  final BookReadingProfile? readingProfile;
 
   @override
   State<FictionCharacterGraphPage> createState() =>
@@ -42,6 +44,7 @@ class _FictionCharacterGraphPageState extends State<FictionCharacterGraphPage> {
             bookId: widget.book.id,
             visibleAtProgress: widget.book.readingPercentage,
             arcId: widget.arcId,
+            arcScoped: widget.readingProfile?.usesArcScopedStoryAtlas == true,
           );
   }
 

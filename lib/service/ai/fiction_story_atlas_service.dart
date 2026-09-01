@@ -1,5 +1,6 @@
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
+import 'package:anx_reader/service/ai/reading_structure_parser.dart';
 
 /// A page-independent projection of fiction Artifacts. The database remains
 /// the source of truth; this service only applies the reader's current spoiler
@@ -188,6 +189,7 @@ class FictionStoryAtlasService {
     required double visibleAtProgress,
     String? workId,
     String? arcId,
+    bool arcScoped = false,
   }) async {
     final artifacts = await (_repository ?? readingAgentRepository).artifacts(
       bookId,
@@ -199,6 +201,7 @@ class FictionStoryAtlasService {
       visibleAtProgress: visibleAtProgress,
       workId: workId,
       arcId: arcId,
+      arcScoped: arcScoped,
     );
   }
 
@@ -381,17 +384,19 @@ class FictionStoryAtlasService {
     required double visibleAtProgress,
     String? workId,
     String? arcId,
+    bool arcScoped = false,
   }) {
     final visibleArtifacts = input
         .where((item) =>
             item.isVisibleAtProgress(visibleAtProgress) &&
-            item.status == ReadingArtifactStatus.active)
+            item.status == ReadingArtifactStatus.active &&
+            !_isPublishingMatter(item))
         .toList(growable: false);
     final effectiveWorkId =
         workId ?? currentWorkId(visibleArtifacts, visibleAtProgress);
     final workArtifacts = _filterByWork(visibleArtifacts, effectiveWorkId);
-    final effectiveArcId =
-        arcId ?? currentArcId(workArtifacts, visibleAtProgress);
+    final effectiveArcId = arcId ??
+        (arcScoped ? currentArcId(workArtifacts, visibleAtProgress) : null);
     final artifacts = _filterByArc(workArtifacts, effectiveArcId);
     final characterIndex = _buildCharacterIndex(artifacts);
     final characters = <String, FictionCharacterNode>{
@@ -518,6 +523,11 @@ class FictionStoryAtlasService {
       workId: effectiveWorkId,
       arcId: effectiveArcId,
     );
+  }
+
+  bool _isPublishingMatter(ReadingArtifact artifact) {
+    final title = artifact.chapterTitle?.trim() ?? '';
+    return title.isNotEmpty && ReadingStructureParser.isNonStoryTitle(title);
   }
 
   List<ReadingArtifact> _filterByWork(

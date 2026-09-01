@@ -656,6 +656,21 @@ merge rules; the server only isolates and returns packages.
   device profile. The stored color mode becomes light only when the legacy
   combined value has no independent color preference to recover.
 
+## Story Atlas 内容边界与长篇作用域
+
+- `ReadingStructureParser` 在模型调用前把章节标记为 narrative、front matter、
+  back matter 或 metadata。版权页、扉页、版本/编校/出版说明、作者介绍等出版
+  元信息不得进入 Story Atlas；旧 Artifact 在 Atlas/Wiki 只读投影中也会隐藏，
+  但不会被静默删除。
+- 普通章、节、回始终是 scene。只有明确的案件边界以及声明了
+  `processing.volume_case_scene`/`fiction.suspense` 的 BookReadingProfile 才自动
+  聚焦当前 arc。历史长篇、家族小说和人物成长小说跨章保持连续时间线。
+- 已通过证据校验的事件参与者或关系端点若缺少 character Artifact，只能在同一
+  确定性身份层找到逐字证据后补齐。中文“名/字/号”归一到正式姓名；泛称、角色
+  占位符和正文外推断不得升级为人物。
+- 故事整理的线上确认同时显示正常分批基线和一次拆批重试上限。重试用量计入
+  Token 统计；该估算不改变“无轻量提取器时必须二次确认”的权限边界。
+
 ## Book Wiki
 
 ### 整理输入与证据

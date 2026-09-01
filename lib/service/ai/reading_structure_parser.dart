@@ -43,8 +43,11 @@ class ReadingStructureParser {
         volumeId = 'volume-$volumeIndex';
         arcId = null;
       }
-      final arc =
-          (workId == null ? _legacyArcPattern : _casePattern).firstMatch(title);
+      // A numbered chapter/回 is a scene, not an arc.  Arc scope is reserved
+      // for explicit case boundaries (案件/第 N 案); treating every 回 as an
+      // arc makes long historical novels disappear from the atlas when the
+      // reader advances one chapter.
+      final arc = _casePattern.firstMatch(title);
       if (arc != null) {
         arcIndex++;
         arcId = [
@@ -60,6 +63,7 @@ class ReadingStructureParser {
         volumeId: volumeId,
         arcId: arcId,
         sceneId: 'scene-${chapter.href.split('#').first}',
+        semanticKind: classifyTitle(title),
       ));
     }
     return ReadingStructure(result);
@@ -73,28 +77,58 @@ class ReadingStructureParser {
     r'(?:第\s*[一二三四五六七八九十百\d]+\s*案|(?:案件|案)\s*[一二三四五六七八九十\d]+)',
     caseSensitive: false,
   );
-  static final _legacyArcPattern = RegExp(
-    r'(?:第\s*[一二三四五六七八九十百\d]+\s*(?:案|章|节|回)|(?:案件|案)\s*[一二三四五六七八九十\d]+)',
-    caseSensitive: false,
-  );
-
   static bool isNonStoryTitle(String title) {
-    final normalized = title.replaceAll(RegExp(r'\s+'), '').trim();
-    return const {
-          '封面',
-          '版权',
-          '版权信息',
-          '目录',
-          '前言',
-          '序言',
-          '作者简介',
-          '译者序',
-          '编者按',
-          '后记',
-          'Contents',
-          'contents',
-        }.contains(title) ||
-        {'序言', '前言', '目录'}.contains(normalized);
+    return classifyTitle(title) != ReadingChapterSemanticKind.narrative;
+  }
+
+  /// Classifies navigation documents before they reach an AI pipeline. EPUB
+  /// titles are imperfect, so this is deliberately conservative: only clear
+  /// publishing/metadata labels are excluded; “序章” remains narrative.
+  static ReadingChapterSemanticKind classifyTitle(String title) {
+    final normalized = title
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceAll(RegExp(r'[：:：\-—].*$'), '')
+        .trim()
+        .toLowerCase();
+    if (normalized.isEmpty) return ReadingChapterSemanticKind.metadata;
+    const front = {
+      '封面',
+      '版权',
+      '版权信息',
+      '版权页',
+      '目录',
+      'contents',
+      'tableofcontents',
+      '前言',
+      '序言',
+      '译者序',
+      '编者按',
+      '编校说明',
+      '编校信息',
+      '版本说明',
+      '修订说明',
+      '校订说明',
+      '出版说明',
+      '作者简介',
+      '作者介绍',
+      '译者简介',
+      '译者介绍',
+      '出版信息',
+      '献词',
+      '扉页',
+      '书名页',
+      '致谢',
+    };
+    const back = {'后记', '附录', '索引', '参考文献', '出版后记', '跋'};
+    if (front.contains(normalized)) {
+      return ReadingChapterSemanticKind.frontMatter;
+    }
+    if (back.contains(normalized)) return ReadingChapterSemanticKind.backMatter;
+    if (RegExp(r'^(版权|版本|编校|出版|作者|译者|目录|contents|table)')
+        .hasMatch(normalized)) {
+      return ReadingChapterSemanticKind.metadata;
+    }
+    return ReadingChapterSemanticKind.narrative;
   }
 
   static String? _seriesWorkBase(String title) {
@@ -128,6 +162,16 @@ class ReadingStructureChapter {
   final double startProgress;
   final int tocDepth;
   final bool hasChildren;
+
+  ReadingChapterSemanticKind get semanticKind =>
+      ReadingStructureParser.classifyTitle(title);
+}
+
+enum ReadingChapterSemanticKind {
+  narrative,
+  frontMatter,
+  backMatter,
+  metadata,
 }
 
 class ReadingStructureUnit {
@@ -138,6 +182,7 @@ class ReadingStructureUnit {
     required this.volumeId,
     required this.arcId,
     required this.sceneId,
+    this.semanticKind = ReadingChapterSemanticKind.narrative,
   });
   final ReadingStructureChapter chapter;
   final String? workId;
@@ -145,6 +190,9 @@ class ReadingStructureUnit {
   final String? volumeId;
   final String? arcId;
   final String sceneId;
+  final ReadingChapterSemanticKind semanticKind;
+
+  bool get isNarrative => semanticKind == ReadingChapterSemanticKind.narrative;
 }
 
 class ReadingStructure {

@@ -2,9 +2,116 @@ import 'dart:convert';
 
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_backfill_service.dart';
+import 'package:anx_reader/service/ai/reading_structure_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('cloud preview exposes retry range instead of a single low estimate',
+      () {
+    final estimate = fictionBackfillService.estimateCloudPreview(4);
+    expect(estimate.baselineInputTokens, 14000);
+    expect(estimate.retryUpperBoundInputTokens, 30801);
+    expect(estimate.requestCount, 1);
+  });
+
+  test('front matter is excluded before chapter content or AI is requested',
+      () async {
+    final loaded = <String>[];
+    var requests = 0;
+    final artifacts = await fictionBackfillService.build(
+      bookId: 1,
+      moduleId: 'fiction.immersion',
+      safeBoundary: .2,
+      chapters: const [
+        FictionBackfillChapter(
+          href: 'version.xhtml',
+          title: '版本说明',
+          startProgress: 0,
+          endProgress: .01,
+          semanticKind: ReadingChapterSemanticKind.frontMatter,
+        ),
+        FictionBackfillChapter(
+          href: 'one.xhtml',
+          title: '第一回',
+          startProgress: .01,
+          endProgress: .1,
+        ),
+      ],
+      loadChapter: (href) async {
+        loaded.add(href);
+        return '刘备出场。';
+      },
+      generate: (_) async {
+        requests++;
+        return jsonEncode([
+          {
+            'kind': 'event',
+            'payload': {'title': '刘备出场'}
+          }
+        ]);
+      },
+      sessionId: 'session',
+      ingestedAt: 1,
+    );
+
+    expect(loaded, ['one.xhtml']);
+    expect(requests, 1);
+    expect(artifacts.single.chapterTitle, '第一回');
+  });
+
+  test('promotes source-backed event participants to canonical characters',
+      () async {
+    const content = '榜文行到涿县，引出一个英雄，姓刘名备，字玄德。'
+        '其人姓关名羽，字长生，后改云长。'
+        '张飞字翼德，与刘备、关羽结为兄弟。';
+    final artifacts = await fictionBackfillService.build(
+      bookId: 1,
+      moduleId: 'fiction.immersion',
+      safeBoundary: .2,
+      chapters: const [
+        FictionBackfillChapter(
+          href: 'one.xhtml',
+          title: '第一回',
+          startProgress: .01,
+          endProgress: .1,
+        ),
+      ],
+      loadChapter: (_) async => content,
+      generate: (_) async => jsonEncode([
+        {
+          'kind': 'event',
+          'payload': {
+            'title': '桃园结义',
+            'participants': ['刘备', '关羽', '张飞'],
+            'evidence': '张飞字翼德，与刘备、关羽结为兄弟',
+          }
+        }
+      ]),
+      validateCandidate: ({
+        required kind,
+        required payload,
+        required chapterContent,
+      }) async =>
+          chapterContent.contains(payload['evidence']) ? payload : null,
+      sessionId: 'session',
+      ingestedAt: 1,
+    );
+
+    final characters = artifacts
+        .where((item) => item.kind == ReadingArtifactKinds.character)
+        .toList();
+    expect(characters.map((item) => item.payload['name']),
+        containsAll(['刘备', '关羽', '张飞']));
+    final liuBei =
+        characters.firstWhere((item) => item.payload['name'] == '刘备');
+    final guanYu =
+        characters.firstWhere((item) => item.payload['name'] == '关羽');
+    expect(liuBei.payload['courtesyNames'], contains('玄德'));
+    expect(guanYu.payload['courtesyNames'], containsAll(['长生', '云长']));
+    expect(
+        characters.every((item) => item.sourceTextSnapshot.isNotEmpty), isTrue);
+  });
+
   test('backfill never loads chapters beyond safe boundary', () async {
     final loaded = <String>[];
     final artifacts = await fictionBackfillService.build(

@@ -149,6 +149,12 @@ namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在�
 
 ## 6. 小说 Story Atlas（最近功能的完整地图）
 
+Story Atlas 的章节入口先经过 `ReadingStructureParser` 语义分类：出版元信息不会
+读取或调用模型；章/节/回只形成 scene。案件 arc 的自动聚焦由同步的
+`BookReadingProfile` facet 声明，悬疑案件保持局部图谱，历史长篇保持跨回连续
+时间线。事件参与者和关系端点缺失人物时，由统一候选校验层凭逐字证据补齐正式
+character Artifact，页面不再创建仅用于显示的权威人物数据。
+
 ### 数据事实
 
 复用 `tb_reading_artifacts`，当前稳定类型：

@@ -375,7 +375,7 @@ CREATE TABLE IF NOT EXISTS tb_agent_actions (
   after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
   session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL, undone_at INTEGER,
-  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory')),
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory', 'artifact', 'wiki')),
   CHECK(status IN ('applied', 'undone', 'conflict'))
 );
 CREATE INDEX IF NOT EXISTS idx_agent_actions_recent
@@ -392,7 +392,7 @@ CREATE TABLE tb_agent_actions (
   after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
   session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL, undone_at INTEGER,
-  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory')),
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory', 'artifact', 'wiki')),
   CHECK(status IN ('applied', 'undone', 'conflict'))
 );
 INSERT INTO tb_agent_actions SELECT * FROM tb_agent_actions_v16;
@@ -446,7 +446,7 @@ CREATE TABLE tb_agent_actions (
   after_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'applied',
   session_id TEXT NOT NULL, created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL, undone_at INTEGER,
-  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory', 'artifact')),
+  CHECK(action_type IN ('goal', 'profile', 'note', 'difficulty', 'memory', 'artifact', 'wiki')),
   CHECK(status IN ('applied', 'undone', 'conflict'))
 );
 INSERT INTO tb_agent_actions SELECT * FROM tb_agent_actions_v17;
@@ -1055,9 +1055,7 @@ class DBHelper {
         continue case18Migration;
       case18Migration:
       case 18:
-        for (final statement in createReadingCoverageSQL.split(';')) {
-          if (statement.trim().isNotEmpty) await db.execute(statement);
-        }
+        await _migrateReadingCoverage(db);
         await _migrateArtifactActionSnapshots(db);
         continue case19Migration;
       case19Migration:
@@ -1096,6 +1094,45 @@ class DBHelper {
     if (!exists) {
       await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
     }
+  }
+
+  Future<void> _migrateReadingCoverage(Database db) async {
+    final columns =
+        await db.rawQuery('PRAGMA table_info(tb_reading_artifacts)');
+    final alreadyUsesCoverageSchema =
+        columns.any((row) => row['name'] == 'source_progress');
+    if (!alreadyUsesCoverageSchema) {
+      for (final statement in createReadingCoverageSQL.split(';')) {
+        if (statement.trim().isNotEmpty) await db.execute(statement);
+      }
+      return;
+    }
+
+    // A development build may have created the v19 artifact schema while the
+    // database user_version still reports an older version. Replaying the
+    // destructive discovered_progress migration would then fail and prevent
+    // the app from starting. Keep the existing artifacts and only ensure the
+    // non-destructive coverage objects are present.
+    await db
+        .execute('''CREATE INDEX IF NOT EXISTS idx_reading_artifacts_book_kind
+      ON tb_reading_artifacts(book_id, artifact_kind, status, visible_from_progress)''');
+    await db.execute(
+        '''CREATE INDEX IF NOT EXISTS idx_reading_artifacts_module_updated
+      ON tb_reading_artifacts(module_id, updated_at DESC)''');
+    await db.execute('''CREATE TABLE IF NOT EXISTS tb_book_reading_coverage (
+      book_id INTEGER PRIMARY KEY, safe_knowledge_boundary REAL NOT NULL,
+      artifact_coverage_start REAL NOT NULL, artifact_coverage_end REAL NOT NULL,
+      setup_status TEXT NOT NULL DEFAULT 'pending',
+      initialized_at_progress REAL NOT NULL, created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      CHECK(safe_knowledge_boundary >= 0 AND safe_knowledge_boundary <= 1),
+      CHECK(artifact_coverage_start >= 0 AND artifact_coverage_start <= 1),
+      CHECK(artifact_coverage_end >= 0 AND artifact_coverage_end <= 1),
+      CHECK(setup_status IN ('pending', 'fromHere', 'backfilled', 'imported'))
+    )''');
+    await db
+        .execute('''CREATE INDEX IF NOT EXISTS idx_book_reading_coverage_status
+      ON tb_book_reading_coverage(setup_status, updated_at DESC)''');
   }
 
   Future<void> _migrateWikiActionType(Database db) async {

@@ -1,11 +1,23 @@
 import 'package:anx_reader/models/book_wiki.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/reading_agent_repository.dart';
+import 'package:anx_reader/service/ai/reading_structure_parser.dart';
 
 class BookWikiSnapshot {
   const BookWikiSnapshot({required this.wiki, required this.entries});
   final BookWiki? wiki;
   final List<BookWikiEntry> entries;
+
+  double get coverageEnd {
+    var value = wiki?.coverageEnd ?? 0;
+    for (final entry in entries) {
+      for (final source in entry.sources) {
+        final progress = source.sourceProgress;
+        if (progress > value) value = progress;
+      }
+    }
+    return value.clamp(0, 1).toDouble();
+  }
 
   Map<String, List<BookWikiEntry>> get sections {
     final result = <String, List<BookWikiEntry>>{};
@@ -42,6 +54,11 @@ class BookWikiService {
     final occupied = stored.map((entry) => '${entry.kind}:${entry.id}').toSet();
     final projections = <BookWikiEntry>[];
     for (final artifact in values[2] as List<ReadingArtifact>) {
+      final chapterTitle = artifact.chapterTitle?.trim() ?? '';
+      if (chapterTitle.isNotEmpty &&
+          ReadingStructureParser.isNonStoryTitle(chapterTitle)) {
+        continue;
+      }
       final kind = _artifactKind(artifact.kind);
       if (kind == null || artifact.status == ReadingArtifactStatus.retracted) {
         continue;

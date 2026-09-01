@@ -34,6 +34,25 @@ void main() {
     expect(ReadingStructureParser.isNonStoryTitle('作者简介'), isTrue);
     expect(ReadingStructureParser.isNonStoryTitle('第一章'), isFalse);
     expect(ReadingStructureParser.isNonStoryTitle('序章'), isFalse);
+    expect(ReadingStructureParser.isNonStoryTitle('版本说明'), isTrue);
+    expect(ReadingStructureParser.isNonStoryTitle('编校说明：底本说明'), isTrue);
+    expect(ReadingStructureParser.classifyTitle('后记'),
+        ReadingChapterSemanticKind.backMatter);
+  });
+
+  test('numbered historical chapters remain scenes instead of arcs', () {
+    final structure = parser.parse(const [
+      ReadingStructureChapter(href: 'a', title: '第一回 宴桃园豪杰三结义'),
+      ReadingStructureChapter(href: 'b', title: '第二回 张翼德怒鞭督邮'),
+      ReadingStructureChapter(href: 'c', title: '第三回 议温明董卓叱丁原'),
+    ]);
+    expect(structure.units.every((unit) => unit.arcId == null), isTrue);
+    expect(
+      structure.units.every(
+        (unit) => unit.semanticKind == ReadingChapterSemanticKind.narrative,
+      ),
+      isTrue,
+    );
   });
 
   test('scopes chapters to independent works inside a collection EPUB', () {

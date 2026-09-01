@@ -102,7 +102,7 @@ class _BookWikiPageState extends State<BookWikiPage> {
                         leading: const Icon(Icons.menu_book),
                         title: Text(widget.book.title),
                         subtitle: Text(
-                            '覆盖 ${(data.wiki?.coverageEnd ?? 0) * 100 ~/ 1}% · ${_showAll ? '显示全部' : '当前阅读边界'}'))),
+                            '覆盖 ${(data.coverageEnd * 100).round()}% · ${_showAll ? '显示全部' : '当前阅读边界'}'))),
                 if (widget.onGenerate != null)
                   Card(
                     child: Wrap(

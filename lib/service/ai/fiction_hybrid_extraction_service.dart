@@ -466,6 +466,109 @@ class FictionCandidateRuleValidator {
     return RegExp(r'^(一名|一位|某|这个|那个)').hasMatch(value);
   }
 
+  /// Shared deterministic guard for projections/persistence that need to
+  /// decide whether a model reference may represent a stable person.
+  bool isGenericPersonReference(String value) => _isGenericPerson(value);
+
+  bool isStablePersonReference(String value) {
+    final normalized = value.trim();
+    if (normalized.length < 2 || normalized.length > 40) return false;
+    if (_isGenericPerson(normalized)) return false;
+    if (RegExp(r'^(character|person|char|role)[_:#-]?\d+$',
+            caseSensitive: false)
+        .hasMatch(normalized)) {
+      return false;
+    }
+    return RegExp(
+            r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaffA-Za-zÀ-ÖØ-öø-ÿ'’·•. -]+$")
+        .hasMatch(normalized);
+  }
+
+  /// Resolves a model reference to a canonical source-backed identity without
+  /// consulting world knowledge. Chinese 名/字/号 declarations are handled in
+  /// the same deterministic validation layer as all other fiction candidates.
+  Map<String, dynamic>? sourceBackedCharacter({
+    required String reference,
+    required String chapterContent,
+    String? preferredEvidence,
+  }) {
+    final cleanReference = reference.trim();
+    if (!isStablePersonReference(cleanReference)) return null;
+    final normalizedReference = _normalizeIdentityName(cleanReference);
+    final identityPatterns = <RegExp>[
+      RegExp(
+        r'姓\s*([\u3400-\u9fff]{1,2})\s*名\s*([\u3400-\u9fff]{1,2})([^。！？\n]{0,36})',
+      ),
+      RegExp(
+        r'([\u3400-\u9fff]{2,4})[，,\s]+字\s*([\u3400-\u9fff]{1,4})([^。！？\n]{0,24})',
+      ),
+    ];
+    for (var patternIndex = 0;
+        patternIndex < identityPatterns.length;
+        patternIndex++) {
+      final pattern = identityPatterns[patternIndex];
+      for (final match in pattern.allMatches(chapterContent)) {
+        late final String canonical;
+        late final String tail;
+        final courtesy = <String>{};
+        if (patternIndex == 0) {
+          canonical = '${match.group(1)}${match.group(2)}';
+          tail = match.group(3) ?? '';
+          final value =
+              RegExp(r'字\s*([\u3400-\u9fff]{1,4})').firstMatch(tail)?.group(1);
+          if (value != null) courtesy.add(value);
+        } else {
+          canonical = match.group(1)!;
+          courtesy.add(match.group(2)!);
+          tail = match.group(3) ?? '';
+        }
+        final changedCourtesy = RegExp(
+          r'(?:后改|又字|改字)\s*([\u3400-\u9fff]{1,4})',
+        ).firstMatch(tail)?.group(1);
+        if (changedCourtesy != null) courtesy.add(changedCourtesy);
+        final artNames = <String>{};
+        final artName =
+            RegExp(r'号\s*([\u3400-\u9fff]{1,6})').firstMatch(tail)?.group(1);
+        if (artName != null) artNames.add(artName);
+        final identityNames = {
+          _normalizeIdentityName(canonical),
+          ...courtesy.map(_normalizeIdentityName),
+          ...artNames.map(_normalizeIdentityName),
+        };
+        if (!identityNames.contains(normalizedReference)) continue;
+        final evidence = match.group(0)!.trim();
+        return {
+          'name': canonical,
+          'namingSystem': 'chinese',
+          'aliases': const <String>[],
+          if (courtesy.isNotEmpty) 'courtesyNames': courtesy.toList(),
+          if (artNames.isNotEmpty) 'artNames': artNames.toList(),
+          'evidence':
+              evidence.length <= 80 ? evidence : evidence.substring(0, 80),
+        };
+      }
+    }
+
+    final preferred = preferredEvidence?.trim() ?? '';
+    if (preferred.isNotEmpty &&
+        preferred.contains(cleanReference) &&
+        readingEvidenceResolver.resolve(
+              sourceText: chapterContent,
+              evidence: preferred,
+            ) !=
+            null) {
+      return {
+        'name': cleanReference,
+        'aliases': const <String>[],
+        'evidence': preferred,
+      };
+    }
+    return null;
+  }
+
+  String _normalizeIdentityName(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
   static const _transientRelations = ['对话', '问', '看', '同行', '点头', '相遇'];
   static const _durableRelations = [
     '父',

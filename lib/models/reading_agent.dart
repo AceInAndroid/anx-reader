@@ -226,6 +226,11 @@ class BookReadingProfile {
   /// Whether this book should use the suspense/case-oriented story pipeline.
   bool get isSuspense => hasFacet(ReadingProfileFacetIds.suspense);
 
+  /// Only case-oriented profiles focus Story Atlas on the current arc. Long
+  /// historical or character-driven novels keep earlier chapters visible.
+  bool get usesArcScopedStoryAtlas =>
+      isSuspense || hasFacet(ReadingProfileFacetIds.processingVolumeCaseScene);
+
   String get processingStrategy => hasFacet(
         ReadingProfileFacetIds.processingVolumeCaseScene,
       )

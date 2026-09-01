@@ -1686,6 +1686,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           volumeId: unitsByHref[unique[index].href]?.volumeId,
           arcId: unitsByHref[unique[index].href]?.arcId,
           sceneId: unitsByHref[unique[index].href]?.sceneId,
+          semanticKind: unitsByHref[unique[index].href]?.semanticKind ??
+              ReadingChapterSemanticKind.narrative,
           isNavigationDocument: unique[index].isNavigationDocument,
         ),
     ]
@@ -1811,15 +1813,19 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     final hybrid = FictionHybridExtractionService(ref: ref);
     final extractionProvider = hybrid.provider;
     var allowFullTextCloudFallback = false;
+    final cloudPreviewContent = <String, String>{};
     if (extractionProvider == null) {
-      final estimatedTokens = chapters.length * 3500;
+      final estimate =
+          fictionBackfillService.estimateCloudPreview(chapters.length);
       allowFullTextCloudFallback = await showDialog<bool>(
             context: context,
             builder: (dialogContext) => AlertDialog(
               title: const Text('轻量提取引擎不可用'),
               content: Text(
                 '当前没有可用的本地/小模型提取引擎。\n\n'
-                '如果继续，将把 $fromPercent%～$percent% 的 ${chapters.length} 个已读章节发送给通用线上模型，粗略估计输入 ${estimatedTokens.toString()} Token。',
+                '如果继续，将把 $fromPercent%～$percent% 的 ${chapters.length} 个已读章节发送给通用线上模型。'
+                '按当前分批计划预计输入约 ${estimate.baselineInputTokens} Token（${estimate.requestCount} 批）；'
+                '若结构化响应失败并触发一次拆批重试，最多约 ${estimate.retryUpperBoundInputTokens} Token。',
               ),
               actions: [
                 FilledButton.tonal(
@@ -1879,9 +1885,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           moduleId: ReadingClosureIds.fictionImmersion,
           safeBoundary: effectiveSafeBoundary,
           chapters: effectiveChapters,
-          loadChapter: (href) =>
-              epubPlayerKey.currentState?.chapterContentByHref(href) ??
-              Future.value(''),
+          loadChapter: (href) => cloudPreviewContent[href] != null
+              ? Future.value(cloudPreviewContent[href]!)
+              : epubPlayerKey.currentState?.chapterContentByHref(href) ??
+                  Future.value(''),
           generate: useHybrid
               ? hybrid.generate
               : (prompt) => aiGenerateText(
@@ -2683,6 +2690,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
             final atlas = fictionStoryAtlasService.fromArtifacts(
               state.artifacts,
               visibleAtProgress: visibleProgress,
+              arcScoped: _readingProfile?.usesArcScopedStoryAtlas == true,
             );
             final nextAction = const NextReadingActionResolver().resolve(
               bookId: _book.id,

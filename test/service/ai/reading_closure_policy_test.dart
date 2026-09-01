@@ -67,6 +67,7 @@ void main() {
     expect(ReadingClosureIds.fictionSuspense, ReadingProfileFacetIds.suspense);
     expect(profile.processingStrategy,
         ReadingProfileFacetIds.processingVolumeCaseScene);
+    expect(profile.usesArcScopedStoryAtlas, isTrue);
     expect(profile.relationshipStrategy,
         ReadingProfileFacetIds.relationshipsDurableOnly);
     expect(profile.defaultStoryTrack, FictionEventTrackIds.caseInvestigation);
@@ -90,8 +91,9 @@ void main() {
 
     expect(profileFor('家族往事', '现实主义家庭小说').defaultStoryTrack,
         FictionEventTrackIds.family);
-    expect(profileFor('王朝兴亡', '历史小说').defaultStoryTrack,
-        FictionEventTrackIds.historical);
+    final historical = profileFor('王朝兴亡', '历史小说');
+    expect(historical.defaultStoryTrack, FictionEventTrackIds.historical);
+    expect(historical.usesArcScopedStoryAtlas, isFalse);
     expect(profileFor('普通小说', '一个人的成长').defaultStoryTrack,
         FictionEventTrackIds.character);
     final scienceFiction = profileFor('三体', '宇宙文明科幻小说');

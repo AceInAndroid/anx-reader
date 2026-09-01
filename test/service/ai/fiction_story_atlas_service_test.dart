@@ -9,6 +9,7 @@ void main() {
     required double progress,
     required Map<String, dynamic> payload,
     int? createdAt,
+    String? chapterTitle,
   }) {
     final time = createdAt ?? (progress * 1000).round();
     return ReadingArtifact(
@@ -20,7 +21,7 @@ void main() {
       sourceProgress: progress,
       visibleFromProgress: progress,
       chapterHref: 'chapter-$progress.xhtml',
-      chapterTitle: '章节 $progress',
+      chapterTitle: chapterTitle ?? '章节 $progress',
       ingestedAt: time,
       createdAt: time,
       updatedAt: time,
@@ -123,6 +124,59 @@ void main() {
     expect(atlas.characters.map((item) => item.name), containsAll(['主角', '甲']));
     expect(atlas.characters.map((item) => item.name), isNot(contains('乙')));
     expect(atlas.timeline.map((item) => item.title), ['案件一']);
+  });
+
+  test('does not infer arc focus unless the profile opts into case scope', () {
+    final artifacts = [
+      artifact(
+        id: 'chapter-one',
+        kind: ReadingArtifactKinds.event,
+        progress: .1,
+        payload: {'title': '桃园结义', 'arcId': 'legacy-arc-1'},
+      ),
+      artifact(
+        id: 'chapter-two',
+        kind: ReadingArtifactKinds.event,
+        progress: .2,
+        payload: {'title': '怒鞭督邮', 'arcId': 'legacy-arc-2'},
+      ),
+    ];
+
+    final historical = fictionStoryAtlasService.fromArtifacts(
+      artifacts,
+      visibleAtProgress: .3,
+    );
+    final suspense = fictionStoryAtlasService.fromArtifacts(
+      artifacts,
+      visibleAtProgress: .3,
+      arcScoped: true,
+    );
+
+    expect(historical.arcId, isNull);
+    expect(historical.timeline.map((event) => event.title), ['桃园结义', '怒鞭督邮']);
+    expect(suspense.arcId, 'legacy-arc-2');
+    expect(suspense.timeline.map((event) => event.title), ['怒鞭督邮']);
+  });
+
+  test('legacy publishing-matter artifacts are excluded from projections', () {
+    final atlas = fictionStoryAtlasService.fromArtifacts([
+      artifact(
+        id: 'editor',
+        kind: ReadingArtifactKinds.character,
+        progress: 0,
+        payload: {'name': '毛宗岗'},
+        chapterTitle: '版本说明',
+      ),
+      artifact(
+        id: 'hero',
+        kind: ReadingArtifactKinds.character,
+        progress: .1,
+        payload: {'name': '刘备'},
+        chapterTitle: '第一回',
+      ),
+    ], visibleAtProgress: .2);
+
+    expect(atlas.characters.map((item) => item.name), ['刘备']);
   });
 
   test('does not mix explicitly scoped works inside one collection book', () {

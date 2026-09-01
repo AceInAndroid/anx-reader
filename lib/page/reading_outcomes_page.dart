@@ -240,6 +240,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
     final atlas = fictionStoryAtlasService.fromArtifacts(
       state.artifacts,
       visibleAtProgress: effectiveVisibleProgress,
+      arcScoped: _readingProfile?.usesArcScopedStoryAtlas == true,
     );
     final visibleArtifacts = _visibleArtifacts(
       state,
@@ -503,6 +504,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
                         book: widget.book,
                         initialAtlas: atlas,
                         arcId: atlas.arcId,
+                        readingProfile: _readingProfile,
                         onOpenLocation: _openLocation,
                         onRequestOrganize: widget.onOrganizeStoryArchive == null
                             ? null

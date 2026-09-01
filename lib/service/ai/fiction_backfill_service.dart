@@ -2,8 +2,10 @@ import 'dart:convert';
 
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/service/ai/fiction_hybrid_extraction_service.dart';
+import 'package:anx_reader/service/ai/ai_context_assembler.dart';
 import 'package:anx_reader/service/ai/reading_chunker.dart';
 import 'package:anx_reader/service/ai/reading_evidence_resolver.dart';
+import 'package:anx_reader/service/ai/reading_structure_parser.dart';
 import 'package:crypto/crypto.dart';
 
 class FictionBackfillChapter {
@@ -20,6 +22,7 @@ class FictionBackfillChapter {
     this.tocDepth = 0,
     this.hasChildren = false,
     this.isNavigationDocument = false,
+    this.semanticKind = ReadingChapterSemanticKind.narrative,
   });
 
   final String href;
@@ -34,6 +37,7 @@ class FictionBackfillChapter {
   final int tocDepth;
   final bool hasChildren;
   final bool isNavigationDocument;
+  final ReadingChapterSemanticKind semanticKind;
 }
 
 typedef FictionChapterLoader = Future<String> Function(String href);
@@ -72,15 +76,112 @@ class _BackfillBatchAttempt {
   final Object? error;
 }
 
+class FictionBackfillTokenEstimate {
+  const FictionBackfillTokenEstimate({
+    required this.baselineInputTokens,
+    required this.retryUpperBoundInputTokens,
+    required this.requestCount,
+  });
+
+  final int baselineInputTokens;
+  final int retryUpperBoundInputTokens;
+  final int requestCount;
+}
+
 /// Explicit, bounded fiction backfill. It never reads a chapter whose start is
 /// beyond [safeBoundary], and it does no work until the caller invokes it after
 /// user confirmation.
 class FictionBackfillService {
   const FictionBackfillService();
 
-  static const extractorVersion = 7;
+  static const extractorVersion = 8;
   static const _chunker = ReadingChunker();
   static const _evidenceResolver = ReadingEvidenceResolver();
+
+  /// Estimates the actual prompt plan rather than multiplying chapter count
+  /// by a constant. The upper bound includes one split/retry round, which is
+  /// what caused the 三国演义 preview to understate 14k versus ~25k input.
+  FictionBackfillTokenEstimate estimateCloudPlan({
+    required List<FictionBackfillChapter> chapters,
+    required Map<String, String> contentByHref,
+    int batchSize = 5,
+    int maxInputCharacters = 30000,
+    Set<String> knownCharacterNames = const {},
+  }) {
+    final batches = <List<_PreparedChapter>>[];
+    final ordinary = <_PreparedChapter>[];
+
+    void flushOrdinary() {
+      if (ordinary.isEmpty) return;
+      batches.addAll(_makeBatches(
+        List.of(ordinary),
+        batchSize: batchSize.clamp(1, 20),
+        maxInputCharacters: maxInputCharacters.clamp(4000, 100000),
+      ));
+      ordinary.clear();
+    }
+
+    for (final chapter in chapters.where(
+      (item) => item.semanticKind == ReadingChapterSemanticKind.narrative,
+    )) {
+      final content = contentByHref[chapter.href]?.trim() ??
+          contentByHref[chapter.href.split('#').first]?.trim() ??
+          '';
+      if (content.isEmpty) continue;
+      final prepared = (
+        chapter: chapter,
+        content: content,
+        hash: _contentHash(content),
+      );
+      if (content.length <= maxInputCharacters) {
+        ordinary.add(prepared);
+        continue;
+      }
+      flushOrdinary();
+      for (final chunk in _chunker.split(
+        bookId: 0,
+        chapterHref: chapter.href,
+        chapterTitle: chapter.title,
+        content: content,
+        sourceProgress: chapter.startProgress,
+        maxCharacters: maxInputCharacters,
+      )) {
+        batches.add([
+          (chapter: chapter, content: chunk.content, hash: prepared.hash),
+        ]);
+      }
+    }
+    flushOrdinary();
+
+    // The shared runner adds its registered system contract to every request.
+    // Reserve a small fixed envelope per request so the preview does not claim
+    // character count alone is the full provider input.
+    const runnerEnvelopeTokens = 600;
+    var baseline = 0;
+    for (final batch in batches) {
+      baseline += aiContextAssembler.estimateTokens(
+            _batchPrompt(batch, knownCharacterNames),
+          ) +
+          runnerEnvelopeTokens;
+    }
+    return FictionBackfillTokenEstimate(
+      baselineInputTokens: baseline,
+      retryUpperBoundInputTokens: (baseline * 2.2).ceil(),
+      requestCount: batches.length,
+    );
+  }
+
+  /// Preview-only estimate used before reading EPUB bodies. It presents both
+  /// the normal plan and one split/retry round instead of hiding retry cost.
+  FictionBackfillTokenEstimate estimateCloudPreview(int chapterCount) {
+    final boundedCount = chapterCount.clamp(0, 100000);
+    final baseline = boundedCount * 3500;
+    return FictionBackfillTokenEstimate(
+      baselineInputTokens: baseline,
+      retryUpperBoundInputTokens: (baseline * 2.2).ceil(),
+      requestCount: (boundedCount / 5).ceil(),
+    );
+  }
 
   Future<List<ReadingArtifact>> build({
     required int bookId,
@@ -113,6 +214,7 @@ class FictionBackfillService {
     };
     final eligible = chapters
         .where((chapter) =>
+            chapter.semanticKind == ReadingChapterSemanticKind.narrative &&
             chapter.startProgress >= lowerBound - .000001 &&
             chapter.startProgress <= safeBoundary + .000001 &&
             (chapter.endProgress ?? chapter.startProgress) <=
@@ -418,6 +520,8 @@ class FictionBackfillService {
     for (final entry in grouped.entries) {
       final chapter = batch.firstWhere(
           (item) => item.chapter.href.split('#').first == entry.key);
+      final referencedPeople = <String>{};
+      final referenceEvidence = <String, String>{};
       for (final value in entry.value) {
         final kind = _kind(value['kind']?.toString());
         if (kind == null) continue;
@@ -476,6 +580,35 @@ class FictionBackfillService {
                   .where((name) => name.isNotEmpty),
             );
           }
+        } else if (kind == ReadingArtifactKinds.relationship) {
+          final evidence = normalizedPayload['evidence']?.toString() ?? '';
+          for (final value in [
+            normalizedPayload['from'],
+            normalizedPayload['to'],
+          ]) {
+            final person = value?.toString().trim() ?? '';
+            referencedPeople.add(person);
+            if (person.isNotEmpty && evidence.isNotEmpty) {
+              referenceEvidence.putIfAbsent(person, () => evidence);
+            }
+          }
+        } else if (const {
+          ReadingArtifactKinds.event,
+          ReadingArtifactKinds.scene,
+          ReadingArtifactKinds.clue,
+          ReadingArtifactKinds.mystery,
+        }.contains(kind)) {
+          final people = normalizedPayload['participants'];
+          if (people is List) {
+            final evidence = normalizedPayload['evidence']?.toString() ?? '';
+            for (final item in people) {
+              final person = item.toString().trim();
+              referencedPeople.add(person);
+              if (person.isNotEmpty && evidence.isNotEmpty) {
+                referenceEvidence.putIfAbsent(person, () => evidence);
+              }
+            }
+          }
         }
         final sourceProgress =
             chapter.chapter.startProgress.clamp(lowerBound, safeBoundary);
@@ -502,6 +635,75 @@ class FictionBackfillService {
               : chapter.content.length > 500
                   ? chapter.content.substring(0, 500)
                   : chapter.content,
+          chapterHref: chapter.chapter.href,
+          chapterTitle: chapter.chapter.title,
+          sourceProgress: sourceProgress.toDouble(),
+          visibleFromProgress: sourceProgress.toDouble(),
+          ingestedAt: ingestedAt,
+          ingestionMode: ReadingArtifactIngestionMode.backfill,
+          sessionId: sessionId,
+          createdBy: 'agent',
+          createdAt: ingestedAt,
+          updatedAt: ingestedAt,
+        ));
+      }
+      // Models occasionally emit a valid event/relationship participant but
+      // omit the corresponding character item to save output tokens. Promote
+      // only source-backed names to a real character Artifact so Wiki and the
+      // graph share the same durable identity. We never promote generic roles,
+      // opaque IDs, or names absent from this chapter's exact text.
+      for (final name in referencedPeople) {
+        final sourceBacked =
+            const FictionCandidateRuleValidator().sourceBackedCharacter(
+          reference: name,
+          chapterContent: chapter.content,
+          preferredEvidence: referenceEvidence[name],
+        );
+        if (sourceBacked == null) continue;
+        final canonicalName = sourceBacked['name']!.toString();
+        final normalizedName = _normalizeCharacterName(canonicalName);
+        if (normalizedName.isEmpty ||
+            knownCharacterNames.contains(normalizedName) ||
+            !const FictionCandidateRuleValidator()
+                .isStablePersonReference(canonicalName)) {
+          continue;
+        }
+        final payload = <String, dynamic>{
+          ...sourceBacked,
+          'summary': '',
+          'role': 'case',
+          'entityType': FictionEntityTypeIds.person,
+          'confidenceSource': 'evidenceValidated',
+          ...artifactMetadata,
+          if (chapter.chapter.workId != null) 'workId': chapter.chapter.workId,
+          if (chapter.chapter.workTitle != null)
+            'workTitle': chapter.chapter.workTitle,
+          if (chapter.chapter.volumeId != null)
+            'volumeId': chapter.chapter.volumeId,
+          if (chapter.chapter.arcId != null) 'arcId': chapter.chapter.arcId,
+          if (chapter.chapter.sceneId != null)
+            'sceneId': chapter.chapter.sceneId,
+          'scope': chapter.chapter.arcId == null ? 'chapter' : 'case',
+        };
+        final sourceProgress =
+            chapter.chapter.startProgress.clamp(lowerBound, safeBoundary);
+        final id = _stableId(
+          bookId,
+          chapter.chapter.href,
+          ReadingArtifactKinds.character,
+          payload,
+        );
+        if (existingIds.contains(id)) continue;
+        existingIds.add(id);
+        knownCharacterNames.add(normalizedName);
+        artifacts.add(ReadingArtifact(
+          id: id,
+          bookId: bookId,
+          moduleId: moduleId,
+          kind: ReadingArtifactKinds.character,
+          payload: payload,
+          epistemicStatus: ReadingArtifactEpistemicStatus.textFact,
+          sourceTextSnapshot: sourceBacked['evidence']!.toString(),
           chapterHref: chapter.chapter.href,
           chapterTitle: chapter.chapter.title,
           sourceProgress: sourceProgress.toDouble(),
