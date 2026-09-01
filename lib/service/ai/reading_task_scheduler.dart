@@ -2,10 +2,10 @@ import 'dart:async';
 
 import 'package:anx_reader/dao/reading_task.dart';
 import 'package:anx_reader/models/reading_task.dart';
+import 'package:anx_reader/service/reading_experience_diagnostics.dart';
 
-typedef ReadingTaskExecutor<T> = Future<T> Function(
-  ReadingTaskExecutionContext context,
-);
+typedef ReadingTaskExecutor<T> =
+    Future<T> Function(ReadingTaskExecutionContext context);
 
 class ReadingTaskExecutionContext {
   ReadingTaskExecutionContext._(this._scheduler, this.taskId, this._control);
@@ -30,6 +30,10 @@ class ReadingTaskExecutionContext {
     Map<String, dynamic>? checkpoint,
   }) async {
     safePoint();
+    // Long chapter/chunk tasks cooperatively yield between batches so WebView
+    // input and page rendering are not starved on slower or E-ink devices.
+    await Future<void>.delayed(Duration.zero);
+    safePoint();
     await _scheduler._updateProgress(
       taskId,
       progress: progress,
@@ -47,11 +51,9 @@ class ReadingTaskCancelled implements Exception {
 }
 
 class ReadingTaskScheduler {
-  ReadingTaskScheduler({
-    ReadingTaskStore? store,
-    int Function()? now,
-  })  : _store = store,
-        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
+  ReadingTaskScheduler({ReadingTaskStore? store, int Function()? now})
+    : _store = store,
+      _now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final ReadingTaskStore? _store;
   final int Function() _now;
@@ -59,6 +61,7 @@ class ReadingTaskScheduler {
   final Map<String, ReadingTaskExecutor<dynamic>> _registeredExecutors = {};
   final StreamController<List<ReadingTask>> _changes =
       StreamController<List<ReadingTask>>.broadcast(sync: true);
+  final Map<String, DateTime> _lastProgressEmission = {};
   String? _runningId;
   bool _restored = false;
   bool _pumping = false;
@@ -97,10 +100,7 @@ class ReadingTaskScheduler {
     }
   }
 
-  Future<T> submit<T>(
-    ReadingTask task,
-    ReadingTaskExecutor<T> executor,
-  ) async {
+  Future<T> submit<T>(ReadingTask task, ReadingTaskExecutor<T> executor) async {
     await restore();
     if (_entries.containsKey(task.id)) {
       throw StateError('Reading task already exists: ${task.id}');
@@ -157,10 +157,7 @@ class ReadingTaskScheduler {
     unawaited(_pump());
   }
 
-  Future<T> resumeWith<T>(
-    String id,
-    ReadingTaskExecutor<T> executor,
-  ) async {
+  Future<T> resumeWith<T>(String id, ReadingTaskExecutor<T> executor) async {
     final entry = _entries[id];
     if (entry == null || entry.task.status != ReadingTaskStatus.paused) {
       throw StateError('Reading task is not paused: $id');
@@ -201,15 +198,19 @@ class ReadingTaskScheduler {
     if (_pumping || _runningId != null) return;
     _pumping = true;
     try {
-      final candidates = _entries.values
-          .where((entry) =>
-              entry.task.status == ReadingTaskStatus.queued &&
-              entry.executor != null)
-          .toList()
-        ..sort((a, b) => _compareTasks(a.task, b.task));
+      final candidates =
+          _entries.values
+              .where(
+                (entry) =>
+                    entry.task.status == ReadingTaskStatus.queued &&
+                    entry.executor != null,
+              )
+              .toList()
+            ..sort((a, b) => _compareTasks(a.task, b.task));
       if (candidates.isEmpty) return;
       final entry = candidates.first;
       _runningId = entry.task.id;
+      readingExperienceDiagnostics.recordTaskStarted(entry.task.id);
       entry.control = _TaskControl();
       await _transition(entry, ReadingTaskStatus.running);
       unawaited(_execute(entry));
@@ -226,8 +227,8 @@ class ReadingTaskScheduler {
       entry.control.cancelRequested
           ? throw const ReadingTaskCancelled()
           : entry.control.pauseRequested
-              ? throw const ReadingTaskPaused()
-              : null;
+          ? throw const ReadingTaskPaused()
+          : null;
       await _transition(entry, ReadingTaskStatus.completed);
       if (!entry.completer.isCompleted) entry.completer.complete(result);
     } on ReadingTaskPaused {
@@ -252,6 +253,7 @@ class ReadingTaskScheduler {
         entry.completer.completeError(error, stack);
       }
     } finally {
+      readingExperienceDiagnostics.recordTaskFinished(entry.task.id);
       if (_runningId == entry.task.id) _runningId = null;
       unawaited(_pump());
     }
@@ -278,7 +280,15 @@ class ReadingTaskScheduler {
       updatedAt: _now(),
     );
     await _persist(entry.task);
-    _emit();
+    final now = DateTime.now();
+    final last = _lastProgressEmission[id];
+    final completed = entry.task.progress >= 1;
+    if (completed ||
+        last == null ||
+        now.difference(last) >= const Duration(seconds: 1)) {
+      _lastProgressEmission[id] = now;
+      _emit();
+    }
   }
 
   Future<void> _transition(
@@ -287,6 +297,7 @@ class ReadingTaskScheduler {
     String? error,
   }) async {
     entry.task = entry.task.transition(status, now: _now(), error: error);
+    if (entry.task.isTerminal) _lastProgressEmission.remove(entry.task.id);
     await _persist(entry.task);
     _emit();
   }

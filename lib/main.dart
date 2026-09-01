@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:anx_reader/utils/platform_utils.dart';
@@ -12,6 +13,7 @@ import 'package:anx_reader/page/home_page.dart';
 import 'package:anx_reader/page/migration_page.dart';
 import 'package:anx_reader/service/book_player/book_player_server.dart';
 import 'package:anx_reader/service/ai/reading_task_scheduler.dart';
+import 'package:anx_reader/service/sync/reading_activity_coordinator.dart';
 import 'package:anx_reader/service/network/http_proxy_overrides.dart';
 import 'package:anx_reader/service/tts/tts_handler.dart';
 import 'package:anx_reader/utils/get_path/macos_migration.dart';
@@ -81,11 +83,7 @@ Future<void> main() async {
     animationType: SmartAnimationType.centerFade_otherSlide,
   );
 
-  runApp(
-    const ProviderScope(
-      child: MyApp(),
-    ),
-  );
+  runApp(const ProviderScope(child: MyApp()));
 }
 
 class MyApp extends ConsumerStatefulWidget {
@@ -153,18 +151,21 @@ class _MyAppState extends ConsumerState<MyApp>
     final isMaximized = await windowManager.isMaximized();
 
     Prefs().windowInfo = WindowInfo(
-        x: windowOffset.dx,
-        y: windowOffset.dy,
-        width: windowSize.width,
-        height: windowSize.height,
-        isMaximized: isMaximized);
+      x: windowOffset.dx,
+      y: windowOffset.dy,
+      width: windowSize.width,
+      height: windowSize.height,
+      isMaximized: isMaximized,
+    );
     AnxLog.info('onWindowClose: Offset: $windowOffset, Size: $windowSize');
   }
 
   @override
   Future<void> didChangeAppLifecycleState(AppLifecycleState state) async {
     if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.hidden) {
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      ReadingActivityCoordinator.instance.enterBackground();
       await readingTaskScheduler.pauseAll(durableOnly: true);
       if (Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled) {
         ref
@@ -172,6 +173,16 @@ class _MyAppState extends ConsumerState<MyApp>
             .syncData(SyncDirection.both, ref, trigger: SyncTrigger.auto);
       }
     } else if (state == AppLifecycleState.resumed) {
+      ReadingActivityCoordinator.instance.enterForeground();
+      if (Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled) {
+        // Flush one retained offline/background intent when the app returns
+        // to an idle foreground. An active reader will defer it again.
+        unawaited(
+          ref
+              .read(syncProvider.notifier)
+              .syncData(SyncDirection.both, ref, trigger: SyncTrigger.auto),
+        );
+      }
       if (AnxPlatform.isIOS) {
         await Server().ensureStarted();
       }
@@ -181,11 +192,7 @@ class _MyAppState extends ConsumerState<MyApp>
   @override
   Widget build(BuildContext context) {
     return provider.MultiProvider(
-      providers: [
-        provider.ChangeNotifierProvider(
-          create: (_) => Prefs(),
-        ),
-      ],
+      providers: [provider.ChangeNotifierProvider(create: (_) => Prefs())],
       child: provider.Consumer<Prefs>(
         builder: (context, prefsNotifier, child) {
           SmartDialog.config.custom = SmartConfigCustom(
@@ -208,7 +215,7 @@ class _MyAppState extends ConsumerState<MyApp>
             ),
             navigatorObservers: [
               FlutterSmartDialog.observer,
-              heroineController
+              heroineController,
             ],
             builder: (context, child) {
               final dialogBuilder = FlutterSmartDialog.init();
@@ -239,7 +246,8 @@ class _MyAppState extends ConsumerState<MyApp>
             darkTheme: colorSchema(prefsNotifier, context, Brightness.dark),
             home: _needsMigration
                 ? _MigrationWrapper(
-                    migrationCheckResult: _migrationCheckResult!)
+                    migrationCheckResult: _migrationCheckResult!,
+                  )
                 : const HomePage(),
           );
         },

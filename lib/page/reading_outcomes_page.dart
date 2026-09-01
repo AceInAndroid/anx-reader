@@ -13,8 +13,11 @@ import 'package:anx_reader/service/ai/reading_closure_policy.dart';
 import 'package:anx_reader/service/ai/reading_experience_profile_service.dart';
 import 'package:anx_reader/service/ai/reading_coach_repository.dart';
 import 'package:anx_reader/service/ai/reading_outcomes_service.dart';
+import 'package:anx_reader/models/next_reading_action.dart';
+import 'package:anx_reader/service/ai/next_reading_action_resolver.dart';
 import 'package:anx_reader/service/ai/reading_skills.dart';
 import 'package:anx_reader/service/book.dart';
+import 'package:anx_reader/service/reading_experience_diagnostics.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/widgets/markdown/styled_markdown.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +33,8 @@ class ReadingOutcomesPage extends ConsumerStatefulWidget {
     this.closureIdOverride,
     this.closureRegistry = const ReadingClosurePolicyRegistry(),
     this.onOrganizeStoryArchive,
+    this.coverage,
+    this.visibleProgress,
   });
 
   final Book book;
@@ -43,6 +48,8 @@ class ReadingOutcomesPage extends ConsumerStatefulWidget {
   final String? closureIdOverride;
   final ReadingClosurePolicyRegistry closureRegistry;
   final Future<void> Function()? onOrganizeStoryArchive;
+  final BookReadingCoverage? coverage;
+  final double? visibleProgress;
 
   @override
   ConsumerState<ReadingOutcomesPage> createState() =>
@@ -53,6 +60,8 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
   late Future<ReadingOutcomesSnapshot> _snapshot;
   final _coachRepository = ReadingCoachRepository();
   BookReadingProfile? _readingProfile;
+  String? _lastShownNextActionFingerprint;
+  static const _nextActionResolver = NextReadingActionResolver();
 
   @override
   void initState() {
@@ -108,8 +117,9 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
   }
 
   Future<void> _reload() async {
-    final next =
-        (widget.service ?? readingOutcomesService).load(widget.book.id);
+    final next = (widget.service ?? readingOutcomesService).load(
+      widget.book.id,
+    );
     setState(() => _snapshot = next);
     await next;
   }
@@ -136,10 +146,12 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
   }
 
   Future<void> _resolveDifficulty(ReadingDifficulty difficulty) async {
-    await _coachRepository.updateDifficulty(difficulty.copyWith(
-      status: ReadingDifficultyStatus.resolved,
-      updatedAt: DateTime.now().millisecondsSinceEpoch,
-    ));
+    await _coachRepository.updateDifficulty(
+      difficulty.copyWith(
+        status: ReadingDifficultyStatus.resolved,
+        updatedAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
     if (!mounted) return;
     AnxToast.show('已标记为解决');
     await _reload();
@@ -148,12 +160,14 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
   Future<void> _reviewCard(KnowledgeCard card, bool remembered) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final interval = remembered ? (card.intervalDays * 2).clamp(2, 60) : 1;
-    await readingAgentRepository.saveKnowledgeCard(card.copyWith(
-      intervalDays: interval,
-      repetitions: card.repetitions + 1,
-      dueAt: now + Duration(days: interval).inMilliseconds,
-      updatedAt: now,
-    ));
+    await readingAgentRepository.saveKnowledgeCard(
+      card.copyWith(
+        intervalDays: interval,
+        repetitions: card.repetitions + 1,
+        dueAt: now + Duration(days: interval).inMilliseconds,
+        updatedAt: now,
+      ),
+    );
     if (!mounted) return;
     AnxToast.show(remembered ? '$interval 天后再次复习' : '明天再次复习');
     await _reload();
@@ -213,26 +227,51 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
       description: widget.book.description ?? '',
       pinnedSkill: pinnedSkill,
     );
-    final closure = ReadingClosurePolicyMatcher(
-      registry: widget.closureRegistry,
-    ).match(
+    final closure =
+        ReadingClosurePolicyMatcher(registry: widget.closureRegistry).match(
       mode: mode,
       title: widget.book.title,
       author: widget.book.author,
       description: widget.book.description ?? '',
       pinnedId: pinnedClosureId,
     );
+    final effectiveVisibleProgress =
+        widget.visibleProgress ?? widget.book.readingPercentage;
     final atlas = fictionStoryAtlasService.fromArtifacts(
       state.artifacts,
-      visibleAtProgress: widget.book.readingPercentage,
+      visibleAtProgress: effectiveVisibleProgress,
     );
+    final visibleArtifacts = _visibleArtifacts(
+      state,
+      visibleProgress: effectiveVisibleProgress,
+    );
+    final nextAction = _nextActionResolver.resolve(
+      bookId: widget.book.id,
+      outcomes: state,
+      closure: closure,
+      coverage: widget.coverage,
+      atlas: atlas,
+      resumeContextAvailable: visibleArtifacts.any(
+        (artifact) => artifact.kind == ReadingArtifactKinds.resumeContext,
+      ),
+    );
+    if (_lastShownNextActionFingerprint != nextAction.completionFingerprint) {
+      _lastShownNextActionFingerprint = nextAction.completionFingerprint;
+      readingExperienceDiagnostics.recordNextActionShown();
+    }
     return RefreshIndicator(
       onRefresh: _reload,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
-          _OutcomeHero(book: widget.book, state: state, closure: closure),
+          _OutcomeHero(
+            book: widget.book,
+            state: state,
+            closure: closure,
+            nextAction: nextAction,
+            onNextAction: () => _handleNextAction(nextAction, atlas),
+          ),
           const SizedBox(height: 12),
           Card(
             child: ListTile(
@@ -240,11 +279,14 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
               title: const Text('书籍 Wiki'),
               subtitle: const Text('把阅读成果、概念、人物和来源组织成可浏览百科'),
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => BookWikiPage(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => BookWikiPage(
                     book: widget.book,
-                    visibleProgress: widget.book.readingPercentage),
-              )),
+                    visibleProgress: widget.book.readingPercentage,
+                  ),
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -282,9 +324,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
               isThreeLine: true,
               trailing: const Icon(Icons.help_outline),
               onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const ReadingSkillHelpPage(),
-                ),
+                MaterialPageRoute(builder: (_) => const ReadingSkillHelpPage()),
               ),
             ),
           ),
@@ -308,6 +348,99 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
     );
   }
 
+  Future<void> _handleNextAction(
+    NextReadingAction action,
+    FictionStoryAtlas atlas,
+  ) async {
+    readingExperienceDiagnostics.recordNextActionExecuted();
+    switch (action.target.kind) {
+      case NextReadingActionTargetKinds.reviewCard:
+        final cardId = action.target.payload['cardId']?.toString();
+        final card = cardId == null
+            ? null
+            : (await _snapshot)
+                .dueCards
+                .where((item) => item.id == cardId)
+                .firstOrNull;
+        if (card != null && mounted) {
+          await showModalBottomSheet<void>(
+            context: context,
+            showDragHandle: true,
+            builder: (sheetContext) => SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      card.front,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(card.back),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () async {
+                            Navigator.pop(sheetContext);
+                            await _reviewCard(card, false);
+                          },
+                          child: const Text('再学习'),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () async {
+                            Navigator.pop(sheetContext);
+                            await _reviewCard(card, true);
+                          },
+                          child: const Text('记住了'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+        return;
+      case NextReadingActionTargetKinds.checkpoint:
+      case NextReadingActionTargetKinds.difficulty:
+        final location = action.target.location;
+        if (location != null && location.isNotEmpty) {
+          await _openLocation(location);
+        }
+        return;
+      case NextReadingActionTargetKinds.storyMysteries:
+      case NextReadingActionTargetKinds.resumeContext:
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => FictionStoryTimelinePage(
+              book: widget.book,
+              initialAtlas: atlas,
+              arcId: atlas.arcId,
+              readingProfile: _readingProfile,
+              onOpenLocation: _openLocation,
+              onRequestOrganize: widget.onOrganizeStoryArchive == null
+                  ? null
+                  : _organizeStoryArchive,
+            ),
+          ),
+        );
+        return;
+      case NextReadingActionTargetKinds.organizeArchive:
+        await _organizeStoryArchive();
+        return;
+      case NextReadingActionTargetKinds.goal:
+      case NextReadingActionTargetKinds.reader:
+        await _openLocation(widget.book.lastReadPosition);
+        return;
+    }
+  }
+
   Widget _buildStoryAtlasCard(FictionStoryAtlas atlas) {
     final unresolved = atlas.timeline.where((event) => event.isMystery).length;
     final coverage = atlas.coverageStart == null
@@ -320,71 +453,98 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
       margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(18),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Icon(Icons.menu_book_outlined,
-                color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text('小说故事档案',
-                  style: Theme.of(context).textTheme.titleMedium),
-            ),
-            Text('安全边界 ${(widget.book.readingPercentage * 100).round()}%',
-                style: Theme.of(context).textTheme.labelMedium),
-          ]),
-          const SizedBox(height: 12),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            _AtlasMetric(label: '人物', value: atlas.characters.length),
-            _AtlasMetric(label: '关系', value: atlas.relationships.length),
-            _AtlasMetric(label: '事件', value: atlas.timeline.length),
-            _AtlasMetric(label: '未解', value: unresolved),
-          ]),
-          const SizedBox(height: 12),
-          Text('档案覆盖 $coverage · 最近整理 $lastUpdated',
-              style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 14),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            FilledButton.tonalIcon(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => FictionCharacterGraphPage(
-                  book: widget.book,
-                  initialAtlas: atlas,
-                  arcId: atlas.arcId,
-                  onOpenLocation: _openLocation,
-                  onRequestOrganize: widget.onOrganizeStoryArchive == null
-                      ? null
-                      : _organizeStoryArchive,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.menu_book_outlined,
+                  color: Theme.of(context).colorScheme.primary,
                 ),
-              )),
-              icon: const Icon(Icons.hub_outlined),
-              label: const Text('人物关系图'),
-            ),
-            FilledButton.tonalIcon(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => FictionStoryTimelinePage(
-                  book: widget.book,
-                  initialAtlas: atlas,
-                  arcId: atlas.arcId,
-                  readingProfile: _readingProfile,
-                  onOpenLocation: _openLocation,
-                  onRequestOrganize: widget.onOrganizeStoryArchive == null
-                      ? null
-                      : _organizeStoryArchive,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '小说故事档案',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
-              )),
-              icon: const Icon(Icons.timeline),
-              label: const Text('故事时间线'),
+                Text(
+                  '安全边界 ${(widget.book.readingPercentage * 100).round()}%',
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+              ],
             ),
-            OutlinedButton.icon(
-              onPressed: _organizeStoryArchive,
-              icon: const Icon(Icons.auto_awesome_outlined),
-              label: const Text('整理/更新故事档案'),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _AtlasMetric(label: '人物', value: atlas.characters.length),
+                _AtlasMetric(label: '关系', value: atlas.relationships.length),
+                _AtlasMetric(label: '事件', value: atlas.timeline.length),
+                _AtlasMetric(label: '未解', value: unresolved),
+              ],
             ),
-          ]),
-          const SizedBox(height: 8),
-          Text('打开图谱不会调用 AI；只有确认整理已读范围后才会读取正文。',
-              style: Theme.of(context).textTheme.bodySmall),
-        ]),
+            const SizedBox(height: 12),
+            Text(
+              '档案覆盖 $coverage · 最近整理 $lastUpdated',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => FictionCharacterGraphPage(
+                        book: widget.book,
+                        initialAtlas: atlas,
+                        arcId: atlas.arcId,
+                        onOpenLocation: _openLocation,
+                        onRequestOrganize: widget.onOrganizeStoryArchive == null
+                            ? null
+                            : _organizeStoryArchive,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.hub_outlined),
+                  label: const Text('人物关系图'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => FictionStoryTimelinePage(
+                        book: widget.book,
+                        initialAtlas: atlas,
+                        arcId: atlas.arcId,
+                        readingProfile: _readingProfile,
+                        onOpenLocation: _openLocation,
+                        onRequestOrganize: widget.onOrganizeStoryArchive == null
+                            ? null
+                            : _organizeStoryArchive,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.timeline),
+                  label: const Text('故事时间线'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _organizeStoryArchive,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                  label: const Text('整理/更新故事档案'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '打开图谱不会调用 AI；只有确认整理已读范围后才会读取正文。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -395,7 +555,9 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
   }
 
   int _outcomeCount(
-          ReadingOutcomeSource source, ReadingOutcomesSnapshot state) =>
+    ReadingOutcomeSource source,
+    ReadingOutcomesSnapshot state,
+  ) =>
       switch (source) {
         ReadingOutcomeSource.goals => state.goals.length,
         ReadingOutcomeSource.checkpoints => state.pendingCheckpoints.length,
@@ -430,8 +592,9 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
           for (final checkpoint in state.pendingCheckpoints)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text(_chapterTitle(
-                  checkpoint.chapterTitle, checkpoint.chapterHref)),
+              title: Text(
+                _chapterTitle(checkpoint.chapterTitle, checkpoint.chapterHref),
+              ),
               subtitle: Text(
                 '离开时读到 ${(checkpoint.progress * 100).round()}% · 回到阅读页${closure.checkpointAction}',
               ),
@@ -455,8 +618,11 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
           for (final difficulty in state.unresolvedDifficulties)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text(difficulty.text,
-                  maxLines: 3, overflow: TextOverflow.ellipsis),
+              title: Text(
+                difficulty.text,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: Text(difficulty.chapterTitle ?? '未知章节'),
               onTap: () => _openLocation(difficulty.cfi),
               trailing: IconButton(
@@ -499,10 +665,18 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
     );
   }
 
-  List<ReadingArtifact> _visibleArtifacts(ReadingOutcomesSnapshot state) =>
+  List<ReadingArtifact> _visibleArtifacts(
+    ReadingOutcomesSnapshot state, {
+    double? visibleProgress,
+  }) =>
       state.artifacts
           .where(
-              (item) => item.isVisibleAtProgress(widget.book.readingPercentage))
+            (item) => item.isVisibleAtProgress(
+              visibleProgress ??
+                  widget.visibleProgress ??
+                  widget.book.readingPercentage,
+            ),
+          )
           .toList(growable: false);
 
   String _contributionLabel(String value) => switch (value) {
@@ -519,7 +693,7 @@ class _ReadingOutcomesPageState extends ConsumerState<ReadingOutcomesPage> {
     return Card.filled(
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             const Icon(Icons.auto_awesome_outlined, size: 34),
@@ -569,41 +743,51 @@ class _OutcomeHero extends StatelessWidget {
     required this.book,
     required this.state,
     required this.closure,
+    required this.nextAction,
+    required this.onNextAction,
   });
 
   final Book book;
   final ReadingOutcomesSnapshot state;
   final ReadingClosurePolicyDefinition closure;
+  final NextReadingAction nextAction;
+  final VoidCallback onNextAction;
 
   @override
   Widget build(BuildContext context) {
-    final goal = state.activeGoal;
-    final next = closure.immersive
-        ? goal != null
-            ? '继续“${goal.title}”'
-            : state.unresolvedDifficulties.isNotEmpty
-                ? '保留沉浸感，按需查看未解悬念'
-                : '继续沉浸阅读，不必完成测试'
-        : closure.showKnowledgeCards && state.dueCards.isNotEmpty
-            ? '先复习 ${state.dueCards.length} 张到期卡片'
-            : state.pendingCheckpoints.isNotEmpty
-                ? '${closure.checkpointAction} ${state.pendingCheckpoints.length} 个章节'
-                : state.unresolvedDifficulties.isNotEmpty
-                    ? '处理 ${state.unresolvedDifficulties.length} 个${closure.difficultyTitle}'
-                    : goal != null
-                        ? '继续推进“${goal.title}”'
-                        : '继续阅读并建立${closure.goalLabel}';
     return Card.filled(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(book.title, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 4),
-            Text('下一步 · $next'),
-            const SizedBox(height: 18),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Semantics(
+                    label: '下一步：${nextAction.title}。${nextAction.reason}',
+                    child: Text('下一步 · ${nextAction.title}'),
+                  ),
+                ),
+                if (!nextAction.isPassive)
+                  FilledButton.tonal(
+                    onPressed: onNextAction,
+                    child: const Text('开始'),
+                  ),
+              ],
+            ),
+            if (!nextAction.isPassive) ...[
+              const SizedBox(height: 4),
+              Text(
+                nextAction.reason,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 8),
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -620,10 +804,7 @@ class _OutcomeHero extends StatelessWidget {
                         : '${(state.masteryProgress * 100).round()}%',
                   )
                 else
-                  _Metric(
-                    label: '故事记忆',
-                    value: '${state.memories.length}',
-                  ),
+                  _Metric(label: '故事记忆', value: '${state.memories.length}'),
                 _Metric(
                   label: closure.heroUnresolvedLabel,
                   value: '${state.unresolvedDifficulties.length}',
@@ -696,8 +877,10 @@ class _Section extends StatelessWidget {
                 Icon(icon, size: 20),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(title,
-                      style: Theme.of(context).textTheme.titleMedium),
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
                 if (badge != null) ...[
                   Chip(
@@ -746,8 +929,10 @@ class _GoalTile extends StatelessWidget {
         padding: const EdgeInsets.only(top: 8),
         child: LinearProgressIndicator(value: goal.progress.clamp(0, 1)),
       ),
-      trailing: Text('$status\n${(goal.progress * 100).round()}%',
-          textAlign: TextAlign.end),
+      trailing: Text(
+        '$status\n${(goal.progress * 100).round()}%',
+        textAlign: TextAlign.end,
+      ),
     );
   }
 }
@@ -817,10 +1002,7 @@ class _KnowledgeCardTile extends StatelessWidget {
                   : '${_formatDate(card.dueAt!)}复习',
         ),
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(card.back),
-          ),
+          Align(alignment: Alignment.centerLeft, child: Text(card.back)),
           if (isDue) ...[
             const SizedBox(height: 12),
             Row(
@@ -907,11 +1089,13 @@ class _ArtifactTile extends StatelessWidget {
     };
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      leading: Icon(artifact.kind == ReadingArtifactKinds.character
-          ? Icons.person_outline
-          : artifact.kind == ReadingArtifactKinds.mystery
-              ? Icons.help_outline
-              : Icons.bookmark_outline),
+      leading: Icon(
+        artifact.kind == ReadingArtifactKinds.character
+            ? Icons.person_outline
+            : artifact.kind == ReadingArtifactKinds.mystery
+                ? Icons.help_outline
+                : Icons.bookmark_outline,
+      ),
       title: Text(title),
       subtitle: Text(
         [if (summary.isNotEmpty) summary, evidenceLabel].join(' · '),

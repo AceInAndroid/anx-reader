@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anx_reader/dao/reading_coach.dart' as coach_dao;
 import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/service/reading_experience_diagnostics.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/models/book_note.dart';
 import 'package:anx_reader/service/ai/ai_context_assembler.dart';
@@ -521,6 +522,7 @@ class ReaderCommandGateway {
       return false;
     }
     _rememberReturnPosition();
+    readingExperienceDiagnostics.recordSourceJump();
     _navigateToCfi!(cfi);
     return true;
   }
@@ -533,6 +535,7 @@ class ReaderCommandGateway {
       return false;
     }
     _rememberReturnPosition();
+    readingExperienceDiagnostics.recordSourceJump();
     _navigateToHref!(href);
     return true;
   }
@@ -543,6 +546,7 @@ class ReaderCommandGateway {
       return false;
     }
     _returnCfi = null;
+    readingExperienceDiagnostics.recordSourceReturn();
     _navigateToCfi!(target);
     return true;
   }

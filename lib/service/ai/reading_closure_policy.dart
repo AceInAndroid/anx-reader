@@ -1,4 +1,5 @@
 import 'package:anx_reader/models/reading_agent.dart';
+import 'package:anx_reader/models/next_reading_action.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 
 /// Stable identifiers persisted in reading profiles and artifacts.
@@ -33,10 +34,10 @@ enum ReadingClosureType {
   psychologyReflection;
 
   String get stableId => switch (this) {
-        fictionImmersion => ReadingClosureIds.fictionImmersion,
-        knowledgeArgument => ReadingClosureIds.knowledgeArgument,
-        psychologyReflection => ReadingClosureIds.psychologyReflection,
-      };
+    fictionImmersion => ReadingClosureIds.fictionImmersion,
+    knowledgeArgument => ReadingClosureIds.knowledgeArgument,
+    psychologyReflection => ReadingClosureIds.psychologyReflection,
+  };
 
   static ReadingClosureType? fromJson(Object? value) {
     final id = ReadingClosureIds.normalize(value);
@@ -163,6 +164,13 @@ class ReadingClosurePolicyDefinition {
     this.heroMasteryLabel = '平均掌握',
     this.heroUnresolvedLabel = '未解决',
     this.immersive = false,
+    this.nextActionOrder = const [
+      NextReadingActionKinds.dueReview,
+      NextReadingActionKinds.chapterCheckpoint,
+      NextReadingActionKinds.unresolvedDifficulty,
+      NextReadingActionKinds.activeGoal,
+      NextReadingActionKinds.continueReading,
+    ],
   });
 
   final String id;
@@ -178,6 +186,7 @@ class ReadingClosurePolicyDefinition {
   final String heroMasteryLabel;
   final String heroUnresolvedLabel;
   final bool immersive;
+  final List<String> nextActionOrder;
 
   bool supports(ReadingClosureCapability capability) =>
       capabilities.contains(capability);
@@ -296,6 +305,14 @@ class ReadingClosurePolicyRegistry {
     },
     heroUnresolvedLabel: '未解悬念',
     immersive: true,
+    nextActionOrder: [
+      NextReadingActionKinds.resumeContext,
+      NextReadingActionKinds.activeGoal,
+      NextReadingActionKinds.fictionMystery,
+      NextReadingActionKinds.unresolvedDifficulty,
+      NextReadingActionKinds.archiveCoverage,
+      NextReadingActionKinds.continueReading,
+    ],
   );
 
   static const knowledgeArgument = ReadingClosurePolicyDefinition(
@@ -318,52 +335,65 @@ class ReadingClosurePolicyRegistry {
       masteryLabel: '当前掌握度',
       masteryOptions: [
         ReadingMasteryOptionSpec(
-            level: MasteryLevel.emerging, label: '识别了核心主张'),
+          level: MasteryLevel.emerging,
+          label: '识别了核心主张',
+        ),
         ReadingMasteryOptionSpec(
-            level: MasteryLevel.familiar, label: '能说明证据和假设'),
+          level: MasteryLevel.familiar,
+          label: '能说明证据和假设',
+        ),
         ReadingMasteryOptionSpec(
-            level: MasteryLevel.mastered, label: '能提出反例或应用边界'),
+          level: MasteryLevel.mastered,
+          label: '能提出反例或应用边界',
+        ),
       ],
       showKnowledgeCardOption: true,
     ),
     outcomeSections: [
       ReadingOutcomeSectionSpec(
-          id: 'goals',
-          source: ReadingOutcomeSource.goals,
-          title: '阅读目标',
-          emptyText: '还没有阅读目标，可在阅读 Agent 面板中创建。'),
+        id: 'goals',
+        source: ReadingOutcomeSource.goals,
+        title: '阅读目标',
+        emptyText: '还没有阅读目标，可在阅读 Agent 面板中创建。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'checkpoints',
-          source: ReadingOutcomeSource.checkpoints,
-          title: '待完成论证检查',
-          emptyText: '读完章节后可检查核心论证。',
-          visibleWhenEmpty: false),
+        id: 'checkpoints',
+        source: ReadingOutcomeSource.checkpoints,
+        title: '待完成论证检查',
+        emptyText: '读完章节后可检查核心论证。',
+        visibleWhenEmpty: false,
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'mastery',
-          source: ReadingOutcomeSource.mastery,
-          title: '论证掌握度',
-          emptyText: '检查章节后，这里会形成用户确认的记录。'),
+        id: 'mastery',
+        source: ReadingOutcomeSource.mastery,
+        title: '论证掌握度',
+        emptyText: '检查章节后，这里会形成用户确认的记录。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'difficulties',
-          source: ReadingOutcomeSource.difficulties,
-          title: '待核查问题',
-          emptyText: '当前没有待核查问题。'),
+        id: 'difficulties',
+        source: ReadingOutcomeSource.difficulties,
+        title: '待核查问题',
+        emptyText: '当前没有待核查问题。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'cards',
-          source: ReadingOutcomeSource.knowledgeCards,
-          title: '复习卡片',
-          emptyText: '章节检查时可选择生成复习卡片，默认不会创建。'),
+        id: 'cards',
+        source: ReadingOutcomeSource.knowledgeCards,
+        title: '复习卡片',
+        emptyText: '章节检查时可选择生成复习卡片，默认不会创建。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'memories',
-          source: ReadingOutcomeSource.memories,
-          title: '论证与证据记忆',
-          emptyText: '适合保存主张—证据—假设、反例、数据口径和待验证条件。'),
+        id: 'memories',
+        source: ReadingOutcomeSource.memories,
+        title: '论证与证据记忆',
+        emptyText: '适合保存主张—证据—假设、反例、数据口径和待验证条件。',
+      ),
     ],
     quickPrompts: [
       ReadingQuickPromptSpec(
-          id: 'argument-map',
-          label: '拆解本章论证',
-          prompt: '拆解本章的核心主张、证据、隐含假设、可能反例和适用边界。'),
+        id: 'argument-map',
+        label: '拆解本章论证',
+        prompt: '拆解本章的核心主张、证据、隐含假设、可能反例和适用边界。',
+      ),
     ],
     systemGuidance:
         'Build the closure around claims, evidence, assumptions, counterexamples, and applicability. Do not treat persuasive wording as evidence. Mastery and review-card writes require user confirmation.',
@@ -372,6 +402,13 @@ class ReadingClosurePolicyRegistry {
       ReadingClosureCapability.knowledgeCards,
       ReadingClosureCapability.markdownMemory,
     },
+    nextActionOrder: [
+      NextReadingActionKinds.dueReview,
+      NextReadingActionKinds.chapterCheckpoint,
+      NextReadingActionKinds.unresolvedDifficulty,
+      NextReadingActionKinds.activeGoal,
+      NextReadingActionKinds.continueReading,
+    ],
   );
 
   static const psychologyReflection = ReadingClosurePolicyDefinition(
@@ -395,51 +432,62 @@ class ReadingClosurePolicyRegistry {
       masteryOptions: [
         ReadingMasteryOptionSpec(level: MasteryLevel.emerging, label: '概念仍模糊'),
         ReadingMasteryOptionSpec(
-            level: MasteryLevel.familiar, label: '能区分例子与反例'),
+          level: MasteryLevel.familiar,
+          label: '能区分例子与反例',
+        ),
         ReadingMasteryOptionSpec(
-            level: MasteryLevel.mastered, label: '能解释边界与应用'),
+          level: MasteryLevel.mastered,
+          label: '能解释边界与应用',
+        ),
       ],
       showKnowledgeCardOption: true,
       saveReflectionAsMemory: true,
     ),
     outcomeSections: [
       ReadingOutcomeSectionSpec(
-          id: 'goals',
-          source: ReadingOutcomeSource.goals,
-          title: '理解与反思意图',
-          emptyText: '还没有理解与反思意图，可在阅读 Agent 面板中创建。'),
+        id: 'goals',
+        source: ReadingOutcomeSource.goals,
+        title: '理解与反思意图',
+        emptyText: '还没有理解与反思意图，可在阅读 Agent 面板中创建。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'checkpoints',
-          source: ReadingOutcomeSource.checkpoints,
-          title: '待完成概念检查',
-          emptyText: '读完章节后可检查概念边界。',
-          visibleWhenEmpty: false),
+        id: 'checkpoints',
+        source: ReadingOutcomeSource.checkpoints,
+        title: '待完成概念检查',
+        emptyText: '读完章节后可检查概念边界。',
+        visibleWhenEmpty: false,
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'mastery',
-          source: ReadingOutcomeSource.mastery,
-          title: '概念清晰度',
-          emptyText: '检查章节后，这里会形成用户确认的记录。'),
+        id: 'mastery',
+        source: ReadingOutcomeSource.mastery,
+        title: '概念清晰度',
+        emptyText: '检查章节后，这里会形成用户确认的记录。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'difficulties',
-          source: ReadingOutcomeSource.difficulties,
-          title: '待澄清概念与反思',
-          emptyText: '当前没有待澄清内容。'),
+        id: 'difficulties',
+        source: ReadingOutcomeSource.difficulties,
+        title: '待澄清概念与反思',
+        emptyText: '当前没有待澄清内容。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'cards',
-          source: ReadingOutcomeSource.knowledgeCards,
-          title: '复习卡片',
-          emptyText: '章节检查时可选择生成复习卡片，默认不会创建。'),
+        id: 'cards',
+        source: ReadingOutcomeSource.knowledgeCards,
+        title: '复习卡片',
+        emptyText: '章节检查时可选择生成复习卡片，默认不会创建。',
+      ),
       ReadingOutcomeSectionSpec(
-          id: 'memories',
-          source: ReadingOutcomeSource.memories,
-          title: '概念与反思记忆',
-          emptyText: '适合保存概念边界、例子、反例和用户主动写下的反思。'),
+        id: 'memories',
+        source: ReadingOutcomeSource.memories,
+        title: '概念与反思记忆',
+        emptyText: '适合保存概念边界、例子、反例和用户主动写下的反思。',
+      ),
     ],
     quickPrompts: [
       ReadingQuickPromptSpec(
-          id: 'clarify-concept',
-          label: '澄清核心概念',
-          prompt: '解释本章核心概念、边界、例子与反例；最后最多给一个可选的反思问题，不诊断、不评判。'),
+        id: 'clarify-concept',
+        label: '澄清核心概念',
+        prompt: '解释本章核心概念、边界、例子与反例；最后最多给一个可选的反思问题，不诊断、不评判。',
+      ),
     ],
     systemGuidance:
         'Clarify concepts, boundaries, examples, and counterexamples. Offer at most one optional reflection question at a time. Never diagnose, judge, or present reflection as a psychological fact about the user.',
@@ -449,6 +497,13 @@ class ReadingClosurePolicyRegistry {
       ReadingClosureCapability.markdownMemory,
     },
     heroMasteryLabel: '概念清晰度',
+    nextActionOrder: [
+      NextReadingActionKinds.chapterCheckpoint,
+      NextReadingActionKinds.unresolvedDifficulty,
+      NextReadingActionKinds.dueReview,
+      NextReadingActionKinds.activeGoal,
+      NextReadingActionKinds.continueReading,
+    ],
   );
 
   static const builtIns = [
@@ -493,8 +548,9 @@ class ReadingClosurePolicyMatcher {
   }) {
     final text = '$title $author $description'.toLowerCase();
     final facets = <String>{
-      if (RegExp(r'悬疑|推理|侦探|刑侦|法医|案件|谋杀|suspense|mystery|detective')
-          .hasMatch(text)) ...{
+      if (RegExp(
+        r'悬疑|推理|侦探|刑侦|法医|案件|谋杀|suspense|mystery|detective',
+      ).hasMatch(text)) ...{
         ReadingProfileFacetIds.suspense,
         ReadingProfileFacetIds.processingVolumeCaseScene,
         ReadingProfileFacetIds.entitiesSuspense,
@@ -508,8 +564,9 @@ class ReadingClosurePolicyMatcher {
       if (RegExp(r'家族|家庭|亲情|现实主义|family|realist').hasMatch(text)) ...{
         ReadingProfileFacetIds.timelineFamilyDefault,
       },
-      if (RegExp(r'科幻|宇宙|星际|外星|未来|机器人|人工智能|science fiction|sci-fi|space opera')
-          .hasMatch(text)) ...{
+      if (RegExp(
+        r'科幻|宇宙|星际|外星|未来|机器人|人工智能|science fiction|sci-fi|space opera',
+      ).hasMatch(text)) ...{
         ReadingProfileFacetIds.scienceFiction,
         ReadingProfileFacetIds.entitiesWorldbuilding,
         ReadingProfileFacetIds.timelineWorldbuildingDefault,
@@ -525,8 +582,9 @@ class ReadingClosurePolicyMatcher {
       author: author,
       description: description,
     );
-    final hasDefaultTimeline =
-        facets.any((facet) => facet.startsWith('timeline.default.'));
+    final hasDefaultTimeline = facets.any(
+      (facet) => facet.startsWith('timeline.default.'),
+    );
     if (policy.id == ReadingClosureIds.fictionImmersion &&
         !hasDefaultTimeline &&
         !facets.contains(ReadingProfileFacetIds.suspense)) {
@@ -558,13 +616,15 @@ class ReadingClosurePolicyMatcher {
       return registry.getById(requestedId);
     }
     final metadata = '$title $author $description'.toLowerCase();
-    if (RegExp(r'小说|文学|故事|侦探|悬疑|科幻|奇幻|言情|推理|novel|fiction')
-        .hasMatch(metadata)) {
+    if (RegExp(
+      r'小说|文学|故事|侦探|悬疑|科幻|奇幻|言情|推理|novel|fiction',
+    ).hasMatch(metadata)) {
       return registry.getById(ReadingClosureIds.fictionImmersion);
     }
     if (mode == ReadingAiMode.psychology ||
-        RegExp(r'心理|认知|情绪|人格|行为科学|精神分析|psychology|cognitive|emotion')
-            .hasMatch(metadata)) {
+        RegExp(
+          r'心理|认知|情绪|人格|行为科学|精神分析|psychology|cognitive|emotion',
+        ).hasMatch(metadata)) {
       return registry.getById(ReadingClosureIds.psychologyReflection);
     }
     return registry.getById(ReadingClosureIds.knowledgeArgument);

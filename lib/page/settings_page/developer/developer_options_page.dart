@@ -1,5 +1,6 @@
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/page/settings_page/developer/vibration_test_page.dart';
+import 'package:anx_reader/page/settings_page/developer/reading_experience_diagnostics_page.dart';
 import 'package:anx_reader/page/settings_page/subpage/log_page.dart';
 import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:flutter/cupertino.dart';
@@ -11,9 +12,7 @@ class DeveloperOptionsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(L10n.of(context).developerOptions),
-      ),
+      appBar: AppBar(title: Text(L10n.of(context).developerOptions)),
       body: AnimatedBuilder(
         animation: Prefs(),
         builder: (context, _) {
@@ -43,10 +42,23 @@ class DeveloperOptionsPage extends StatelessWidget {
                 ),
               ),
               ListTile(
+                leading: const Icon(Icons.monitor_heart_outlined),
+                title: const Text('阅读体验诊断'),
+                subtitle: const Text('查看连续阅读、同步合并、AI 任务与耗电趋势'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  CupertinoPageRoute(
+                    builder: (context) =>
+                        const ReadingExperienceDiagnosticsPage(),
+                  ),
+                ),
+              ),
+              ListTile(
                 leading: const Icon(Icons.vibration_outlined),
                 title: const Text('Vibration Test'),
-                subtitle:
-                    const Text('Inspect device support and trigger presets'),
+                subtitle: const Text(
+                  'Inspect device support and trigger presets',
+                ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () {
                   Navigator.of(context).push(

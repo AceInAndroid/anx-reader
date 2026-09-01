@@ -54,7 +54,7 @@ Anx Reader 的 AI 不是一个调用大模型的按钮，而是围绕阅读现�
 ```mermaid
 flowchart TB
   subgraph Entry[用户入口]
-    Reader[阅读页 / 选区菜单]
+    Reader[阅读页 AI + 本书 / 选区菜单]
     Workspace[AI 工作台]
     Outcomes[阅读成果 / Story Atlas]
     WikiUI[书籍 Wiki]
@@ -164,6 +164,8 @@ flowchart TB
 | 笔记 AI 整理 | 笔记整理入口 | 用户发起 | 已有笔记、标签、主题 | 标题、整理稿、标签、主题建议 | 用户应用后持久化 | `reading_note_ai_organizer_service.dart` |
 | 联网核查 | 专家分析/显式搜索 | 用户请求且设置允许 | 查询、可信来源配置 | 搜索结果和实际 URL | 只保存必要引用 | `web_search.dart`、orchestrator |
 | Token 用量 | 设置 > AI | 不调用 | runner usage/本地估算 | 月度输入、输出、角色、节省率 | 设备本地诊断数据 | `ai_token_usage_service.dart` |
+| 下一阅读行动 | 本书面板、成果页 | 不调用 | Outcomes、现场、Coverage、Atlas、Closure | 唯一首要行动 | 只读临时投影 | `next_reading_action_resolver.dart` |
+| 阅读体验诊断 | 开发者设置 | 不调用 | 会话级计数、首尾电量 | 本机体验趋势 | 本机偏好；不备份/同步 | `reading_experience_diagnostics.dart` |
 
 ### 3.2 Reading Agent 工具
 
@@ -344,6 +346,40 @@ flowchart TB
 ```
 
 同步只传数据，不执行 Prompt、模型或长任务。其他设备进度不会覆盖本机位置；全局最远进度只用于用户主动选择。
+
+阅读状态额外经过 `ReadingActivityCoordinator`：
+
+```text
+activeReading + 自动同步
+  -> 合并为一个 pending intent，不发网络请求
+退出/后台
+  -> 保存位置、Runtime、阅读时长
+  -> flush 一次 pending intent
+离线/非 Wi-Fi
+  -> 保留一个 intent，不循环重试
+用户手动同步
+  -> 立即进入 SyncRequestGate，重复点击复用同一 Future
+```
+
+自动冲突不弹方向选择框，只在“本书”面板显示需要手动处理。远端最远进度按
+设备位置指纹在每个阅读会话最多自动提示一次，默认保持本机当前位置。
+
+### 4.11 本书面板与下一行动
+
+阅读页不再为 Wiki、成果、Story Atlas 和同步提供重复一级入口。`AI` 负责当前
+帮助，`本书` 负责书级状态。手机使用底部 Sheet，宽屏使用侧边面板；面板打开只
+读取现有投影，不调用模型。
+
+```text
+ReadingOutcomesSnapshot + ReadingWorldState + Coverage + Story Atlas
+  -> NextReadingActionResolver
+  -> Closure Policy.nextActionOrder
+  -> 唯一 NextReadingAction
+  -> 本书面板 / 成果页共用
+```
+
+`NextReadingAction` 不存库、不进入同步；`completionFingerprint` 只用于识别投影
+是否变化和本机诊断。新 Closure 只声明行动顺序，不修改阅读页或成果页。
 
 ## 5. 模型角色、Provider 与预算
 
@@ -646,6 +682,7 @@ requestId -> taskId -> sessionId -> bookId -> actionId -> artifact/entry IDs
 | 同步 | per-device 位置、tombstone、稳定 ID 合并、不触发模型 |
 | Token | 服务端/估算、角色分组、重试、fallback、混合节省口径 |
 | 扩展性 | 假 Provider/Skill/Closure/Artifact/第四书类注册契约 |
+| 阅读体验 | AI＋本书入口、唯一行动、自动同步合并、离线 pending、E-INK 无循环动画、诊断不出设备 |
 
 ## 13. 关键代码索引
 
@@ -671,6 +708,10 @@ requestId -> taskId -> sessionId -> bookId -> actionId -> artifact/entry IDs
 | 翻译/搜索 | `lib/service/translate/ai.dart`、`lib/service/ai/web_search.dart` |
 | 数据库 | `lib/dao/database.dart` |
 | 同步 | `lib/service/sync/` |
+| 阅读活动协调 | `lib/service/sync/reading_activity_coordinator.dart` |
+| 本书统一面板 | `lib/widgets/reading_page/reading_book_hub.dart` |
+| 下一阅读行动 | `lib/models/next_reading_action.dart`、`lib/service/ai/next_reading_action_resolver.dart` |
+| 阅读体验诊断 | `lib/service/reading_experience_diagnostics.dart`、`lib/page/settings_page/developer/reading_experience_diagnostics_page.dart` |
 
 ## 14. 开发检查清单
 

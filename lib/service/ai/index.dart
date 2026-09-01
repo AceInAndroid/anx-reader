@@ -18,6 +18,7 @@ import 'package:anx_reader/service/ai/langchain_runner.dart';
 import 'package:anx_reader/service/ai/request_queue.dart';
 import 'package:anx_reader/service/ai/reading_ai_models.dart';
 import 'package:anx_reader/service/ai/reading_skills.dart';
+import 'package:anx_reader/service/reading_experience_diagnostics.dart';
 import 'package:anx_reader/utils/ai_reasoning_parser.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -272,16 +273,16 @@ void _completeRequestMetadata(
   required bool usedFallback,
   required String? finalValue,
 }) {
-  if (completer == null || completer.isCompleted) return;
-  completer.complete(
-    _responseMetadata(
-      request,
-      executions,
-      finalExecution: finalExecution,
-      usedFallback: usedFallback,
-      finalValue: finalValue,
-    ),
+  // Plain `aiGenerateText` calls do not request a metadata completer, but the
+  // local experience diagnostics still need one record per model execution.
+  final metadata = _responseMetadata(
+    request,
+    executions,
+    finalExecution: finalExecution,
+    usedFallback: usedFallback,
+    finalValue: finalValue,
   );
+  if (completer != null && !completer.isCompleted) completer.complete(metadata);
 }
 
 AiResponseMetadata _responseMetadata(
@@ -296,7 +297,7 @@ AiResponseMetadata _responseMetadata(
       !_isJsonResponse(finalValue ?? '')) {
     validationErrors.add('Response is not valid JSON');
   }
-  return AiResponseMetadata(
+  final metadata = AiResponseMetadata(
     requestId: request.trace.requestId,
     workloadId: request.workloadId,
     providerId: finalExecution.providerId,
@@ -322,6 +323,12 @@ AiResponseMetadata _responseMetadata(
     usedFallback: usedFallback,
     validationErrors: validationErrors,
   );
+  readingExperienceDiagnostics.recordModelRequest(
+    elapsed: metadata.elapsed,
+    retries: metadata.retryCount,
+    validationRejections: metadata.validationErrors.length,
+  );
+  return metadata;
 }
 
 bool _isJsonResponse(String value) {
@@ -361,7 +368,9 @@ Future<void> _prepareRollingSummary({
       : Prefs()
           .getAiProviders()
           .map((item) => AiProvider.fromJson(item as Map<String, dynamic>))
-          .where((item) => item.id == extraction.providerId && item.isRunnable)
+          .where(
+            (item) => item.id == extraction.providerId && item.isRunnable,
+          )
           .firstOrNull;
   if (provider == null) return;
   final scope = 'ai:${task.name}:${provider.id}:${provider.model}:summary-v1';
@@ -604,10 +613,7 @@ String? _providerCapabilityError(
   return null;
 }
 
-_AiExecutionResult _capabilityFailure(
-  AiProvider provider,
-  String message,
-) =>
+_AiExecutionResult _capabilityFailure(AiProvider provider, String message) =>
     _AiExecutionResult(
       stream: Stream.value('Error: $message'),
       providerId: provider.id,
@@ -1011,11 +1017,8 @@ Stream<String> _createStream({
   int? maxInputTokens,
 }) async* {
   final runner = CancelableLangchainRunner(
-    onTokenUsage: ({
-      required inputTokens,
-      required outputTokens,
-      required estimated,
-    }) {
+    onTokenUsage: (
+        {required inputTokens, required outputTokens, required estimated}) {
       aiTokenUsageService.record(
         inputTokens: inputTokens,
         outputTokens: outputTokens,

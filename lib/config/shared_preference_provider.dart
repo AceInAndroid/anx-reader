@@ -74,6 +74,9 @@ const Set<String> _prefsImportSkipKeys = {
   // Usage counters are device-local diagnostics. Importing them would merge
   // unrelated devices and make the displayed monthly total misleading.
   'aiTokenUsageMonthly',
+  // Local reading-quality diagnostics are intentionally device-local and
+  // never leave the installation through a preferences backup.
+  'readingExperienceDiagnostics.v1',
   // Local/NAS endpoints and the selected extraction engine are device-local.
   'aiExtractionConfig',
   // Display hardware and color choices are intentionally per-device. A
@@ -106,7 +109,8 @@ class Prefs extends ChangeNotifier {
 
   Future<void> initPrefs() async {
     prefs = await SharedPreferences.getInstance();
-    final legacyEInk = (prefs.getBool('eInkMode') ?? false) ||
+    final legacyEInk =
+        (prefs.getBool('eInkMode') ?? false) ||
         prefs.getString('themeMode') == AppThemeMode.eInk.code;
     if (legacyEInk) {
       await prefs.setString(
@@ -149,13 +153,16 @@ class Prefs extends ChangeNotifier {
         };
       }
       if (value is List) {
-        final bool allStrings =
-            value.every((dynamic element) => element is String);
+        final bool allStrings = value.every(
+          (dynamic element) => element is String,
+        );
         if (allStrings) {
           return <String, Object?>{
             _prefsBackupEntryTypeKey: 'stringList',
-            _prefsBackupEntryValueKey:
-                List<String>.from(value, growable: false),
+            _prefsBackupEntryValueKey: List<String>.from(
+              value,
+              growable: false,
+            ),
           };
         }
       }
@@ -202,8 +209,9 @@ class Prefs extends ChangeNotifier {
           break;
         case 'stringList':
           if (value is List) {
-            final List<String> list =
-                value.map((dynamic v) => v as String).toList();
+            final List<String> list = value
+                .map((dynamic v) => v as String)
+                .toList();
             await prefs.setStringList(key, list);
           }
           break;
@@ -262,16 +270,11 @@ class Prefs extends ChangeNotifier {
       await saveDeviceDisplayProfile(DeviceDisplayProfile.eInk);
       return;
     }
-    await prefs.setString(
-      'themeMode',
-      mode.code,
-    );
+    await prefs.setString('themeMode', mode.code);
     notifyListeners();
   }
 
-  Future<void> saveDeviceDisplayProfile(
-    DeviceDisplayProfile profile,
-  ) async {
+  Future<void> saveDeviceDisplayProfile(DeviceDisplayProfile profile) async {
     await prefs.setString('deviceDisplayProfile', profile.code);
     notifyListeners();
   }
@@ -301,9 +304,10 @@ class Prefs extends ChangeNotifier {
     String? readThemeJson = prefs.getString('readTheme');
     if (readThemeJson == null) {
       return ReadTheme(
-          backgroundColor: 'FFFBFBF3',
-          textColor: 'FF343434',
-          backgroundImagePath: '');
+        backgroundColor: 'FFFBFBF3',
+        textColor: 'FF343434',
+        backgroundImagePath: '',
+      );
     }
     return ReadTheme.fromJson(readThemeJson);
   }
@@ -462,8 +466,9 @@ class Prefs extends ChangeNotifier {
 
   StatisticsDashboardTileType? _statisticsDashboardTileFromName(String name) {
     try {
-      return StatisticsDashboardTileType.values
-          .firstWhere((element) => element.name == name);
+      return StatisticsDashboardTileType.values.firstWhere(
+        (element) => element.name == name,
+      );
     } catch (_) {
       return null;
     }
@@ -598,7 +603,8 @@ class Prefs extends ChangeNotifier {
     if (service != null) return service;
 
     // Migration/Fallback
-    bool isSystem = prefs.getBool('isSystemTts') ??
+    bool isSystem =
+        prefs.getBool('isSystemTts') ??
         true; // Default to system if nothing set
     if (!isSystem) {
       // Check if there was an online service set
@@ -619,7 +625,9 @@ class Prefs extends ChangeNotifier {
   }
 
   Future<void> saveOnlineTtsConfig(
-      String serviceId, Map<String, dynamic> config) async {
+    String serviceId,
+    Map<String, dynamic> config,
+  ) async {
     await prefs.setString('onlineTtsConfig_$serviceId', jsonEncode(config));
     notifyListeners();
   }
@@ -659,7 +667,10 @@ class Prefs extends ChangeNotifier {
     BuildContext context = navigatorKey.currentContext!;
     if (fontJson == null) {
       return FontModel(
-          label: L10n.of(context).followBook, name: 'book', path: 'book');
+        label: L10n.of(context).followBook,
+        name: 'book',
+        path: 'book',
+      );
     }
     return FontModel.fromJson(fontJson);
   }
@@ -692,7 +703,8 @@ class Prefs extends ChangeNotifier {
 
   TranslateService get translateService {
     return getTranslateService(
-        prefs.getString('translateService') ?? 'bingWeb');
+      prefs.getString('translateService') ?? 'bingWeb',
+    );
   }
 
   set translateFrom(LangListEnum from) {
@@ -812,7 +824,8 @@ class Prefs extends ChangeNotifier {
 
   LangListEnum get fullTextTranslateTo {
     return getLang(
-        prefs.getString('fullTextTranslateTo') ?? getCurrentLanguageCode());
+      prefs.getString('fullTextTranslateTo') ?? getCurrentLanguageCode(),
+    );
   }
 
   set aiRpm(int rpm) {
@@ -889,10 +902,7 @@ class Prefs extends ChangeNotifier {
   }
 
   List<ChapterSplitRule> get allChapterSplitRules {
-    return [
-      ...builtinChapterSplitRules,
-      ...chapterSplitCustomRules,
-    ];
+    return [...builtinChapterSplitRules, ...chapterSplitCustomRules];
   }
 
   String? get _storedChapterSplitRuleId {
@@ -1113,10 +1123,7 @@ class Prefs extends ChangeNotifier {
   }
 
   set enabledAiToolIds(List<String> ids) {
-    prefs.setStringList(
-      _enabledAiToolsKey,
-      AiToolRegistry.sanitizeIds(ids),
-    );
+    prefs.setStringList(_enabledAiToolsKey, AiToolRegistry.sanitizeIds(ids));
     notifyListeners();
   }
 
@@ -1402,8 +1409,9 @@ class Prefs extends ChangeNotifier {
     if (readingInfoJson == null) {
       return ReadingInfoModel();
     }
-    final Map<String, dynamic> json =
-        Map<String, dynamic>.from(jsonDecode(readingInfoJson));
+    final Map<String, dynamic> json = Map<String, dynamic>.from(
+      jsonDecode(readingInfoJson),
+    );
     if (json.containsKey('header') || json.containsKey('footer')) {
       return ReadingInfoModel.fromJson(json);
     }
@@ -1422,7 +1430,8 @@ class Prefs extends ChangeNotifier {
           json['headerRight'],
           ReadingInfoEnum.none,
         ),
-        verticalMargin: prefs.getDouble('pageHeaderMargin') ??
+        verticalMargin:
+            prefs.getDouble('pageHeaderMargin') ??
             MediaQuery.of(navigatorKey.currentContext!).padding.bottom,
         leftMargin: prefs.getDouble('pageHeaderLeftMargin') ?? 20,
         rightMargin: prefs.getDouble('pageHeaderRightMargin') ?? 20,
@@ -1441,7 +1450,8 @@ class Prefs extends ChangeNotifier {
           json['footerRight'],
           ReadingInfoEnum.bookProgress,
         ),
-        verticalMargin: prefs.getDouble('pageFooterMargin') ??
+        verticalMargin:
+            prefs.getDouble('pageFooterMargin') ??
             MediaQuery.of(navigatorKey.currentContext!).padding.bottom,
         leftMargin: prefs.getDouble('pageFooterLeftMargin') ?? 20,
         rightMargin: prefs.getDouble('pageFooterRightMargin') ?? 20,
@@ -1606,9 +1616,10 @@ class Prefs extends ChangeNotifier {
     String? fontJson = prefs.getString('excerptShareFont');
     if (fontJson == null) {
       return FontModel(
-          label: L10n.of(navigatorKey.currentContext!).systemFont,
-          name: 'customFont0',
-          path: 'SourceHanSerifSC-Regular.otf');
+        label: L10n.of(navigatorKey.currentContext!).systemFont,
+        name: 'customFont0',
+        path: 'SourceHanSerifSC-Regular.otf',
+      );
     }
     return FontModel.fromJson(fontJson);
   }
@@ -1637,15 +1648,20 @@ class Prefs extends ChangeNotifier {
   }
 
   void saveTranslateServiceConfig(
-      TranslateService service, Map<String, dynamic> config) {
+    TranslateService service,
+    Map<String, dynamic> config,
+  ) {
     prefs.setString(
-        'translateServiceConfig_${service.name}', jsonEncode(config));
+      'translateServiceConfig_${service.name}',
+      jsonEncode(config),
+    );
     notifyListeners();
   }
 
   Map<String, dynamic>? getTranslateServiceConfig(TranslateService service) {
-    String? configJson =
-        prefs.getString('translateServiceConfig_${service.name}');
+    String? configJson = prefs.getString(
+      'translateServiceConfig_${service.name}',
+    );
     if (configJson == null) {
       return null;
     }
@@ -1685,7 +1701,8 @@ class Prefs extends ChangeNotifier {
 
   TranslationModeEnum get translationMode {
     return TranslationModeEnum.fromCode(
-        prefs.getString('translationMode') ?? 'off');
+      prefs.getString('translationMode') ?? 'off',
+    );
   }
 
   set translationMode(TranslationModeEnum mode) {
@@ -1697,7 +1714,10 @@ class Prefs extends ChangeNotifier {
     String? bgimgJson = prefs.getString('bgimg');
     if (bgimgJson == null) {
       return BgimgModel(
-          type: BgimgType.none, path: 'none', alignment: BgimgAlignment.center);
+        type: BgimgType.none,
+        path: 'none',
+        alignment: BgimgAlignment.center,
+      );
     }
     return BgimgModel.fromJson(jsonDecode(bgimgJson));
   }
@@ -1788,13 +1808,16 @@ class Prefs extends ChangeNotifier {
     if (modesJson == null) return {};
 
     Map<String, dynamic> decoded = jsonDecode(modesJson);
-    return decoded.map((key, value) =>
-        MapEntry(key, TranslationModeEnum.fromCode(value as String)));
+    return decoded.map(
+      (key, value) =>
+          MapEntry(key, TranslationModeEnum.fromCode(value as String)),
+    );
   }
 
   set bookTranslationModes(Map<String, TranslationModeEnum> modes) {
-    Map<String, String> encoded =
-        modes.map((key, value) => MapEntry(key, value.code));
+    Map<String, String> encoded = modes.map(
+      (key, value) => MapEntry(key, value.code),
+    );
     prefs.setString('bookTranslationModes', jsonEncode(encoded));
     notifyListeners();
   }
@@ -1882,7 +1905,8 @@ class Prefs extends ChangeNotifier {
 
   TextAlignmentEnum get textAlignment {
     return TextAlignmentEnum.fromCode(
-        prefs.getString('textAlignment') ?? 'auto');
+      prefs.getString('textAlignment') ?? 'auto',
+    );
   }
 
   set textAlignment(TextAlignmentEnum alignment) {
@@ -1901,7 +1925,8 @@ class Prefs extends ChangeNotifier {
 
   AiPanelPositionEnum get aiPanelPosition {
     return AiPanelPositionEnum.fromCode(
-        prefs.getString('aiPanelPosition') ?? 'right');
+      prefs.getString('aiPanelPosition') ?? 'right',
+    );
   }
 
   set aiPanelPosition(AiPanelPositionEnum position) {
@@ -1911,7 +1936,8 @@ class Prefs extends ChangeNotifier {
 
   CodeHighlightThemeEnum get codeHighlightTheme {
     return CodeHighlightThemeEnum.fromCode(
-        prefs.getString('codeHighlightTheme') ?? 'default');
+      prefs.getString('codeHighlightTheme') ?? 'default',
+    );
   }
 
   set codeHighlightTheme(CodeHighlightThemeEnum theme) {
@@ -1922,7 +1948,8 @@ class Prefs extends ChangeNotifier {
   // AI chat display mode configuration
   AiChatDisplayMode get aiChatDisplayMode {
     return AiChatDisplayMode.fromCode(
-        prefs.getString('aiChatDisplayMode') ?? 'adaptive');
+      prefs.getString('aiChatDisplayMode') ?? 'adaptive',
+    );
   }
 
   set aiChatDisplayMode(AiChatDisplayMode mode) {
@@ -1930,9 +1957,8 @@ class Prefs extends ChangeNotifier {
     notifyListeners();
   }
 
-  ReadingAiMode get defaultReadingAiMode => ReadingAiMode.fromJson(
-        prefs.getString('defaultReadingAiMode'),
-      );
+  ReadingAiMode get defaultReadingAiMode =>
+      ReadingAiMode.fromJson(prefs.getString('defaultReadingAiMode'));
 
   set defaultReadingAiMode(ReadingAiMode mode) {
     prefs.setString('defaultReadingAiMode', mode.name);
@@ -2150,10 +2176,7 @@ class Prefs extends ChangeNotifier {
       (prefs.getInt('readingAnalysisMaxFrameworks') ?? 2).clamp(1, 2).toInt();
 
   set readingAnalysisMaxFrameworks(int value) {
-    prefs.setInt(
-      'readingAnalysisMaxFrameworks',
-      value.clamp(1, 2).toInt(),
-    );
+    prefs.setInt('readingAnalysisMaxFrameworks', value.clamp(1, 2).toInt());
     notifyListeners();
   }
 
@@ -2268,11 +2291,7 @@ class Prefs extends ChangeNotifier {
           .toSet()
           .toList(growable: false);
       if (domains == null) return builtin;
-      return TrustedSourcePack(
-        id: builtin.id,
-        mode: mode,
-        domains: domains,
-      );
+      return TrustedSourcePack(id: builtin.id, mode: mode, domains: domains);
     } catch (_) {
       return builtin;
     }
@@ -2309,8 +2328,8 @@ class Prefs extends ChangeNotifier {
   }
 
   AiPanelWidthRatio get aiPanelWidthRatio => AiPanelWidthRatio.fromCode(
-        prefs.getString('aiPanelWidthRatio') ?? AiPanelWidthRatio.half.code,
-      );
+    prefs.getString('aiPanelWidthRatio') ?? AiPanelWidthRatio.half.code,
+  );
 
   set aiPanelWidthRatio(AiPanelWidthRatio ratio) {
     prefs.setString('aiPanelWidthRatio', ratio.code);

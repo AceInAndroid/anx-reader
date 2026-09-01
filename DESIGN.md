@@ -8,6 +8,61 @@
 [`docs/architecture/feature-map.md`](docs/architecture/feature-map.md)，新增能力前应先查该地图。
 本文继续作为产品行为、权限、剧透边界和低打扰交互的事实来源。
 
+## 阅读体验收敛版
+
+本版本的验收目标从“增加能力”改为“帮助用户顺畅地读完、理解并继续下一次
+阅读”。阅读主路径固定为：恢复现场 → 连续阅读 → 按需帮助 → 一步返回正文 →
+形成成果 → 明确下一步。新功能和重构不得以增加常驻入口、主动弹窗或后台工作
+作为默认代价。
+
+### AI＋本书入口
+
+- 阅读工具栏的 AI 领域一级入口只保留 `AI` 和 `本书`。AI 处理当前问题、选区
+  解释和阅读方法；本书承载状态、唯一下一行动、成果、Wiki、Story Atlas、同步
+  和二级设置。复制、书签和书籍详情等传统阅读控制保持不变。
+- 手机以底部 Sheet 打开本书面板，平板和桌面以右侧面板打开。页面关闭后继续
+  使用原 WebView、CFI、选区和控制栏状态；来源导航统一经过
+  `ReaderCommandGateway`。
+- 打开本书面板、成果、Wiki、人物档案或时间线都只是读取已有投影，禁止自动
+  扫描正文或调用模型。
+
+### 唯一下一阅读行动
+
+- `NextReadingAction` 是基于成果、Coverage、Story Atlas 和 Closure Policy 的
+  只读临时投影，不存库、不同步、不调用模型。源记录完成或变化后行动自然消失。
+- 每个 Closure 使用稳定字符串 `nextActionOrder` 声明优先级；页面不得按书类
+  硬编码。成果页与本书面板必须使用同一 Resolver 和同一可见阅读边界，一次只
+  强调一项可执行行动。普通“继续阅读”不触发胶囊或额外提醒。
+- 点击行动进入已有来源或流程，返回后重新读取投影；排序本身不创建 AI 任务。
+
+### 连续阅读和同步
+
+- `ReadingActivityCoordinator` 向同步层暴露 `activeReading / idle /
+  background`。阅读期间的自动 WebDAV/CloudBase 请求合并为一个 pending
+  intent；用户手动同步仍立即进入现有 single-flight gate。
+- 退出阅读或进入后台时，先保存阅读位置、Runtime 和阅读时长，再执行一次合并
+  后的自动同步。离线或不满足 Wi-Fi 策略时只保留一个 intent，不循环重试。
+- 自动同步冲突不打开方向选择弹窗，只在本书面板标记需要手动处理。手动同步才
+  可要求用户选择方向。其他设备最远位置是唯一保留的主动模态提示；同一远端
+  位置指纹每个阅读会话最多自动提示一次，默认继续当前位置。
+- AI 长任务保持单任务运行，并在 chunk/进度安全点让出事件循环；可见进度最多
+  每秒刷新一次。进入后台不自动恢复云端请求。
+
+### 显示、离线和诊断
+
+- E-INK 统一遵循 `MediaQuery.disableAnimations`：面板、行动、同步、Wiki 和
+  Story Atlas 不显示循环旋转、闪烁或必要性不高的过渡。OLED/LCD 只保留短暂、
+  非循环过渡。
+- 离线时正文、本地词典、已有成果、Wiki、Story Atlas、记忆和下一行动继续
+  可用；只有用户点击联网能力时才显示内联不可用状态。
+- `ReadingExperienceDiagnostics` 仅在内存累计，会话结束后一次写入本机偏好。
+  它保存会话时长、首尾电量、非用户提示、同步合并、模型/任务、行动和来源返回
+  的计数，不保存正文、选区、密钥或模型输出，也不参与偏好备份、WebDAV、
+  CloudBase 或遥测。仅开发者设置可查看和清空最近 30 天/100 次会话。
+
+普通翻页、停留、回看、切章和打开本书面板的共同硬门槛是：零模型调用、零同步
+网络请求、零新增模态打断。
+
 ## Reading Task Runtime — P1
 
 - AI and reading work uses one stable task lifecycle: `queued`, `running`,
@@ -634,9 +689,10 @@ pipeline 版本。它只在用户确认生成/更新后创建，不是新的事�
   correction increments the entry version, is recorded as a revision, wins
   synchronization conflicts over generated content, and cannot be silently
   overwritten by a later generation.
-- The reading toolbar exposes `AI | Wiki | Reading outcomes | Sync`. The book
-  details page exposes a read-only Wiki entrance; generation remains in an
-  active reader where chapter access and the confirmation boundary are known.
+- The reading toolbar exposes `AI | 本书`; Wiki, reading outcomes, Story Atlas
+  and synchronization are grouped under the book hub. The book details page
+  keeps a read-only Wiki entrance; generation remains in an active reader
+  where chapter access and the confirmation boundary are known.
 - E-ink uses the same static cards and native navigation with no required
   animation. New book types register Wiki mappings; Wiki pages do not branch
   on book genre.

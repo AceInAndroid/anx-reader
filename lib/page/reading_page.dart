@@ -13,6 +13,7 @@ import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_quick_prompt_chip.dart';
 import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/book_wiki.dart';
+import 'package:anx_reader/models/next_reading_action.dart';
 import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/providers/ai_workspace.dart';
 import 'package:anx_reader/providers/reading_coach.dart';
@@ -47,9 +48,13 @@ import 'package:anx_reader/service/ai/fiction_reading_service.dart';
 import 'package:anx_reader/service/ai/fiction_backfill_service.dart';
 import 'package:anx_reader/service/ai/reading_structure_parser.dart';
 import 'package:anx_reader/service/ai/fiction_hybrid_extraction_service.dart';
+import 'package:anx_reader/service/ai/fiction_story_atlas_service.dart';
+import 'package:anx_reader/service/ai/next_reading_action_resolver.dart';
+import 'package:anx_reader/service/ai/reading_outcomes_service.dart';
 import 'package:anx_reader/service/ai/reading_coverage_service.dart';
 import 'package:anx_reader/service/ai/reading_device_identity.dart';
-import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
+import 'package:anx_reader/service/reading_experience_diagnostics.dart';
+import 'package:anx_reader/service/sync/reading_activity_coordinator.dart';
 import 'package:anx_reader/dao/book_note.dart';
 import 'package:langchain_core/chat_models.dart';
 import 'package:anx_reader/utils/env_var.dart';
@@ -59,6 +64,7 @@ import 'package:anx_reader/widgets/ai/ai_chat_stream.dart';
 import 'package:anx_reader/widgets/ai/ai_reading_workspace.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:anx_reader/widgets/reading_page/notes_widget.dart';
+import 'package:anx_reader/widgets/reading_page/reading_book_hub.dart';
 import 'package:anx_reader/models/reading_time.dart';
 import 'package:anx_reader/widgets/reading_page/progress_widget.dart';
 import 'package:anx_reader/widgets/reading_page/tts_fab.dart';
@@ -129,7 +135,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   BookReadingProfile? _readingProfile;
   BookReadingCoverage? _readingCoverage;
   bool _resumeContextAvailable = false;
-  bool _remoteProgressPromptShown = false;
+  String? _lastRemoteProgressPromptFingerprint;
   bool _syncingRemoteProgress = false;
   bool _checkingRemoteProgress = false;
 
@@ -145,8 +151,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       );
 
   Future<void> _loadReadingProfile() async {
-    final matcher =
-        ReadingClosurePolicyMatcher(registry: widget.closureRegistry);
+    final matcher = ReadingClosurePolicyMatcher(
+      registry: widget.closureRegistry,
+    );
     final detected = matcher.detect(
       mode: Prefs().readingAiModeForBook(_book.id),
       title: _book.title,
@@ -165,19 +172,19 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     final coverage = await readingCoverageService.loadOrInitialize(
       bookId: _book.id,
       currentPosition: _book.readingPercentage,
-      supportsArtifacts:
-          closure.supports(ReadingClosureCapability.readingArtifacts),
+      supportsArtifacts: closure.supports(
+        ReadingClosureCapability.readingArtifacts,
+      ),
     );
-    final resumeArtifacts = closure.supports(
-      ReadingClosureCapability.resumeContext,
-    )
-        ? await readingAgentRepository.artifacts(
-            _book.id,
-            kind: ReadingArtifactKinds.resumeContext,
-            status: ReadingArtifactStatus.active,
-            visibleAtProgress: _book.readingPercentage,
-          )
-        : const <ReadingArtifact>[];
+    final resumeArtifacts =
+        closure.supports(ReadingClosureCapability.resumeContext)
+            ? await readingAgentRepository.artifacts(
+                _book.id,
+                kind: ReadingArtifactKinds.resumeContext,
+                status: ReadingArtifactStatus.active,
+                visibleAtProgress: _book.readingPercentage,
+              )
+            : const <ReadingArtifact>[];
     if (!mounted) return;
     aiWorkspaceController.setReadingProfile(profile);
     setState(() {
@@ -249,9 +256,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     WidgetsBinding.instance.addObserver(this);
     _readTimeWatch.start();
     _sessionStart = DateTime.now();
+    ReadingActivityCoordinator.instance.startReading(this);
     setAwakeTimer(Prefs().awakeTime);
 
     _book = widget.book;
+    unawaited(readingExperienceDiagnostics.beginSession(bookId: _book.id));
     readingAgentRuntime.addListener(_onReadingAgentChanged);
     aiWorkspaceController = AiWorkspaceController(
       bookId: _book.id,
@@ -265,10 +274,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       if (mounted) {
         _requestReaderFocus();
         if (Prefs().readingAgentBetaEnabled) {
-          unawaited(readingAgentRuntime.start(
-            bookId: _book.id,
-            bookTitle: _book.title,
-          ));
+          unawaited(
+            readingAgentRuntime.start(bookId: _book.id, bookTitle: _book.title),
+          );
           _registerReaderCommandGateway();
         }
         if (FeatureFlags.readingCoach && widget.initialShowCoach) {
@@ -294,20 +302,35 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   void dispose() {
     ReaderCommandGateway.instance.unregister(_book.id);
     readingAgentRuntime.removeListener(_onReadingAgentChanged);
-    unawaited(_saveFictionResumeMarker());
-    unawaited(readingAgentRuntime.finish());
-    Sync().syncData(SyncDirection.upload, ref, trigger: SyncTrigger.auto);
+    unawaited(readingExperienceDiagnostics.endSession());
     _readTimeWatch.stop();
     _awakeTimer?.cancel();
     WakelockPlus.disable();
     showStatusBar();
     WidgetsBinding.instance.removeObserver(this);
-    readingTimeDao.insertReadingTime(
-      ReadingTime(
-        bookId: _book.id,
-        readingTime: _readTimeWatch.elapsed.inSeconds,
+    final progressSaved = epubPlayerKey.currentState?.saveReadingProgress() ??
+        Future<void>.value();
+    final readingStateSaved = Future.wait<void>([
+      progressSaved,
+      _saveFictionResumeMarker(),
+      readingAgentRuntime.finish(),
+      readingTimeDao.insertReadingTime(
+        ReadingTime(
+          bookId: _book.id,
+          readingTime: _readTimeWatch.elapsed.inSeconds,
+        ),
+        startedAt: _sessionStart,
       ),
-      startedAt: _sessionStart,
+    ]);
+    unawaited(
+      readingStateSaved.whenComplete(() {
+        ReadingActivityCoordinator.instance.finishReading(this);
+        return Sync().syncData(
+          SyncDirection.both,
+          null,
+          trigger: SyncTrigger.auto,
+        );
+      }),
     );
     _sessionStart = null;
     audioHandler.stop();
@@ -339,27 +362,29 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       );
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    await readingAgentRepository.saveSystemArtifact(ReadingArtifact(
-      id: '${_book.id}-fiction-resume',
-      bookId: _book.id,
-      moduleId: ReadingClosureIds.fictionImmersion,
-      kind: ReadingArtifactKinds.resumeContext,
-      payload: {
-        'summary': state.chapterTitle?.isNotEmpty == true
-            ? '上次读到“${state.chapterTitle}”'
-            : '上次读到当前章节',
-      },
-      epistemicStatus: ReadingArtifactEpistemicStatus.textFact,
-      chapterHref: state.chapterHref,
-      chapterTitle: state.chapterTitle,
-      discoveredAtCfi: state.cfi,
-      sourceProgress: state.totalProgress,
-      visibleFromProgress: state.totalProgress,
-      ingestedAt: now,
-      createdBy: 'runtime',
-      createdAt: now,
-      updatedAt: now,
-    ));
+    await readingAgentRepository.saveSystemArtifact(
+      ReadingArtifact(
+        id: '${_book.id}-fiction-resume',
+        bookId: _book.id,
+        moduleId: ReadingClosureIds.fictionImmersion,
+        kind: ReadingArtifactKinds.resumeContext,
+        payload: {
+          'summary': state.chapterTitle?.isNotEmpty == true
+              ? '上次读到“${state.chapterTitle}”'
+              : '上次读到当前章节',
+        },
+        epistemicStatus: ReadingArtifactEpistemicStatus.textFact,
+        chapterHref: state.chapterHref,
+        chapterTitle: state.chapterTitle,
+        discoveredAtCfi: state.cfi,
+        sourceProgress: state.totalProgress,
+        visibleFromProgress: state.totalProgress,
+        ingestedAt: now,
+        createdBy: 'runtime',
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
   }
 
   void _requestReaderFocus() {
@@ -528,16 +553,29 @@ class ReadingPageState extends ConsumerState<ReadingPage>
             state == AppLifecycleState.hidden ||
             state == AppLifecycleState.detached) {
           final elapsedSeconds = _readTimeWatch.elapsed.inSeconds;
+          final startedAt = _sessionStart;
+          final saveOperations = <Future<void>>[
+            epubPlayerKey.currentState?.saveReadingProgress() ??
+                Future<void>.value(),
+          ];
           if (elapsedSeconds > 5) {
-            epubPlayerKey.currentState?.saveReadingProgress();
-            readingTimeDao.insertReadingTime(
-              ReadingTime(
-                bookId: _book.id,
-                readingTime: elapsedSeconds,
+            saveOperations.add(
+              readingTimeDao.insertReadingTime(
+                ReadingTime(bookId: _book.id, readingTime: elapsedSeconds),
+                startedAt: startedAt,
               ),
-              startedAt: _sessionStart,
             );
           }
+          unawaited(
+            Future.wait<void>(saveOperations).whenComplete(() {
+              ReadingActivityCoordinator.instance.permitBackgroundFlush();
+              return Sync().syncData(
+                SyncDirection.both,
+                null,
+                trigger: SyncTrigger.auto,
+              );
+            }),
+          );
           _readTimeWatch.reset();
           _sessionStart = null;
         }
@@ -625,9 +663,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
 
   Future<void> ttsHandler() async {
     setState(() {
-      _currentPage = TtsWidget(
-        epubPlayerKey: epubPlayerKey,
-      );
+      _currentPage = TtsWidget(epubPlayerKey: epubPlayerKey);
     });
   }
 
@@ -709,6 +745,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       _inspectionReminderShown = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        readingExperienceDiagnostics.recordUnsolicitedDialog();
         final messenger = ScaffoldMessenger.of(context);
         messenger
           ..clearMaterialBanners()
@@ -755,15 +792,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       });
     }
     if (Prefs().autoSummaryPreviousContent) {
-      final previousContent =
-          await epubPlayerKey.currentState!.previousContent(2000);
+      final previousContent = await epubPlayerKey.currentState!.previousContent(
+        2000,
+      );
       final prompt = generatePromptSummaryThePreviousContent(previousContent);
       SmartDialog.show(
         builder: (context) => AlertDialog(
           title: Text(L10n.of(context).readingPageSummaryPreviousContent),
-          content: AiStream(
-            prompt: prompt,
-          ),
+          content: AiStream(prompt: prompt),
         ),
         onDismiss: () {
           cancelActiveAiRequest();
@@ -772,26 +808,29 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
   }
 
-  Future<void> _offerRemoteProgressIfAvailable({
-    bool manual = false,
-  }) async {
+  Future<void> _offerRemoteProgressIfAvailable({bool manual = false}) async {
     if (!mounted || (!manual && widget.cfi != null)) return;
-    if (!manual && _remoteProgressPromptShown) return;
     if (_checkingRemoteProgress) return;
-    if (!Prefs().cloudBaseSyncEnabled) {
+    final syncEnabled = Prefs().cloudBaseSyncEnabled || Prefs().webdavStatus;
+    if (!syncEnabled) {
       if (manual) {
         AnxToast.show(L10n.of(context).readingRemoteProgressSyncDisabled);
       }
       return;
     }
 
-    // CloudBase sync is normally completed when the shelf initializes. A
-    // second silent pull here covers opening a book directly from a deep link
-    // without making the reader wait for synchronization.
     _checkingRemoteProgress = true;
     if (manual) setState(() => _syncingRemoteProgress = true);
     try {
-      await const CloudBaseReadingSyncCoordinator().synchronize();
+      // Automatic reader entry only inspects positions already synchronized by
+      // the shelf/background flow. Network work during active reading is
+      // deferred by ReadingActivityCoordinator. An explicit tap may run the
+      // shared WebDAV/CloudBase single-flight operation immediately.
+      await Sync().syncData(
+        SyncDirection.both,
+        ref,
+        trigger: manual ? SyncTrigger.manual : SyncTrigger.auto,
+      );
     } catch (error) {
       if (manual && mounted) {
         AnxToast.show(
@@ -820,7 +859,18 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       return;
     }
 
-    _remoteProgressPromptShown = true;
+    final fingerprint = [
+      remote.deviceId,
+      remote.cfi,
+      remote.progress.toStringAsFixed(6),
+      remote.updatedAt,
+    ].join(':');
+    if (!manual && _lastRemoteProgressPromptFingerprint == fingerprint) {
+      _checkingRemoteProgress = false;
+      return;
+    }
+    _lastRemoteProgressPromptFingerprint = fingerprint;
+    if (!manual) readingExperienceDiagnostics.recordUnsolicitedDialog();
     final jump = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
@@ -830,24 +880,19 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         return AlertDialog(
           title: Text(L10n.of(dialogContext).readingRemoteProgressTitle),
           content: Text(
-            L10n.of(dialogContext).readingRemoteProgressMessage(
-              remotePercent,
-              localPercent,
-            ),
+            L10n.of(
+              dialogContext,
+            ).readingRemoteProgressMessage(remotePercent, localPercent),
           ),
           actions: [
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text(
-                L10n.of(dialogContext).readingRemoteProgressStay,
-              ),
+              child: Text(L10n.of(dialogContext).readingRemoteProgressStay),
             ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
               child: Text(
-                L10n.of(dialogContext).readingRemoteProgressJump(
-                  remotePercent,
-                ),
+                L10n.of(dialogContext).readingRemoteProgressJump(remotePercent),
               ),
             ),
           ],
@@ -913,8 +958,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       bookDescription: _book.description,
       onRestoreReadingContext: _restoreAiReadingContext,
       onFetchChapter: (href) =>
-          epubPlayerKey.currentState
-              ?.chapterContentByHref(href, maxCharacters: 6000) ??
+          epubPlayerKey.currentState?.chapterContentByHref(
+            href,
+            maxCharacters: 6000,
+          ) ??
           Future.value(''),
       onFetchChapterSample: (href) =>
           epubPlayerKey.currentState?.chapterContentByHref(href) ??
@@ -1076,14 +1123,13 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         prompt: generatePromptMindmap().buildString(),
       ),
       // User custom prompts (enabled only)
-      ...Prefs()
-          .userPrompts
-          .where((p) => p.enabled)
-          .map((userPrompt) => AiQuickPromptChip(
-                icon: Icons.person_outline,
-                label: userPrompt.name,
-                prompt: userPrompt.content,
-              )),
+      ...Prefs().userPrompts.where((p) => p.enabled).map(
+            (userPrompt) => AiQuickPromptChip(
+              icon: Icons.person_outline,
+              label: userPrompt.name,
+              prompt: userPrompt.content,
+            ),
+          ),
     ];
   }
 
@@ -1166,7 +1212,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   }
 
   Future<void> _finishChapterCheckpoint(
-      ReadingChapterCheckpoint checkpoint) async {
+    ReadingChapterCheckpoint checkpoint,
+  ) async {
     final closure = _closurePolicy;
     final reflection = TextEditingController();
     MasteryLevel level = MasteryLevel.familiar;
@@ -1175,8 +1222,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title:
-              Text('${closure.checkpointAction} · ${checkpoint.chapterTitle}'),
+          title: Text(
+            '${closure.checkpointAction} · ${checkpoint.chapterTitle}',
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1218,21 +1266,27 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('稍后')),
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('稍后'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                child: Text('完成${closure.checkpointAction}')),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text('完成${closure.checkpointAction}'),
+            ),
           ],
         ),
       ),
     );
     if (confirmed != true) return;
     final now = DateTime.now().millisecondsSinceEpoch;
-    await readingAgentRepository.completeCheckpoint(checkpoint,
-        completed: true, reflection: reflection.text.trim());
+    await readingAgentRepository.completeCheckpoint(
+      checkpoint,
+      completed: true,
+      reflection: reflection.text.trim(),
+    );
     if (closure.checkpoint.showsMastery) {
-      await readingAgentRepository.saveMastery(MasteryState(
+      await readingAgentRepository.saveMastery(
+        MasteryState(
           id: '${checkpoint.bookId}-${checkpoint.chapterHref.hashCode}',
           bookId: checkpoint.bookId,
           chapterHref: checkpoint.chapterHref,
@@ -1244,11 +1298,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           nextReviewAt: createKnowledgeCard
               ? now + const Duration(days: 1).inMilliseconds
               : null,
-          updatedAt: now));
+          updatedAt: now,
+        ),
+      );
     }
     final reflectionText = reflection.text.trim();
     if (createKnowledgeCard && reflectionText.isNotEmpty) {
-      await readingAgentRepository.saveKnowledgeCard(KnowledgeCard(
+      await readingAgentRepository.saveKnowledgeCard(
+        KnowledgeCard(
           id: '${checkpoint.id}-recall',
           bookId: checkpoint.bookId,
           front: '请回忆：${checkpoint.chapterTitle}',
@@ -1256,20 +1313,24 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           chapterHref: checkpoint.chapterHref,
           dueAt: now + const Duration(days: 1).inMilliseconds,
           createdAt: now,
-          updatedAt: now));
+          updatedAt: now,
+        ),
+      );
     }
     if (reflectionText.isNotEmpty &&
         closure.checkpoint.saveReflectionAsMemory) {
-      await agentActionService.appendMemory(ReadingMemoryDocument(
-        id: '${checkpoint.id}-reflection',
-        bookId: checkpoint.bookId,
-        title:
-            '${checkpoint.chapterTitle} · ${closure.checkpoint.memoryTitleSuffix}',
-        markdown: reflectionText,
-        sourceRefs: [checkpoint.chapterHref],
-        createdAt: now,
-        updatedAt: now,
-      ));
+      await agentActionService.appendMemory(
+        ReadingMemoryDocument(
+          id: '${checkpoint.id}-reflection',
+          bookId: checkpoint.bookId,
+          title:
+              '${checkpoint.chapterTitle} · ${closure.checkpoint.memoryTitleSuffix}',
+          markdown: reflectionText,
+          sourceRefs: [checkpoint.chapterHref],
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
     }
     readingAgentRuntime.checkpointResolved();
   }
@@ -1277,11 +1338,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   Future<void> _reviewKnowledgeCard(KnowledgeCard card, bool remembered) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final interval = remembered ? (card.intervalDays * 2).clamp(2, 60) : 1;
-    await readingAgentRepository.saveKnowledgeCard(card.copyWith(
+    await readingAgentRepository.saveKnowledgeCard(
+      card.copyWith(
         intervalDays: interval,
         repetitions: card.repetitions + 1,
         dueAt: now + Duration(days: interval).inMilliseconds,
-        updatedAt: now));
+        updatedAt: now,
+      ),
+    );
     readingAgentRuntime.knowledgeCardReviewed();
   }
 
@@ -1294,25 +1358,32 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         title: const Text('新建 Markdown 记忆'),
         content: SizedBox(
           width: 520,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
                 controller: title,
                 maxLength: 80,
-                decoration: const InputDecoration(labelText: '标题')),
-            TextField(
+                decoration: const InputDecoration(labelText: '标题'),
+              ),
+              TextField(
                 controller: body,
                 minLines: 4,
                 maxLines: 10,
-                decoration: const InputDecoration(labelText: 'Markdown 内容')),
-          ]),
+                decoration: const InputDecoration(labelText: 'Markdown 内容'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('保存')),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('保存'),
+          ),
         ],
       ),
     );
@@ -1320,17 +1391,19 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    await agentActionService.appendMemory(ReadingMemoryDocument(
-      id: '${_book.id}-$now',
-      bookId: _book.id,
-      title: title.text.trim(),
-      markdown: body.text.trim(),
-      sourceRefs: [
-        if (readingAgentRuntime.state.chapterHref case final href?) href,
-      ],
-      createdAt: now,
-      updatedAt: now,
-    ));
+    await agentActionService.appendMemory(
+      ReadingMemoryDocument(
+        id: '${_book.id}-$now',
+        bookId: _book.id,
+        title: title.text.trim(),
+        markdown: body.text.trim(),
+        sourceRefs: [
+          if (readingAgentRuntime.state.chapterHref case final href?) href,
+        ],
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
   }
 
   Future<void> _showCharacterRecall() async {
@@ -1395,16 +1468,18 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(recall.name),
-        content: Text([
-          recall.summary,
-          if (recall.aliases.isNotEmpty) '称谓：${recall.aliases.join('、')}',
-          if (recall.relationships.isNotEmpty)
-            '关系：${recall.relationships.join('、')}',
-          recall.epistemicStatus ==
-                  ReadingArtifactEpistemicStatus.agentInference
-              ? '标记：AI 推测'
-              : '标记：文本事实',
-        ].where((item) => item.isNotEmpty).join('\n\n')),
+        content: Text(
+          [
+            recall.summary,
+            if (recall.aliases.isNotEmpty) '称谓：${recall.aliases.join('、')}',
+            if (recall.relationships.isNotEmpty)
+              '关系：${recall.relationships.join('、')}',
+            recall.epistemicStatus ==
+                    ReadingArtifactEpistemicStatus.agentInference
+                ? '标记：AI 推测'
+                : '标记：文本事实',
+          ].where((item) => item.isNotEmpty).join('\n\n'),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
@@ -1414,8 +1489,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
             FilledButton.tonal(
               onPressed: () {
                 Navigator.pop(dialogContext);
-                ReaderCommandGateway.instance
-                    .navigateToCfi(bookId: _book.id, cfi: cfi);
+                ReaderCommandGateway.instance.navigateToCfi(
+                  bookId: _book.id,
+                  cfi: cfi,
+                );
               },
               child: const Text('返回来源'),
             ),
@@ -1471,26 +1548,28 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    await agentActionService.saveArtifact(ReadingArtifact(
-      id: '${_book.id}-$now-$kind',
-      bookId: _book.id,
-      moduleId: ReadingClosureIds.fictionImmersion,
-      kind: kind,
-      payload: isCharacter
-          ? {'name': title, 'summary': detail.text.trim()}
-          : {'question': title, 'currentTheory': detail.text.trim()},
-      epistemicStatus: ReadingArtifactEpistemicStatus.userReflection,
-      sourceStartCfi: state.cfi,
-      chapterHref: state.chapterHref,
-      chapterTitle: state.chapterTitle,
-      discoveredAtCfi: state.cfi,
-      sourceProgress: state.totalProgress,
-      visibleFromProgress: state.totalProgress,
-      ingestedAt: now,
-      createdBy: 'user',
-      createdAt: now,
-      updatedAt: now,
-    ));
+    await agentActionService.saveArtifact(
+      ReadingArtifact(
+        id: '${_book.id}-$now-$kind',
+        bookId: _book.id,
+        moduleId: ReadingClosureIds.fictionImmersion,
+        kind: kind,
+        payload: isCharacter
+            ? {'name': title, 'summary': detail.text.trim()}
+            : {'question': title, 'currentTheory': detail.text.trim()},
+        epistemicStatus: ReadingArtifactEpistemicStatus.userReflection,
+        sourceStartCfi: state.cfi,
+        chapterHref: state.chapterHref,
+        chapterTitle: state.chapterTitle,
+        discoveredAtCfi: state.cfi,
+        sourceProgress: state.totalProgress,
+        visibleFromProgress: state.totalProgress,
+        ingestedAt: now,
+        createdBy: 'user',
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
     AnxToast.show(isCharacter ? '人物档案已保存，可撤销' : '悬念已加入账本，可撤销');
   }
 
@@ -1506,14 +1585,16 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         title: const Text('恢复阅读上下文'),
         content: resume.isEmpty
             ? const Text('还没有可恢复的故事档案。阅读时可按需保存人物和未解悬念。')
-            : Text([
-                if (resume.lastScene?.isNotEmpty == true)
-                  '上次场景：${resume.lastScene}',
-                if (resume.activeCharacters.isNotEmpty)
-                  '近期人物：${resume.activeCharacters.join('、')}',
-                if (resume.openMysteries.isNotEmpty)
-                  '未解悬念：${resume.openMysteries.map((item) => item.payload['question']).join('；')}',
-              ].join('\n\n')),
+            : Text(
+                [
+                  if (resume.lastScene?.isNotEmpty == true)
+                    '上次场景：${resume.lastScene}',
+                  if (resume.activeCharacters.isNotEmpty)
+                    '近期人物：${resume.activeCharacters.join('、')}',
+                  if (resume.openMysteries.isNotEmpty)
+                    '未解悬念：${resume.openMysteries.map((item) => item.payload['question']).join('；')}',
+                ].join('\n\n'),
+              ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext),
@@ -1533,13 +1614,15 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       for (final item in items) {
         if (item.href.isNotEmpty &&
             !ReadingStructureParser.isNonStoryTitle(item.label.trim())) {
-          result.add(FictionBackfillChapter(
-            href: item.href,
-            title: item.label,
-            startProgress: item.startPercentage,
-            tocDepth: depth,
-            hasChildren: item.subitems.isNotEmpty,
-          ));
+          result.add(
+            FictionBackfillChapter(
+              href: item.href,
+              title: item.label,
+              startProgress: item.startPercentage,
+              tocDepth: depth,
+              hasChildren: item.subitems.isNotEmpty,
+            ),
+          );
         }
         addItems(item.subitems, depth + 1);
       }
@@ -1606,10 +1689,12 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           isNavigationDocument: unique[index].isNavigationDocument,
         ),
     ]
-        .where((chapter) =>
-            !chapter.isNavigationDocument &&
-            chapter.startProgress >= fromProgress - .000001 &&
-            chapter.endProgress! <= boundary + .000001)
+        .where(
+          (chapter) =>
+              !chapter.isNavigationDocument &&
+              chapter.startProgress >= fromProgress - .000001 &&
+              chapter.endProgress! <= boundary + .000001,
+        )
         .toList(growable: false);
   }
 
@@ -1627,8 +1712,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('建立小说前情档案',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+              const Text(
+                '建立小说前情档案',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 8),
               Text('你从本书 $percent% 开始使用阅读 Agent。默认从这里开始，不会读取或推测前文。'),
               const SizedBox(height: 12),
@@ -1638,8 +1725,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                 title: const Text('从这里开始'),
                 subtitle: const Text('不处理前文，此后逐步记录人物、关系和悬念'),
                 onTap: () async {
-                  final updated =
-                      await readingCoverageService.startFromHere(coverage);
+                  final updated = await readingCoverageService.startFromHere(
+                    coverage,
+                  );
                   Prefs().setLocalReadingBackfillStart(
                     _book.id,
                     coverage.initializedAtProgress,
@@ -1708,11 +1796,13 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('确认并整理')),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('确认并整理'),
+          ),
         ],
       ),
     );
@@ -1751,14 +1841,17 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       final now = DateTime.now().millisecondsSinceEpoch;
       final sessionId = readingAgentRuntime.state.sessionId;
       if (sessionId == null) throw StateError('阅读会话尚未开始');
-      final existingArtifacts =
-          await readingAgentRepository.artifacts(_book.id);
+      final existingArtifacts = await readingAgentRepository.artifacts(
+        _book.id,
+      );
       await readingTaskScheduler.restore();
       final restoredTask = readingTaskScheduler.tasks
-          .where((task) =>
-              task.type == 'fiction.backfill' &&
-              task.bookId == _book.id &&
-              task.status == ReadingTaskStatus.paused)
+          .where(
+            (task) =>
+                task.type == 'fiction.backfill' &&
+                task.bookId == _book.id &&
+                task.status == ReadingTaskStatus.paused,
+          )
           .firstOrNull;
       final effectiveFromProgress = restoredTask == null
           ? fromProgress
@@ -1887,11 +1980,13 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('导入')),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('导入'),
+          ),
         ],
       ),
     );
@@ -1908,28 +2003,30 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       final snapshot = importedText.length > 2000
           ? importedText.substring(0, 2000)
           : importedText;
-      await agentActionService.saveArtifact(ReadingArtifact(
-        id: '${_book.id}-imported-context-$now',
-        bookId: _book.id,
-        moduleId: ReadingClosureIds.fictionImmersion,
-        kind: ReadingArtifactKinds.resumeContext,
-        payload: {
-          'summary': snapshot,
-          'noteCount': notes.length,
-          'memoryCount': memories.length,
-        },
-        epistemicStatus: ReadingArtifactEpistemicStatus.userReflection,
-        sourceTextSnapshot: snapshot,
-        chapterHref: readingAgentRuntime.state.chapterHref,
-        chapterTitle: readingAgentRuntime.state.chapterTitle,
-        sourceProgress: coverage.initializedAtProgress,
-        visibleFromProgress: coverage.initializedAtProgress,
-        ingestedAt: now,
-        ingestionMode: ReadingArtifactIngestionMode.imported,
-        createdBy: 'user',
-        createdAt: now,
-        updatedAt: now,
-      ));
+      await agentActionService.saveArtifact(
+        ReadingArtifact(
+          id: '${_book.id}-imported-context-$now',
+          bookId: _book.id,
+          moduleId: ReadingClosureIds.fictionImmersion,
+          kind: ReadingArtifactKinds.resumeContext,
+          payload: {
+            'summary': snapshot,
+            'noteCount': notes.length,
+            'memoryCount': memories.length,
+          },
+          epistemicStatus: ReadingArtifactEpistemicStatus.userReflection,
+          sourceTextSnapshot: snapshot,
+          chapterHref: readingAgentRuntime.state.chapterHref,
+          chapterTitle: readingAgentRuntime.state.chapterTitle,
+          sourceProgress: coverage.initializedAtProgress,
+          visibleFromProgress: coverage.initializedAtProgress,
+          ingestedAt: now,
+          ingestionMode: ReadingArtifactIngestionMode.imported,
+          createdBy: 'user',
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
     }
     final progressValues = existing.map((item) => item.sourceProgress).toList();
     final start = progressValues.isEmpty
@@ -2012,12 +2109,15 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                         tooltip: '切换本书阅读闭环',
                         onSelected: (value) async {
                           await _setClosureModule(
-                              value == 'auto' ? null : value);
+                            value == 'auto' ? null : value,
+                          );
                           setSheetState(() {});
                         },
                         itemBuilder: (context) => [
                           const PopupMenuItem(
-                              value: 'auto', child: Text('自动匹配')),
+                            value: 'auto',
+                            child: Text('自动匹配'),
+                          ),
                           for (final closure
                               in widget.closureRegistry.definitions)
                             PopupMenuItem(
@@ -2039,7 +2139,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                       ),
                     ),
                     if (_closurePolicy.supports(
-                        ReadingClosureCapability.readingArtifacts)) ...[
+                      ReadingClosureCapability.readingArtifacts,
+                    )) ...[
                       const SizedBox(height: 8),
                       Card.filled(
                         margin: EdgeInsets.zero,
@@ -2058,8 +2159,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                 runSpacing: 8,
                                 children: [
                                   ActionChip(
-                                    avatar: const Icon(Icons.person_search,
-                                        size: 18),
+                                    avatar: const Icon(
+                                      Icons.person_search,
+                                      size: 18,
+                                    ),
                                     label: const Text('这个人物是谁'),
                                     onPressed: _showCharacterRecall,
                                   ),
@@ -2069,18 +2172,24 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                     onPressed: _showFictionResumeContext,
                                   ),
                                   ActionChip(
-                                    avatar: const Icon(Icons.person_add_alt,
-                                        size: 18),
+                                    avatar: const Icon(
+                                      Icons.person_add_alt,
+                                      size: 18,
+                                    ),
                                     label: const Text('保存人物'),
                                     onPressed: () => _createFictionArtifact(
-                                        ReadingArtifactKinds.character),
+                                      ReadingArtifactKinds.character,
+                                    ),
                                   ),
                                   ActionChip(
-                                    avatar: const Icon(Icons.help_outline,
-                                        size: 18),
+                                    avatar: const Icon(
+                                      Icons.help_outline,
+                                      size: 18,
+                                    ),
                                     label: const Text('记录悬念'),
                                     onPressed: () => _createFictionArtifact(
-                                        ReadingArtifactKinds.mystery),
+                                      ReadingArtifactKinds.mystery,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -2210,11 +2319,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     ],
                     if (state.pendingCheckpointCount > 0) ...[
                       const Divider(height: 32),
-                      Text(_closurePolicy.checkpointTitle,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(
+                        _closurePolicy.checkpointTitle,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       FutureBuilder<List<ReadingChapterCheckpoint>>(
-                        future:
-                            readingAgentRepository.pendingCheckpoints(_book.id),
+                        future: readingAgentRepository.pendingCheckpoints(
+                          _book.id,
+                        ),
                         builder: (context, snapshot) => Column(
                           children: [
                             for (final checkpoint
@@ -2222,11 +2334,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.fact_check_outlined),
-                                title: Text(checkpoint.chapterTitle.isEmpty
-                                    ? checkpoint.chapterHref
-                                    : checkpoint.chapterTitle),
+                                title: Text(
+                                  checkpoint.chapterTitle.isEmpty
+                                      ? checkpoint.chapterHref
+                                      : checkpoint.chapterTitle,
+                                ),
                                 subtitle: Text(
-                                    '${(checkpoint.progress * 100).round()}% · 点击后再开始${_closurePolicy.checkpointAction}'),
+                                  '${(checkpoint.progress * 100).round()}% · 点击后再开始${_closurePolicy.checkpointAction}',
+                                ),
                                 trailing: FilledButton.tonal(
                                   onPressed: () async {
                                     await _finishChapterCheckpoint(checkpoint);
@@ -2241,88 +2356,112 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     ],
                     if (state.unresolvedDifficultyCount > 0) ...[
                       const Divider(height: 32),
-                      Text(_closurePolicy.difficultyTitle,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(
+                        _closurePolicy.difficultyTitle,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       FutureBuilder<ReadingCoachState>(
                         future: ref.read(readingCoachProvider(_book.id).future),
                         builder: (context, snapshot) {
                           final items = (snapshot.data?.difficulties ??
                                   const <ReadingDifficulty>[])
-                              .where((item) =>
-                                  item.status ==
-                                  ReadingDifficultyStatus.unresolved)
+                              .where(
+                                (item) =>
+                                    item.status ==
+                                    ReadingDifficultyStatus.unresolved,
+                              )
                               .take(5);
-                          return Column(children: [
-                            for (final item in items)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: const Icon(Icons.help_outline),
-                                title: Text(item.text,
+                          return Column(
+                            children: [
+                              for (final item in items)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: const Icon(Icons.help_outline),
+                                  title: Text(
+                                    item.text,
                                     maxLines: 2,
-                                    overflow: TextOverflow.ellipsis),
-                                subtitle: Text(item.chapterTitle ?? '未知章节'),
-                                onTap: () => ReaderCommandGateway.instance
-                                    .navigateToCfi(
-                                        bookId: _book.id, cfi: item.cfi),
-                                trailing: IconButton(
-                                  tooltip: '标记已解决',
-                                  icon: const Icon(Icons.check_circle_outline),
-                                  onPressed: () async {
-                                    await ref
-                                        .read(readingCoachProvider(_book.id)
-                                            .notifier)
-                                        .updateDifficulty(item.copyWith(
-                                            status: ReadingDifficultyStatus
-                                                .resolved,
-                                            updatedAt: DateTime.now()
-                                                .millisecondsSinceEpoch));
-                                    readingAgentRuntime.difficultyResolved();
-                                    setSheetState(() {});
-                                  },
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: Text(item.chapterTitle ?? '未知章节'),
+                                  onTap: () => ReaderCommandGateway.instance
+                                      .navigateToCfi(
+                                    bookId: _book.id,
+                                    cfi: item.cfi,
+                                  ),
+                                  trailing: IconButton(
+                                    tooltip: '标记已解决',
+                                    icon: const Icon(
+                                      Icons.check_circle_outline,
+                                    ),
+                                    onPressed: () async {
+                                      await ref
+                                          .read(
+                                            readingCoachProvider(
+                                              _book.id,
+                                            ).notifier,
+                                          )
+                                          .updateDifficulty(
+                                            item.copyWith(
+                                              status: ReadingDifficultyStatus
+                                                  .resolved,
+                                              updatedAt: DateTime.now()
+                                                  .millisecondsSinceEpoch,
+                                            ),
+                                          );
+                                      readingAgentRuntime.difficultyResolved();
+                                      setSheetState(() {});
+                                    },
+                                  ),
                                 ),
-                              ),
-                          ]);
+                            ],
+                          );
                         },
                       ),
                     ],
                     if (_closurePolicy.showKnowledgeCards &&
                         state.dueKnowledgeCardCount > 0) ...[
                       const Divider(height: 32),
-                      const Text('到期知识卡片',
-                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      const Text(
+                        '到期知识卡片',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       FutureBuilder<List<KnowledgeCard>>(
-                        future:
-                            readingAgentRepository.dueKnowledgeCards(_book.id),
+                        future: readingAgentRepository.dueKnowledgeCards(
+                          _book.id,
+                        ),
                         builder: (context, snapshot) => Column(
                           children: [
-                            for (final card
-                                in (snapshot.data ?? const []).take(3))
+                            for (final card in (snapshot.data ?? const []).take(
+                              3,
+                            ))
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 leading: const Icon(Icons.style_outlined),
                                 title: Text(card.front),
-                                subtitle: Text(card.back,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis),
+                                subtitle: Text(
+                                  card.back,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                                 trailing: Wrap(
                                   spacing: 4,
                                   children: [
                                     IconButton(
-                                        tooltip: '再学习',
-                                        icon: const Icon(Icons.refresh),
-                                        onPressed: () async {
-                                          await _reviewKnowledgeCard(
-                                              card, false);
-                                          setSheetState(() {});
-                                        }),
+                                      tooltip: '再学习',
+                                      icon: const Icon(Icons.refresh),
+                                      onPressed: () async {
+                                        await _reviewKnowledgeCard(card, false);
+                                        setSheetState(() {});
+                                      },
+                                    ),
                                     IconButton(
-                                        tooltip: '记住了',
-                                        icon: const Icon(Icons.check),
-                                        onPressed: () async {
-                                          await _reviewKnowledgeCard(
-                                              card, true);
-                                          setSheetState(() {});
-                                        }),
+                                      tooltip: '记住了',
+                                      icon: const Icon(Icons.check),
+                                      onPressed: () async {
+                                        await _reviewKnowledgeCard(card, true);
+                                        setSheetState(() {});
+                                      },
+                                    ),
                                   ],
                                 ),
                               ),
@@ -2331,27 +2470,31 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                       ),
                     ],
                     const Divider(height: 32),
-                    Row(children: [
-                      Expanded(
-                        child: Text(_closurePolicy.memoryTitle,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w600)),
-                      ),
-                      TextButton.icon(
-                        onPressed: () async {
-                          await _createMarkdownMemory();
-                          setSheetState(() {});
-                        },
-                        icon: const Icon(Icons.add),
-                        label: const Text('新建'),
-                      ),
-                    ]),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _closurePolicy.memoryTitle,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () async {
+                            await _createMarkdownMemory();
+                            setSheetState(() {});
+                          },
+                          icon: const Icon(Icons.add),
+                          label: const Text('新建'),
+                        ),
+                      ],
+                    ),
                     if (state.markdownMemorySummary.isNotEmpty) ...[
                       for (final title in state.markdownMemorySummary)
                         ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.description_outlined),
-                            title: Text(title)),
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.description_outlined),
+                          title: Text(title),
+                        ),
                     ],
                     if (state.pendingProfileCount > 0) ...[
                       const Divider(height: 32),
@@ -2363,9 +2506,11 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                         future: readingAgentRepository.profileCandidates(),
                         builder: (context, snapshot) {
                           final candidates = (snapshot.data ?? const [])
-                              .where((item) =>
-                                  item.evidenceCount >= 3 ||
-                                  item.confidence >= 1)
+                              .where(
+                                (item) =>
+                                    item.evidenceCount >= 3 ||
+                                    item.confidence >= 1,
+                              )
                               .toList(growable: false);
                           return Column(
                             children: [
@@ -2448,11 +2593,13 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                         ? TextButton(
                                             onPressed: () async {
                                               final result =
-                                                  await agentActionService
-                                                      .undo(action);
+                                                  await agentActionService.undo(
+                                                action,
+                                              );
                                               if (!context.mounted) return;
                                               AnxToast.show(
-                                                  _undoResultLabel(result));
+                                                _undoResultLabel(result),
+                                              );
                                               setSheetState(() {});
                                             },
                                             child: const Text('撤销'),
@@ -2480,6 +2627,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       MaterialPageRoute(
         builder: (_) => ReadingOutcomesPage(
           book: _book,
+          coverage: _readingCoverage,
+          visibleProgress: readingAgentRuntime.state.totalProgress > 0
+              ? readingAgentRuntime.state.totalProgress
+              : _book.readingPercentage,
           onOrganizeStoryArchive: () async {
             Navigator.of(context).pop();
             final coverage = _readingCoverage;
@@ -2505,14 +2656,183 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     );
   }
 
+  Future<void> _showBookHub() async {
+    final outcomes = readingOutcomesService.load(_book.id);
+    final wideLayout = MediaQuery.sizeOf(context).width >= 700;
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    String? recordedActionFingerprint;
+
+    Widget content(BuildContext overlayContext) =>
+        FutureBuilder<ReadingOutcomesSnapshot>(
+          future: outcomes,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return Center(
+                child: disableAnimations
+                    ? const Text('正在读取本书状态…')
+                    : const CircularProgressIndicator(),
+              );
+            }
+            if (snapshot.hasError) {
+              return const Center(child: Text('暂时无法读取本书状态'));
+            }
+            final state = snapshot.requireData;
+            final visibleProgress = readingAgentRuntime.state.totalProgress > 0
+                ? readingAgentRuntime.state.totalProgress
+                : _book.readingPercentage;
+            final atlas = fictionStoryAtlasService.fromArtifacts(
+              state.artifacts,
+              visibleAtProgress: visibleProgress,
+            );
+            final nextAction = const NextReadingActionResolver().resolve(
+              bookId: _book.id,
+              outcomes: state,
+              closure: _closurePolicy,
+              coverage: _readingCoverage,
+              atlas: atlas,
+              resumeContextAvailable: state.artifacts.any(
+                (artifact) =>
+                    artifact.kind == ReadingArtifactKinds.resumeContext &&
+                    artifact.isVisibleAtProgress(visibleProgress),
+              ),
+            );
+            if (recordedActionFingerprint != nextAction.completionFingerprint) {
+              recordedActionFingerprint = nextAction.completionFingerprint;
+              readingExperienceDiagnostics.recordNextActionShown();
+            }
+            return ReadingBookHubContent(
+              book: _book,
+              state: state,
+              closure: _closurePolicy,
+              nextAction: nextAction,
+              atlas: atlas,
+              syncing: _syncingRemoteProgress,
+              syncEnabled: Prefs().cloudBaseSyncEnabled || Prefs().webdavStatus,
+              syncNeedsManualResolution: Sync().automaticConflictPending,
+              onNextAction: () async {
+                readingExperienceDiagnostics.recordNextActionExecuted();
+                Navigator.pop(overlayContext);
+                await _handleBookHubNextAction(nextAction);
+              },
+              onOpenOutcomes: () async {
+                Navigator.pop(overlayContext);
+                await _showReadingOutcomes();
+              },
+              onOpenWiki: () async {
+                Navigator.pop(overlayContext);
+                await _showBookWiki();
+              },
+              onOpenStoryArchive: () async {
+                Navigator.pop(overlayContext);
+                await _showReadingOutcomes();
+              },
+              onSync: () async {
+                Navigator.pop(overlayContext);
+                await _offerRemoteProgressIfAvailable(manual: true);
+              },
+              onOpenReadingSettings: () async {
+                Navigator.pop(overlayContext);
+                await _showReadingAgentPanel();
+              },
+            );
+          },
+        );
+
+    if (!wideLayout) {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (sheetContext) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * .82,
+            child: content(sheetContext),
+          ),
+        ),
+      );
+      return;
+    }
+
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭本书面板',
+      transitionDuration:
+          disableAnimations ? Duration.zero : const Duration(milliseconds: 180),
+      pageBuilder: (dialogContext, _, __) => Align(
+        alignment: Alignment.centerRight,
+        child: SafeArea(
+          child: Material(
+            elevation: 8,
+            color: Theme.of(dialogContext).colorScheme.surface,
+            child: SizedBox(
+              width: 440,
+              height: double.infinity,
+              child: content(dialogContext),
+            ),
+          ),
+        ),
+      ),
+      transitionBuilder: (context, animation, _, child) {
+        if (disableAnimations) return child;
+        return SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(1, 0),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
+          child: child,
+        );
+      },
+    );
+  }
+
+  Future<void> _handleBookHubNextAction(NextReadingAction action) async {
+    switch (action.target.kind) {
+      case NextReadingActionTargetKinds.checkpoint:
+      case NextReadingActionTargetKinds.difficulty:
+        final location = action.target.location;
+        if (location == null || location.isEmpty) return;
+        if (location.startsWith('epubcfi(')) {
+          ReaderCommandGateway.instance.navigateToCfi(
+            bookId: _book.id,
+            cfi: location,
+          );
+        } else {
+          ReaderCommandGateway.instance.navigateToHref(
+            bookId: _book.id,
+            href: location,
+          );
+        }
+        return;
+      case NextReadingActionTargetKinds.resumeContext:
+        await _showFictionResumeContext();
+        return;
+      case NextReadingActionTargetKinds.organizeArchive:
+        final coverage = _readingCoverage;
+        if (coverage != null) await _confirmAndBackfill(coverage);
+        return;
+      case NextReadingActionTargetKinds.reviewCard:
+      case NextReadingActionTargetKinds.goal:
+        await _showReadingAgentPanel();
+        return;
+      case NextReadingActionTargetKinds.storyMysteries:
+        await _showReadingOutcomes();
+        return;
+      case NextReadingActionTargetKinds.reader:
+        return;
+    }
+  }
+
   Future<void> _generateBookWiki(bool fullBook) async {
     final localProgress = readingAgentRuntime.state.totalProgress > 0
         ? readingAgentRuntime.state.totalProgress
         : _book.readingPercentage;
     final boundary = fullBook ? 1.0 : localProgress.clamp(0, 1).toDouble();
     final chapters = (await _eligibleBackfillChapters(boundary))
-        .where((chapter) =>
-            BookWikiGenerationService.isEligibleChapterTitle(chapter.title))
+        .where(
+          (chapter) =>
+              BookWikiGenerationService.isEligibleChapterTitle(chapter.title),
+        )
         .toList(growable: false);
     if (!mounted) return;
     final estimatedTokens = chapters.length * 3000;
@@ -2520,16 +2840,20 @@ class ReadingPageState extends ConsumerState<ReadingPage>
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(fullBook ? '确认生成全书 Wiki' : '确认生成已读 Wiki'),
-        content: Text(fullBook
-            ? '将读取全书 ${chapters.length} 个章节，可能包含未读内容并产生剧透。预计输入约 $estimatedTokens Token，可随时取消后重新开始。'
-            : '将读取 0%～${(boundary * 100).round()}% 内 ${chapters.length} 个已完整读完的章节，不读取后文。预计输入约 $estimatedTokens Token。'),
+        content: Text(
+          fullBook
+              ? '将读取全书 ${chapters.length} 个章节，可能包含未读内容并产生剧透。预计输入约 $estimatedTokens Token，可随时取消后重新开始。'
+              : '将读取 0%～${(boundary * 100).round()}% 内 ${chapters.length} 个已完整读完的章节，不读取后文。预计输入约 $estimatedTokens Token。',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('确认并生成')),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('确认并生成'),
+          ),
         ],
       ),
     );
@@ -2540,53 +2864,59 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     try {
       final inputs = <BookWikiChapter>[];
       for (final chapter in chapters) {
-        final content = await (epubPlayerKey.currentState
-                ?.chapterContentByHref(chapter.href, maxCharacters: 24000) ??
+        final content = await (epubPlayerKey.currentState?.chapterContentByHref(
+              chapter.href,
+              maxCharacters: 24000,
+            ) ??
             Future.value(''));
         if (content.trim().isEmpty) continue;
-        inputs.add(BookWikiChapter(
+        inputs.add(
+          BookWikiChapter(
             href: chapter.href,
             title: chapter.title,
             progress: chapter.startProgress,
-            content: content));
+            content: content,
+          ),
+        );
       }
       final now = DateTime.now().millisecondsSinceEpoch;
       await readingTaskScheduler.submit<int>(
         ReadingTask(
-            id: 'wiki-${_book.id}-$now',
-            type: 'wiki.book_generate',
-            bookId: _book.id,
-            priority: ReadingTaskPriority.userInitiated,
-            persistence: ReadingTaskPersistence.durable,
-            status: ReadingTaskStatus.queued,
-            payload: {
-              'scope': fullBook ? 'full_book' : 'read_boundary',
-              'safeBoundary': boundary
-            },
-            createdAt: now,
-            updatedAt: now),
+          id: 'wiki-${_book.id}-$now',
+          type: 'wiki.book_generate',
+          bookId: _book.id,
+          priority: ReadingTaskPriority.userInitiated,
+          persistence: ReadingTaskPersistence.durable,
+          status: ReadingTaskStatus.queued,
+          payload: {
+            'scope': fullBook ? 'full_book' : 'read_boundary',
+            'safeBoundary': boundary,
+          },
+          createdAt: now,
+          updatedAt: now,
+        ),
         (execution) => bookWikiGenerationService.generate(
-            bookId: _book.id,
-            chapters: inputs,
-            safeBoundary: boundary,
-            sessionId: sessionId,
-            scope: fullBook
-                ? BookWikiGenerationScope.fullBook
-                : BookWikiGenerationScope.readBoundary,
-            generate: (prompt) => aiGenerateText(
-                [ChatMessage.humanText(prompt)],
-                ref: ref,
-                readingMode: ReadingAiMode.general,
-                task: AiContextTask.fictionBackfill),
-            onProgress: (done, total, href) async {
-              execution.safePoint();
-              await execution.update(
-                  progress: total == 0 ? 1 : done / total,
-                  checkpoint: {
-                    'completedChapters': done,
-                    'lastChapterHref': href
-                  });
-            }),
+          bookId: _book.id,
+          chapters: inputs,
+          safeBoundary: boundary,
+          sessionId: sessionId,
+          scope: fullBook
+              ? BookWikiGenerationScope.fullBook
+              : BookWikiGenerationScope.readBoundary,
+          generate: (prompt) => aiGenerateText(
+            [ChatMessage.humanText(prompt)],
+            ref: ref,
+            readingMode: ReadingAiMode.general,
+            task: AiContextTask.fictionBackfill,
+          ),
+          onProgress: (done, total, href) async {
+            execution.safePoint();
+            await execution.update(
+              progress: total == 0 ? 1 : done / total,
+              checkpoint: {'completedChapters': done, 'lastChapterHref': href},
+            );
+          },
+        ),
       );
     } finally {
       SmartDialog.dismiss();
@@ -2678,15 +3008,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           children: [
             Positioned.fill(
               child: GestureDetector(
-                  onTap: () {
-                    showOrHideAppBarAndBottomBar(false);
-                  },
-                  behavior: HitTestBehavior.opaque,
-                  onVerticalDragUpdate: (details) {},
-                  onVerticalDragEnd: (details) {},
-                  child: Container(
-                    color: Colors.black.withAlpha(30),
-                  )),
+                onTap: () {
+                  showOrHideAppBarAndBottomBar(false);
+                },
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragUpdate: (details) {},
+                onVerticalDragEnd: (details) {},
+                child: Container(color: Colors.black.withAlpha(30)),
+              ),
             ),
             Column(
               children: [
@@ -2702,33 +3031,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   actions: [
                     if (EnvVar.enableAIFeature) aiButton,
                     IconButton(
-                      tooltip: '书籍 Wiki',
-                      onPressed: _showBookWiki,
-                      icon: const Icon(Icons.menu_book_outlined),
+                      tooltip: '本书',
+                      onPressed: _showBookHub,
+                      icon: const Icon(Icons.library_books_outlined),
                     ),
-                    IconButton(
-                      tooltip: '本书阅读成果',
-                      onPressed: _showReadingOutcomes,
-                      icon: const Icon(Icons.auto_graph_outlined),
-                    ),
-                    if (Prefs().cloudBaseSyncEnabled)
-                      IconButton(
-                        tooltip:
-                            L10n.of(context).readingRemoteProgressSyncTooltip,
-                        onPressed: _syncingRemoteProgress
-                            ? null
-                            : () => _offerRemoteProgressIfAvailable(
-                                  manual: true,
-                                ),
-                        icon: _syncingRemoteProgress
-                            ? const SizedBox.square(
-                                dimension: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.cloud_sync_outlined),
-                      ),
                     IconButton(
                       icon: const Icon(Icons.copy),
                       tooltip: L10n.of(context).readingPageCopyChapterContent,
@@ -2739,32 +3045,36 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                           var len = content?.length ?? 0;
                           if (len > 0) {
                             await Clipboard.setData(
-                                ClipboardData(text: content!));
+                              ClipboardData(text: content!),
+                            );
                           }
                           if (!context.mounted) return;
-                          AnxToast.show(L10n.of(context)
-                              .readingPageCopiedCharacters(len));
+                          AnxToast.show(
+                            L10n.of(context).readingPageCopiedCharacters(len),
+                          );
                         } catch (e) {
                           if (!context.mounted) return;
                           AnxToast.show(
-                              L10n.of(context).readingPageErrorCopyingContent);
+                            L10n.of(context).readingPageErrorCopyingContent,
+                          );
                         }
                       },
                     ),
                     IconButton(
-                        tooltip: L10n.of(context).readingPageBookmark,
-                        onPressed: () {
-                          if (bookmarkExists) {
-                            epubPlayerKey.currentState!.removeAnnotation(
-                              epubPlayerKey.currentState!.bookmarkCfi,
-                            );
-                          } else {
-                            epubPlayerKey.currentState!.addBookmarkHere();
-                          }
-                        },
-                        icon: bookmarkExists
-                            ? const Icon(Icons.bookmark)
-                            : const Icon(Icons.bookmark_border)),
+                      tooltip: L10n.of(context).readingPageBookmark,
+                      onPressed: () {
+                        if (bookmarkExists) {
+                          epubPlayerKey.currentState!.removeAnnotation(
+                            epubPlayerKey.currentState!.bookmarkCfi,
+                          );
+                        } else {
+                          epubPlayerKey.currentState!.addBookmarkHere();
+                        }
+                      },
+                      icon: bookmarkExists
+                          ? const Icon(Icons.bookmark)
+                          : const Icon(Icons.bookmark_border),
+                    ),
                     IconButton(
                       tooltip: L10n.of(context).readingPageBookDetails,
                       icon: const Icon(EvaIcons.more_vertical),
@@ -2777,9 +3087,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                               onOrganizeStoryArchive: () async {
                                 final readerRoute = ModalRoute.of(context);
                                 if (readerRoute != null) {
-                                  Navigator.of(context).popUntil(
-                                    (route) => route == readerRoute,
-                                  );
+                                  Navigator.of(
+                                    context,
+                                  ).popUntil((route) => route == readerRoute);
                                 }
                                 final coverage = _readingCoverage;
                                 if (coverage != null) {
@@ -2789,9 +3099,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                               onOpenReadingLocation: (target) async {
                                 final readerRoute = ModalRoute.of(context);
                                 if (readerRoute != null) {
-                                  Navigator.of(context).popUntil(
-                                    (route) => route == readerRoute,
-                                  );
+                                  Navigator.of(
+                                    context,
+                                  ).popUntil((route) => route == readerRoute);
                                 }
                                 if (target.startsWith('epubcfi(')) {
                                   ReaderCommandGateway.instance.navigateToCfi(
@@ -2842,10 +3152,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (hasContent)
-                                  Expanded(
-                                    child: _currentPage,
-                                  ),
+                                if (hasContent) Expanded(child: _currentPage),
                                 Row(
                                   mainAxisAlignment:
                                       MainAxisAlignment.spaceAround,
@@ -3000,10 +3307,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                   if (_isResizingAiChat)
                                     SizedBox.expand(
                                       child: Container(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .surface
-                                            .withAlpha(1),
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.surface.withAlpha(1),
                                       ),
                                     ),
                                 ],
@@ -3019,7 +3325,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                     AiPanelPositionEnum.right
                                 ? (details) {
                                     _beginAiChatResize(
-                                        details.globalPosition.dx);
+                                      details.globalPosition.dx,
+                                    );
                                   }
                                 : null,
                             onHorizontalDragUpdate: Prefs().aiPanelPosition ==
@@ -3047,7 +3354,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                     AiPanelPositionEnum.bottom
                                 ? (details) {
                                     _beginAiChatResizeVertical(
-                                        details.globalPosition.dy);
+                                      details.globalPosition.dy,
+                                    );
                                   }
                                 : null,
                             onVerticalDragUpdate: Prefs().aiPanelPosition ==
@@ -3078,14 +3386,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                                   : SystemMouseCursors.resizeRow,
                               child: Prefs().aiPanelPosition ==
                                       AiPanelPositionEnum.right
-                                  ? VerticalDivider(
-                                      width: 2,
-                                      thickness: 1,
-                                    )
-                                  : Divider(
-                                      height: 2,
-                                      thickness: 1,
-                                    ),
+                                  ? VerticalDivider(width: 2, thickness: 1)
+                                  : Divider(height: 2, thickness: 1),
                             ),
                           ),
                         if (_usesAiSplitLayout(context))
@@ -3135,11 +3437,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                     // is hidden; TtsFab handles its own show/hide internally so
                     // its State (expanded flag) is never destroyed mid-session.
                     if (bottomBarOffstage)
-                      const Positioned(
-                        right: 16,
-                        bottom: 24,
-                        child: TtsFab(),
-                      ),
+                      const Positioned(right: 16, bottom: 24, child: TtsFab()),
                   ],
                 ),
               ),

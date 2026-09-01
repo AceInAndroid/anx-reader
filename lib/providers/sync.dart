@@ -15,6 +15,7 @@ import 'package:anx_reader/service/sync/sync_client_base.dart';
 import 'package:anx_reader/service/sync/reading_agent_sync_service.dart';
 import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
 import 'package:anx_reader/service/sync/sync_request_gate.dart';
+import 'package:anx_reader/service/sync/reading_activity_coordinator.dart';
 import 'package:anx_reader/service/ai/reading_device_identity.dart';
 import 'package:anx_reader/service/database_sync_manager.dart';
 import 'package:anx_reader/dao/database.dart';
@@ -26,6 +27,7 @@ import 'package:path/path.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/get_path/get_base_path.dart';
+import 'package:anx_reader/service/reading_experience_diagnostics.dart';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/dao/book.dart';
 import 'package:flutter/material.dart';
@@ -45,6 +47,10 @@ class Sync extends _$Sync {
   DateTime? _lastProgressUpdate;
   DateTime? _lastAutomaticSyncAttempt;
   DateTime? _lastOfflineSyncCheck;
+  SyncDirection? _pendingAutomaticDirection;
+  bool _automaticConflictPending = false;
+
+  bool get automaticConflictPending => _automaticConflictPending;
 
   factory Sync() {
     return _instance;
@@ -84,13 +90,15 @@ class Sync extends _$Sync {
       return;
     }
     _lastProgressUpdate = now;
-    changeState(state.copyWith(
-      direction: direction,
-      fileName: fileName,
-      isSyncing: true,
-      count: count,
-      total: total,
-    ));
+    changeState(
+      state.copyWith(
+        direction: direction,
+        fileName: fileName,
+        isSyncing: true,
+        count: count,
+        total: total,
+      ),
+    );
   }
 
   SyncClientBase? get _syncClient {
@@ -137,8 +145,9 @@ class Sync extends _$Sync {
     }
 
     if (Prefs().onlySyncWhenWifi &&
-        !(await Connectivity().checkConnectivity())
-            .contains(ConnectivityResult.wifi)) {
+        !(await Connectivity().checkConnectivity()).contains(
+          ConnectivityResult.wifi,
+        )) {
       if (Prefs().syncCompletedToast) {
         AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavOnlyWifi);
       }
@@ -149,8 +158,9 @@ class Sync extends _$Sync {
   }
 
   Future<SyncDirection?> determineSyncDirection(
-      SyncDirection requestedDirection,
-      {SyncTrigger trigger = SyncTrigger.manual}) async {
+    SyncDirection requestedDirection, {
+    SyncTrigger trigger = SyncTrigger.manual,
+  }) async {
     final client = _syncClient;
     if (client == null) return null;
 
@@ -221,6 +231,7 @@ class Sync extends _$Sync {
 
       // Both sides changed. Defer the conflict to an explicit manual sync;
       // never interrupt an active reading session with a modal dialog.
+      _automaticConflictPending = true;
       AnxLog.info('WebDAV conflict deferred during automatic sync');
       return null;
     }
@@ -241,7 +252,9 @@ class Sync extends _$Sync {
   }
 
   Future<SyncDirection?> _showSyncDirectionDialog(
-      DateTime localDbTime, RemoteFile remoteDb) async {
+    DateTime localDbTime,
+    RemoteFile remoteDb,
+  ) async {
     // Prevent multiple dialogs from showing simultaneously
     if (_isShowingDirectionDialog) {
       AnxLog.info('Sync direction dialog already showing, skipping');
@@ -262,9 +275,11 @@ class Sync extends _$Sync {
               Text(L10n.of(context).webdavSyncDirection),
               SizedBox(height: 10),
               Text(
-                  '${L10n.of(context).bookSyncStatusLocalUpdateTime} $localDbTime'),
+                '${L10n.of(context).bookSyncStatusLocalUpdateTime} $localDbTime',
+              ),
               Text(
-                  '${L10n.of(context).syncRemoteDataUpdateTime} ${remoteDb.mTime}'),
+                '${L10n.of(context).syncRemoteDataUpdateTime} ${remoteDb.mTime}',
+              ),
             ],
           ),
           actionsOverflowDirection: VerticalDirection.up,
@@ -297,7 +312,8 @@ class Sync extends _$Sync {
       builder: (context) => AlertDialog(
         title: Text(L10n.of(context).webdavSyncAborted),
         content: Text(
-            L10n.of(context).syncMismatchTip(currentDbVersion, remoteVersion)),
+          L10n.of(context).syncMismatchTip(currentDbVersion, remoteVersion),
+        ),
         actions: [
           TextButton(
             onPressed: () {
@@ -318,16 +334,53 @@ class Sync extends _$Sync {
     if (trigger == SyncTrigger.auto && !Prefs().autoSync) {
       return Future<void>.value();
     }
+    if (trigger == SyncTrigger.auto) {
+      readingExperienceDiagnostics.recordAutomaticSyncRequest();
+    }
+
+    if (trigger == SyncTrigger.auto &&
+        ReadingActivityCoordinator.instance.deferAutomaticSyncIfReading()) {
+      final alreadyPending = _pendingAutomaticDirection != null;
+      _pendingAutomaticDirection = _mergeDirections(
+        _pendingAutomaticDirection,
+        direction,
+      );
+      if (alreadyPending) {
+        readingExperienceDiagnostics.recordSyncMerged();
+      } else {
+        readingExperienceDiagnostics.recordSyncDeferred();
+      }
+      AnxLog.info('Automatic sync deferred during active reading');
+      return Future<void>.value();
+    }
+
+    if (trigger == SyncTrigger.auto) {
+      final pendingDirection = _pendingAutomaticDirection;
+      if (ReadingActivityCoordinator.instance.hasPendingAutomaticSync ||
+          pendingDirection != null) {
+        direction = _mergeDirections(pendingDirection, direction);
+        AnxLog.info('Running coalesced automatic sync intent');
+      }
+    } else {
+      // An explicit sync also satisfies work accumulated during reading.
+      _pendingAutomaticDirection = null;
+      ReadingActivityCoordinator.instance.consumePendingAutomaticSync();
+    }
 
     final duplicate = _syncGate.isRunning;
+    if (duplicate && trigger == SyncTrigger.auto) {
+      readingExperienceDiagnostics.recordSyncMerged();
+    }
     final result = _syncGate.run(() async {
-      changeState(state.copyWith(
-        direction: direction,
-        isSyncing: true,
-        total: 0,
-        count: 0,
-        fileName: '',
-      ));
+      changeState(
+        state.copyWith(
+          direction: direction,
+          isSyncing: true,
+          total: 0,
+          count: 0,
+          fileName: '',
+        ),
+      );
       _lastProgressUpdate = null;
       try {
         await _performSyncData(direction, ref, trigger: trigger);
@@ -341,6 +394,14 @@ class Sync extends _$Sync {
     return result;
   }
 
+  static SyncDirection _mergeDirections(
+    SyncDirection? pending,
+    SyncDirection requested,
+  ) {
+    if (pending == null || pending == requested) return requested;
+    return SyncDirection.both;
+  }
+
   Future<void> _performSyncData(
     SyncDirection direction,
     WidgetRef? ref, {
@@ -349,8 +410,11 @@ class Sync extends _$Sync {
     final silent = trigger == SyncTrigger.auto;
     if (silent) {
       final now = DateTime.now();
+      final isDeferredFlush =
+          ReadingActivityCoordinator.instance.hasPendingAutomaticSync;
       final lastAttempt = _lastAutomaticSyncAttempt;
-      if (lastAttempt != null &&
+      if (!isDeferredFlush &&
+          lastAttempt != null &&
           now.difference(lastAttempt) < _automaticSyncCooldown) {
         AnxLog.info('Skipping automatic sync during cooldown');
         return;
@@ -364,24 +428,43 @@ class Sync extends _$Sync {
           return;
         }
         _lastOfflineSyncCheck = now;
+        _pendingAutomaticDirection = _mergeDirections(
+          _pendingAutomaticDirection,
+          direction,
+        );
+        ReadingActivityCoordinator.instance.queueAutomaticSync();
         AnxLog.info('Deferring automatic sync while offline');
         return;
       }
+      if (Prefs().onlySyncWhenWifi &&
+          !connectivity.contains(ConnectivityResult.wifi)) {
+        _pendingAutomaticDirection = _mergeDirections(
+          _pendingAutomaticDirection,
+          direction,
+        );
+        ReadingActivityCoordinator.instance.queueAutomaticSync();
+        AnxLog.info('Deferring automatic sync until Wi-Fi is available');
+        return;
+      }
       _lastAutomaticSyncAttempt = now;
+      _pendingAutomaticDirection = null;
+      ReadingActivityCoordinator.instance.consumePendingAutomaticSync();
     }
+
+    readingExperienceDiagnostics.recordSyncExecution();
 
     if (Prefs().cloudBaseSyncEnabled) {
       try {
         final wifiAllowed = !Prefs().onlySyncWhenWifi ||
-            (await Connectivity().checkConnectivity())
-                .contains(ConnectivityResult.wifi);
+            (await Connectivity().checkConnectivity()).contains(
+              ConnectivityResult.wifi,
+            );
         if (wifiAllowed) {
           await const CloudBaseReadingSyncCoordinator().synchronize();
         }
       } catch (error, stackTrace) {
-        AnxLog.warning(
-          'CloudBase Reading Sync failed: $error\n$stackTrace',
-        );
+        readingExperienceDiagnostics.recordSyncFailure();
+        AnxLog.warning('CloudBase Reading Sync failed: $error\n$stackTrace');
         if (trigger == SyncTrigger.manual) {
           AnxToast.show('CloudBase 阅读同步失败：$error');
         }
@@ -447,6 +530,8 @@ class Sync extends _$Sync {
 
       await syncFiles(ref);
 
+      if (!silent) _automaticConflictPending = false;
+
       imageCache.clear();
       imageCache.clearLiveImages();
 
@@ -463,6 +548,7 @@ class Sync extends _$Sync {
         AnxToast.show(L10n.of(navigatorKey.currentContext!).webdavSyncComplete);
       }
     } catch (e, s) {
+      readingExperienceDiagnostics.recordSyncFailure();
       if (e is DioException && e.type == DioExceptionType.connectionError) {
         AnxToast.show('Sync connection failed, check your network');
         AnxLog.severe('Sync connection failed, connection error\n$e, $s');
@@ -498,14 +584,12 @@ class Sync extends _$Sync {
     final totalCurrentFiles = {...currentCover, ...currentBooks};
     final totalRemoteFiles = {...remoteBooksName, ...remoteCoversName};
 
-    final localBooks = await io.Directory(getBasePath('file'))
-        .list()
-        .map((entity) => 'file/${basename(entity.path)}')
-        .toSet();
-    final localCovers = await io.Directory(getBasePath('cover'))
-        .list()
-        .map((entity) => 'cover/${basename(entity.path)}')
-        .toSet();
+    final localBooks = await io.Directory(
+      getBasePath('file'),
+    ).list().map((entity) => 'file/${basename(entity.path)}').toSet();
+    final localCovers = await io.Directory(
+      getBasePath('cover'),
+    ).list().map((entity) => 'cover/${basename(entity.path)}').toSet();
     final totalLocalFiles = {...localBooks, ...localCovers};
 
     // Abort if totalCurrentFiles is empty
@@ -654,8 +738,9 @@ class Sync extends _$Sync {
       }
       // Capture the post-sync local timestamp (including WAL) as the next
       // automatic comparison baseline.
-      Prefs().lastSyncLocalDatabaseTime =
-          await _latestDatabaseModification(localDbPath);
+      Prefs().lastSyncLocalDatabaseTime = await _latestDatabaseModification(
+        localDbPath,
+      );
     } catch (e) {
       AnxLog.severe('Failed to sync database\n$e');
       rethrow;
@@ -668,13 +753,15 @@ class Sync extends _$Sync {
     bool replace = true,
   ]) async {
     final standalone = !_syncGate.isRunning;
-    changeState(state.copyWith(
-      direction: SyncDirection.upload,
-      fileName: localPath.split('/').last,
-      isSyncing: true,
-      count: 0,
-      total: 0,
-    ));
+    changeState(
+      state.copyWith(
+        direction: SyncDirection.upload,
+        fileName: localPath.split('/').last,
+        isSyncing: true,
+        count: 0,
+        total: 0,
+      ),
+    );
 
     final client = _syncClient;
     if (client != null) {
@@ -703,13 +790,15 @@ class Sync extends _$Sync {
 
   Future<void> downloadFile(String remotePath, String localPath) async {
     final standalone = !_syncGate.isRunning;
-    changeState(state.copyWith(
-      direction: SyncDirection.download,
-      fileName: remotePath.split('/').last,
-      isSyncing: true,
-      count: 0,
-      total: 0,
-    ));
+    changeState(
+      state.copyWith(
+        direction: SyncDirection.download,
+        fileName: remotePath.split('/').last,
+        isSyncing: true,
+        count: 0,
+        total: 0,
+      ),
+    );
 
     final client = _syncClient;
     if (client != null) {
@@ -747,8 +836,9 @@ class Sync extends _$Sync {
     final syncStatus = await ref.read(syncStatusProvider.future);
 
     if (!syncStatus.remoteOnly.contains(book.id)) {
-      AnxToast.show(L10n.of(navigatorKey.currentContext!)
-          .bookSyncStatusBookNotFoundRemote);
+      AnxToast.show(
+        L10n.of(navigatorKey.currentContext!).bookSyncStatusBookNotFoundRemote,
+      );
       return;
     }
 
@@ -773,7 +863,8 @@ class Sync extends _$Sync {
         await uploadFile(localPath, remotePath);
       } catch (e) {
         AnxToast.show(
-            L10n.of(navigatorKey.currentContext!).bookSyncStatusUploadFailed);
+          L10n.of(navigatorKey.currentContext!).bookSyncStatusUploadFailed,
+        );
         AnxLog.severe('Failed to upload book\n$e');
         rethrow;
       }
@@ -781,7 +872,8 @@ class Sync extends _$Sync {
 
     if (syncStatus.remoteOnly.contains(book.id)) {
       AnxToast.show(
-          L10n.of(navigatorKey.currentContext!).bookSyncStatusSpaceReleased);
+        L10n.of(navigatorKey.currentContext!).bookSyncStatusSpaceReleased,
+      );
       return;
     } else if (syncStatus.both.contains(book.id)) {
       await deleteLocalBook();
@@ -792,14 +884,16 @@ class Sync extends _$Sync {
         await deleteLocalBook();
       } catch (e) {
         AnxToast.show(
-            L10n.of(navigatorKey.currentContext!).bookSyncStatusUploadFailed);
+          L10n.of(navigatorKey.currentContext!).bookSyncStatusUploadFailed,
+        );
       }
     }
   }
 
   Future<void> downloadMultipleBooks(List<int> bookIds) async {
     AnxLog.info(
-        'WebDAV: Starting download for ${bookIds.length} remote books.');
+      'WebDAV: Starting download for ${bookIds.length} remote books.',
+    );
     int successCount = 0;
     int failCount = 0;
 
@@ -812,7 +906,8 @@ class Sync extends _$Sync {
       }
     } catch (e) {
       AnxLog.severe(
-          'WebDAV connection failed before batch download, ping failed\n${e.toString()}');
+        'WebDAV connection failed before batch download, ping failed\n${e.toString()}',
+      );
       return;
     }
 
@@ -828,22 +923,32 @@ class Sync extends _$Sync {
       }
     }
 
-    AnxLog.info(L10n.of(navigatorKey.currentContext!)
-        .webdavBatchDownloadFinishedReport(successCount, failCount));
-    AnxToast.show(L10n.of(navigatorKey.currentContext!)
-        .webdavBatchDownloadFinishedReport(successCount, failCount));
+    AnxLog.info(
+      L10n.of(
+        navigatorKey.currentContext!,
+      ).webdavBatchDownloadFinishedReport(successCount, failCount),
+    );
+    AnxToast.show(
+      L10n.of(
+        navigatorKey.currentContext!,
+      ).webdavBatchDownloadFinishedReport(successCount, failCount),
+    );
   }
 
   Future<void> _downloadBook(Book book) async {
     try {
-      AnxToast.show(L10n.of(navigatorKey.currentContext!)
-          .bookSyncStatusDownloadingBook(book.filePath));
+      AnxToast.show(
+        L10n.of(
+          navigatorKey.currentContext!,
+        ).bookSyncStatusDownloadingBook(book.filePath),
+      );
       final remotePath = 'anx/data/${book.filePath}';
       final localPath = getBasePath(book.filePath);
       await downloadFile(remotePath, localPath);
     } catch (e) {
       AnxToast.show(
-          L10n.of(navigatorKey.currentContext!).bookSyncStatusDownloadFailed);
+        L10n.of(navigatorKey.currentContext!).bookSyncStatusDownloadFailed,
+      );
       AnxLog.severe('Failed to download book\n$e');
       rethrow;
     }

@@ -64,9 +64,13 @@ namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在�
 | Token 用量 | 已实现 | 设置 > AI | `ai_token_usage_service.dart` | 本机诊断计数 | 不把估算值当服务端精确值 |
 | 轻量提取/摘要引擎 | 已实现 | 设置 > AI > 轻量提取与摘要引擎 | `ai_extraction_engine.dart`、`fiction_hybrid_extraction_service.dart` | Provider 角色设备本地；Artifact 正常同步 | 定位为本地候选提取器 + 证据筛选器；不在失败时静默上传整章 |
 | 阅读成果页 | 已实现 | 阅读页 > 本书阅读成果 | `reading_outcomes_page.dart` | 读取闭环/Atlas/记忆 | 不在成果页自动整理 |
-| 书籍 Wiki | 已实现（一期） | 阅读页 AI 旁、书籍详情 | `book_wiki_page.dart`、`book_wiki_service.dart` | `tb_book_wikis`/entries/sources/revisions，进入 Agent 增量同步 | 打开页面不扫描正文；详情页不启动隐藏阅读器 |
+| 书籍 Wiki | 已实现（一期） | 阅读页 > 本书、书籍详情 | `book_wiki_page.dart`、`book_wiki_service.dart` | `tb_book_wikis`/entries/sources/revisions，进入 Agent 增量同步 | 打开页面不扫描正文；详情页不启动隐藏阅读器 |
 | 阅读分块与证据解析 | 已实现 | 用户确认的 Wiki/Story Atlas 整理任务 | `reading_chunker.dart`、`reading_evidence_resolver.dart` | ReadingChunk 为任务中间产物；证据回到原文 offset | 不持久化完整 chunk；普通阅读不触发 |
 | 阅读查词路由 | 已实现 | 阅读页长按/选区菜单 | `reading_lookup_candidate_resolver.dart`、`reading_lookup_router.dart` | 词典缓存与用户导入 MDX | 页面不自行判断词类或决定联网；离线单字禁止上下文扩词 |
+| 本书统一面板 | 已实现 | 阅读页 > 本书 | `widgets/reading_page/reading_book_hub.dart` | 只读聚合现有成果 | 不为 Wiki/成果/同步恢复独立顶栏入口 |
+| 下一阅读行动 | 已实现 | 本书面板、阅读成果页 | `next_reading_action.dart`、`next_reading_action_resolver.dart` | 不持久化、不参与同步 | 排序由 Closure `nextActionOrder` 声明，页面不按书类分支 |
+| 阅读活动协调 | 已实现 | 同步和生命周期内部 | `service/sync/reading_activity_coordinator.dart` | 内存 pending intent | 阅读中自动同步不得直接执行；手动请求复用 single-flight |
+| 阅读体验诊断 | 已实现 | 开发者设置 | `service/reading_experience_diagnostics.dart` | 本机偏好，30 天/100 会话 | 不保存正文，不备份、同步或上传遥测 |
 
 ## 3. AI 底座与上下文
 
@@ -208,6 +212,8 @@ TOC 作品节点建立稳定的 href 派生 `workId`；Artifact 与回填 checkp
 - Agent 增量包按书和设备隔离；稳定 ID 用 LWW，终态优先，Artifact 采用更保守的展示边界，目标每本最多一个 active。
 - CloudBase 是可选 Reading Agent transport；登录注册后多设备共用账号。同步不触发 AI、不扩大剧透边界。
 - WebDAV/CloudBase 所有手动和自动入口走 single-flight gate；重复点击复用在途请求，避免重复任务和 ANR。
+- `ReadingActivityCoordinator` 是阅读状态与同步之间的唯一节流边界：阅读中的自动请求只合并为一个 pending intent；退出/后台先保存阅读状态再 flush。离线或非 Wi-Fi 只保留 intent，不做循环重试。
+- 自动 WebDAV 冲突只设置“需要手动处理”状态，不弹方向选择框；用户从“本书”手动同步时才允许选择。工具栏不再保留独立同步按钮。
 
 ## 8. E-INK/OLED 显示配置
 
@@ -219,12 +225,14 @@ E-INK 有效覆盖：浅色高对比、无翻页动画、无背景图、无代�
 
 | 用户需求 | 正确入口 |
 |---|---|
-| 查看本书 AI 成果 | 阅读页工具栏 > 本书阅读成果 |
-| 整理小说档案 | 阅读成果 > 整理/更新故事档案，确认后才调用 AI |
-| 看人物关系 | 阅读成果 > 人物关系图 |
-| 看故事时间线 | 阅读成果 > 故事时间线 |
+| 查看本书 AI 成果 | 阅读页 > 本书 > 阅读成果 |
+| 整理小说档案 | 阅读页 > 本书 > 故事档案 > 整理/更新，确认后才调用 AI |
+| 看人物关系 | 阅读页 > 本书 > 故事档案 > 人物关系图 |
+| 看故事时间线 | 阅读页 > 本书 > 故事档案 > 故事时间线 |
 | 看悬念/人物/关系变化 | 故事时间线顶部视图切换 |
-| 恢复多设备最远进度 | 阅读页 AI 入口旁同步按钮，或打开书后主动提示 |
+| 恢复多设备最远进度 | 阅读页 > 本书 > 手动同步，或打开书后的一次性主动提示 |
+| 查看下一阅读行动 | 阅读页 > 本书，或本书阅读成果页顶部 |
+| 查看阅读耗电/打断/同步合并 | 设置 > 开发者选项 > 阅读体验诊断 |
 | 看 AI 用量 | 设置 > AI 设置 > Token 用量 |
 | 配置 CloudBase | 设置 > CloudBase，注册/登录/测试；无单独保存按钮 |
 | 区分墨水屏/OLED | 设置 > 外观 > 当前设备显示配置 |

@@ -1,4 +1,5 @@
 import 'package:anx_reader/models/book.dart';
+import 'package:anx_reader/models/next_reading_action.dart';
 import 'package:anx_reader/models/reading_agent.dart';
 import 'package:anx_reader/models/reading_coach.dart';
 import 'package:anx_reader/page/reading_outcomes_page.dart';
@@ -22,9 +23,7 @@ const _historyClosure = ReadingClosurePolicyDefinition(
   title: '历史证据闭环',
   description: '区分史料与解释',
   goalLabel: '史料目标',
-  goalTemplateSpecs: [
-    ReadingGoalTemplateSpec(id: 'source', title: '核查一条史料'),
-  ],
+  goalTemplateSpecs: [ReadingGoalTemplateSpec(id: 'source', title: '核查一条史料')],
   checkpoint: ReadingCheckpointSpec(
     title: '史料检查',
     actionLabel: '核查',
@@ -55,6 +54,11 @@ const _historyClosure = ReadingClosurePolicyDefinition(
     ),
   ],
   systemGuidance: 'Separate sources from interpretations.',
+  nextActionOrder: [
+    NextReadingActionKinds.activeGoal,
+    NextReadingActionKinds.dueReview,
+    NextReadingActionKinds.continueReading,
+  ],
 );
 
 void main() {
@@ -159,7 +163,13 @@ void main() {
 
     expect(find.text('本书阅读成果'), findsOneWidget);
     expect(find.text('下一步 · 先复习 1 张到期卡片'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '开始'), findsOneWidget);
     expect(find.text('阅读目标'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('论证掌握度'),
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('论证掌握度'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('待核查问题'),
@@ -176,8 +186,23 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('wraps outcome metrics without overflow on a tablet',
-      (tester) async {
+  testWidgets('next action opens the due review without completing it first', (
+    tester,
+  ) async {
+    await pumpPage(tester, const Size(390, 844));
+
+    await tester.tap(find.widgetWithText(FilledButton, '开始'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('请回忆：第一章'), findsWidgets);
+    expect(find.text('这是折叠的答案'), findsOneWidget);
+    expect(find.text('再学习'), findsOneWidget);
+    expect(find.text('记住了'), findsOneWidget);
+  });
+
+  testWidgets('wraps outcome metrics without overflow on a tablet', (
+    tester,
+  ) async {
     await pumpPage(tester, const Size(1024, 768));
 
     expect(find.text('阅读进度'), findsOneWidget);
@@ -187,12 +212,10 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('fiction closure hides mastery and review-card sections',
-      (tester) async {
-    final fiction = book.copyWith(
-      title: '测试小说',
-      description: '一部人物关系复杂的悬疑小说',
-    );
+  testWidgets('fiction closure hides mastery and review-card sections', (
+    tester,
+  ) async {
+    final fiction = book.copyWith(title: '测试小说', description: '一部人物关系复杂的悬疑小说');
     await pumpPage(
       tester,
       const Size(390, 844),
@@ -211,8 +234,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('psychology closure uses concept and reflection vocabulary',
-      (tester) async {
+  testWidgets('psychology closure uses concept and reflection vocabulary', (
+    tester,
+  ) async {
     await pumpPage(
       tester,
       const Size(430, 900),
@@ -230,8 +254,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('renders a registered fourth closure without page changes',
-      (tester) async {
+  testWidgets('renders a registered fourth closure without page changes', (
+    tester,
+  ) async {
     await pumpPage(
       tester,
       const Size(430, 900),
@@ -242,6 +267,7 @@ void main() {
     );
 
     expect(find.text('历史证据闭环'), findsOneWidget);
+    expect(find.text('下一步 · 继续“理解本章”'), findsOneWidget);
     expect(find.text('史料目标'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('史料与解释'),
