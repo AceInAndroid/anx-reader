@@ -167,14 +167,18 @@ class _MyAppState extends ConsumerState<MyApp>
         state == AppLifecycleState.detached) {
       ReadingActivityCoordinator.instance.enterBackground();
       await readingTaskScheduler.pauseAll(durableOnly: true);
-      if (Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled) {
+      if (Prefs().webdavStatus ||
+          Prefs().cloudBaseSyncEnabled ||
+          Prefs().selfHostedProgressSyncEnabled) {
         ref
             .read(syncProvider.notifier)
             .syncData(SyncDirection.both, ref, trigger: SyncTrigger.auto);
       }
     } else if (state == AppLifecycleState.resumed) {
       ReadingActivityCoordinator.instance.enterForeground();
-      if (Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled) {
+      if (Prefs().webdavStatus ||
+          Prefs().cloudBaseSyncEnabled ||
+          Prefs().selfHostedProgressSyncEnabled) {
         // Flush one retained offline/background intent when the app returns
         // to an idle foreground. An active reader will defer it again.
         unawaited(

@@ -811,7 +811,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   Future<void> _offerRemoteProgressIfAvailable({bool manual = false}) async {
     if (!mounted || (!manual && widget.cfi != null)) return;
     if (_checkingRemoteProgress) return;
-    final syncEnabled = Prefs().cloudBaseSyncEnabled || Prefs().webdavStatus;
+    final syncEnabled = Prefs().cloudBaseSyncEnabled ||
+        Prefs().selfHostedProgressSyncEnabled ||
+        Prefs().webdavStatus;
     if (!syncEnabled) {
       if (manual) {
         AnxToast.show(L10n.of(context).readingRemoteProgressSyncDisabled);
@@ -822,15 +824,20 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     _checkingRemoteProgress = true;
     if (manual) setState(() => _syncingRemoteProgress = true);
     try {
-      // Automatic reader entry only inspects positions already synchronized by
-      // the shelf/background flow. Network work during active reading is
-      // deferred by ReadingActivityCoordinator. An explicit tap may run the
-      // shared WebDAV/CloudBase single-flight operation immediately.
-      await Sync().syncData(
-        SyncDirection.both,
-        ref,
-        trigger: manual ? SyncTrigger.manual : SyncTrigger.auto,
-      );
+      if (!manual && Prefs().selfHostedProgressSyncEnabled) {
+        // Opening a book may perform one progress-only request. The call still
+        // uses the shared single-flight gate; ordinary relocations never enter
+        // this path.
+        await ref.read(syncProvider.notifier).syncSelfHostedProgress();
+      } else {
+        // Other automatic work during active reading remains deferred. An
+        // explicit tap may run all configured transports immediately.
+        await Sync().syncData(
+          SyncDirection.both,
+          ref,
+          trigger: manual ? SyncTrigger.manual : SyncTrigger.auto,
+        );
+      }
     } catch (error) {
       if (manual && mounted) {
         AnxToast.show(

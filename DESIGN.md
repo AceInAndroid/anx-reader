@@ -40,6 +40,17 @@
 - `ReadingActivityCoordinator` 向同步层暴露 `activeReading / idle /
   background`。阅读期间的自动 WebDAV/CloudBase 请求合并为一个 pending
   intent；用户手动同步仍立即进入现有 single-flight gate。
+- 自托管进度同步是与 WebDAV、CloudBase 并列的可选入口。它通过
+  `SelfHostedProgressSyncCoordinator` 复用现有位置 merge、最远进度提示和
+  single-flight 边界；仅在退出/后台、打开书和手动同步时访问轻量 HTTPS API，
+  普通翻页不发请求。
+- 自托管 API 只接收书籍稳定标识、设备 ID、locator、百分比、章节元数据和
+  更新时间。书籍文件、SQLite 数据库、笔记、书签、AI 成果、封面和设置永不
+  上传。NAS 部署使用非 root Docker 容器与 SQLite WAL，公网 HTTPS 由
+  Cloudflare Tunnel 终止，容器不发布公网端口。
+- 自托管账号使用单账号 Bearer session；客户端只保存 token、过期时间和
+  增量 cursor 在本机，且这些字段（包括 endpoint）不进入偏好备份、WebDAV
+  或 CloudBase 同步。Token 失效时清理本地会话并提示重新登录。
 - 退出阅读或进入后台时，先保存阅读位置、Runtime 和阅读时长，再执行一次合并
   后的自动同步。离线或不满足 Wi-Fi 策略时只保留一个 intent，不循环重试。
 - 自动同步冲突不打开方向选择弹窗，只在本书面板标记需要手动处理。手动同步才

@@ -68,4 +68,36 @@ void main() {
     expect(Prefs().cloudBaseSyncEndpoint, defaultCloudBaseSyncEndpoint);
     expect(Prefs().cloudBaseSyncEnabled, isFalse);
   });
+
+  test('self-hosted progress endpoint and session stay device-local', () async {
+    SharedPreferences.setMockInitialValues({
+      'selfHostedProgressSyncEndpoint': 'https://progress.example.test',
+      'selfHostedProgressSyncEnabled': true,
+      'selfHostedProgressSyncToken': 'private-session',
+      'selfHostedProgressSyncTokenExpiresAt': 123,
+      'selfHostedProgressSyncCursor': '42',
+    });
+    Prefs().prefs = await SharedPreferences.getInstance();
+
+    final backup = await Prefs().buildPrefsBackupMap();
+
+    expect(backup, isNot(contains('selfHostedProgressSyncEndpoint')));
+    expect(backup, isNot(contains('selfHostedProgressSyncEnabled')));
+    expect(backup, isNot(contains('selfHostedProgressSyncToken')));
+    expect(backup, isNot(contains('selfHostedProgressSyncTokenExpiresAt')));
+    expect(backup, isNot(contains('selfHostedProgressSyncCursor')));
+    await Prefs().applyPrefsBackupMap({
+      'selfHostedProgressSyncEndpoint': {
+        'type': 'string',
+        'value': 'https://attacker.example.test',
+      },
+      'selfHostedProgressSyncToken': {
+        'type': 'string',
+        'value': 'replacement-token',
+      },
+    });
+    expect(Prefs().selfHostedProgressSyncEndpoint,
+        'https://progress.example.test');
+    expect(Prefs().selfHostedProgressSyncToken, 'private-session');
+  });
 }

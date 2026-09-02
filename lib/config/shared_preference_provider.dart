@@ -57,6 +57,7 @@ const String _prefsBackupEntryTypeKey = 'type';
 const String _prefsBackupEntryValueKey = 'value';
 const String defaultCloudBaseSyncEndpoint =
     'https://mytripmap-d3gxxk1psd0b28d72-1257836777.ap-shanghai.app.tcloudbase.com/v1/anx-reading-sync';
+const String defaultSelfHostedProgressSyncEndpoint = '';
 
 const Set<String> _prefsImportSkipKeys = {
   'iapPurchaseStatus',
@@ -67,6 +68,12 @@ const Set<String> _prefsImportSkipKeys = {
   // The bearer token grants access to a private CloudBase sync space. Users
   // authenticate each device directly, so a backup must never clone it.
   'cloudBaseSyncAccountToken',
+  // Self-hosted progress sync credentials are installation-local secrets.
+  'selfHostedProgressSyncEndpoint',
+  'selfHostedProgressSyncEnabled',
+  'selfHostedProgressSyncToken',
+  'selfHostedProgressSyncTokenExpiresAt',
+  'selfHostedProgressSyncCursor',
   // This is deliberately device-local. It records where this installation's
   // reader explicitly chose "from here" and must not be imported as another
   // device's local reading history.
@@ -411,6 +418,63 @@ class Prefs extends ChangeNotifier {
   void clearCloudBaseSyncAccount() {
     prefs.remove('cloudBaseSyncAccountUsername');
     prefs.remove('cloudBaseSyncAccountToken');
+    notifyListeners();
+  }
+
+  bool get selfHostedProgressSyncEnabled =>
+      prefs.getBool('selfHostedProgressSyncEnabled') ?? false;
+
+  set selfHostedProgressSyncEnabled(bool value) {
+    prefs.setBool('selfHostedProgressSyncEnabled', value);
+    notifyListeners();
+  }
+
+  String get selfHostedProgressSyncEndpoint =>
+      prefs.getString('selfHostedProgressSyncEndpoint') ??
+      defaultSelfHostedProgressSyncEndpoint;
+
+  set selfHostedProgressSyncEndpoint(String value) {
+    prefs.setString('selfHostedProgressSyncEndpoint', value.trim());
+    notifyListeners();
+  }
+
+  String get selfHostedProgressSyncAccountUsername =>
+      prefs.getString('selfHostedProgressSyncAccountUsername') ?? '';
+
+  set selfHostedProgressSyncAccountUsername(String value) {
+    prefs.setString('selfHostedProgressSyncAccountUsername', value.trim());
+    notifyListeners();
+  }
+
+  String get selfHostedProgressSyncToken =>
+      prefs.getString('selfHostedProgressSyncToken') ?? '';
+
+  set selfHostedProgressSyncToken(String value) {
+    prefs.setString('selfHostedProgressSyncToken', value.trim());
+    notifyListeners();
+  }
+
+  int get selfHostedProgressSyncTokenExpiresAt =>
+      prefs.getInt('selfHostedProgressSyncTokenExpiresAt') ?? 0;
+
+  set selfHostedProgressSyncTokenExpiresAt(int value) {
+    prefs.setInt('selfHostedProgressSyncTokenExpiresAt', value);
+    notifyListeners();
+  }
+
+  String get selfHostedProgressSyncCursor =>
+      prefs.getString('selfHostedProgressSyncCursor') ?? '';
+
+  set selfHostedProgressSyncCursor(String value) {
+    prefs.setString('selfHostedProgressSyncCursor', value.trim());
+    notifyListeners();
+  }
+
+  void clearSelfHostedProgressSyncAccount() {
+    prefs.remove('selfHostedProgressSyncAccountUsername');
+    prefs.remove('selfHostedProgressSyncToken');
+    prefs.remove('selfHostedProgressSyncTokenExpiresAt');
+    prefs.remove('selfHostedProgressSyncCursor');
     notifyListeners();
   }
 

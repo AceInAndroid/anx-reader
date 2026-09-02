@@ -11,6 +11,7 @@ import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/service/sync/sync_client_factory.dart';
 import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
 import 'package:anx_reader/service/sync/cloudbase_reading_sync_transport.dart';
+import 'package:anx_reader/service/sync/self_hosted_progress_sync_transport.dart';
 import 'package:anx_reader/utils/platform_utils.dart';
 import 'package:anx_reader/utils/save_file_to_download.dart';
 import 'package:anx_reader/utils/get_path/get_temp_dir.dart';
@@ -115,7 +116,9 @@ class _SyncSettingState extends ConsumerState<SyncSetting> {
                 title: Text(L10n.of(context).settingsSyncAutoSync),
                 leading: const Icon(Icons.sync),
                 initialValue: Prefs().autoSync,
-                enabled: Prefs().webdavStatus || Prefs().cloudBaseSyncEnabled,
+                enabled: Prefs().webdavStatus ||
+                    Prefs().cloudBaseSyncEnabled ||
+                    Prefs().selfHostedProgressSyncEnabled,
                 onToggle: (bool value) {
                   setState(() {
                     Prefs().autoSync = value;
@@ -163,6 +166,41 @@ class _SyncSettingState extends ConsumerState<SyncSetting> {
           ],
         ),
         SettingsSection(
+          title: Text(L10n.of(context).selfHostedProgressSync),
+          tiles: [
+            SettingsTile.switchTile(
+              title: Text(L10n.of(context).selfHostedProgressSyncEnable),
+              description: Text(L10n.of(context).selfHostedProgressSyncScope),
+              leading: const Icon(Icons.cloud_sync_outlined),
+              initialValue: Prefs().selfHostedProgressSyncEnabled,
+              onToggle: (value) {
+                if (value &&
+                    (Prefs().selfHostedProgressSyncToken.isEmpty ||
+                        Prefs().selfHostedProgressSyncEndpoint.isEmpty)) {
+                  _showSelfHostedProgressDialog();
+                  return;
+                }
+                setState(() => Prefs().selfHostedProgressSyncEnabled = value);
+              },
+            ),
+            SettingsTile.navigation(
+              title: Text(L10n.of(context).selfHostedProgressSyncConfigure),
+              leading: const Icon(Icons.key_outlined),
+              value: Text(
+                  Prefs().selfHostedProgressSyncAccountUsername.isNotEmpty
+                      ? Prefs().selfHostedProgressSyncAccountUsername
+                      : L10n.of(context).commonNotSet),
+              onPressed: (_) => _showSelfHostedProgressDialog(),
+            ),
+            SettingsTile.navigation(
+              title: Text(L10n.of(context).selfHostedProgressSyncNow),
+              leading: const Icon(Icons.sync),
+              enabled: Prefs().selfHostedProgressSyncEnabled,
+              onPressed: (_) => _syncSelfHostedProgress(),
+            ),
+          ],
+        ),
+        SettingsSection(
           title: Text(L10n.of(context).exportAndImport),
           tiles: [
             SettingsTile.navigation(
@@ -192,6 +230,195 @@ class _SyncSettingState extends ConsumerState<SyncSetting> {
         AnxToast.show(L10n.of(context).cloudBaseReadingSyncFailed(error));
       }
     }
+  }
+
+  Future<void> _syncSelfHostedProgress() async {
+    final l10n = L10n.of(context);
+    try {
+      await ref.read(syncProvider.notifier).syncSelfHostedProgress();
+      if (mounted) {
+        AnxToast.show(l10n.selfHostedProgressSyncComplete);
+      }
+    } catch (error) {
+      if (mounted) {
+        AnxToast.show(l10n.selfHostedProgressSyncFailed(error));
+      }
+    }
+  }
+
+  Future<void> _showSelfHostedProgressDialog() async {
+    final l10n = L10n.of(context);
+    final endpoint = TextEditingController(
+      text: Prefs().selfHostedProgressSyncEndpoint,
+    );
+    final username = TextEditingController(
+      text: Prefs().selfHostedProgressSyncAccountUsername,
+    );
+    final password = TextEditingController();
+    var busy = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(l10n.selfHostedProgressSyncConfigure),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(l10n.selfHostedProgressSyncScope),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: endpoint,
+                  enabled: !busy,
+                  keyboardType: TextInputType.url,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    labelText: l10n.selfHostedProgressSyncEndpoint,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: username,
+                  enabled: !busy && Prefs().selfHostedProgressSyncToken.isEmpty,
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    labelText: l10n.selfHostedProgressSyncUsername,
+                  ),
+                ),
+                if (Prefs().selfHostedProgressSyncToken.isEmpty) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: password,
+                    enabled: !busy,
+                    obscureText: true,
+                    decoration: InputDecoration(
+                      border: const OutlineInputBorder(),
+                      labelText: l10n.selfHostedProgressSyncPassword,
+                    ),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('${l10n.selfHostedProgressSyncCurrentAccount}: '
+                        '${Prefs().selfHostedProgressSyncAccountUsername}'),
+                  ),
+                ],
+                if (busy) ...[
+                  const SizedBox(height: 16),
+                  const LinearProgressIndicator(),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            if (Prefs().selfHostedProgressSyncToken.isNotEmpty)
+              TextButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        setDialogState(() => busy = true);
+                        try {
+                          await SelfHostedProgressSyncTransport(
+                            endpoint: endpoint.text,
+                            accessToken: Prefs().selfHostedProgressSyncToken,
+                            deviceId: '',
+                          ).logout();
+                        } catch (_) {}
+                        Prefs().clearSelfHostedProgressSyncAccount();
+                        Prefs().selfHostedProgressSyncEnabled = false;
+                        if (dialogContext.mounted) {
+                          Navigator.pop(dialogContext);
+                        }
+                      },
+                child: Text(l10n.selfHostedProgressSyncLogout),
+              ),
+            if (Prefs().selfHostedProgressSyncToken.isEmpty)
+              FilledButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        if (endpoint.text.trim().isEmpty ||
+                            username.text.trim().isEmpty ||
+                            password.text.isEmpty) {
+                          AnxToast.show(l10n.commonInputCannotBeEmpty);
+                          return;
+                        }
+                        setDialogState(() => busy = true);
+                        try {
+                          final transport = SelfHostedProgressSyncTransport(
+                            endpoint: endpoint.text,
+                            accessToken: '',
+                            deviceId: '',
+                          );
+                          final session = await transport.login(
+                            username: username.text,
+                            password: password.text,
+                          );
+                          Prefs().selfHostedProgressSyncEndpoint =
+                              endpoint.text;
+                          Prefs().selfHostedProgressSyncAccountUsername =
+                              username.text;
+                          Prefs().selfHostedProgressSyncToken =
+                              session.accessToken;
+                          Prefs().selfHostedProgressSyncTokenExpiresAt =
+                              session.expiresAt.millisecondsSinceEpoch;
+                          Prefs().selfHostedProgressSyncEnabled = true;
+                          if (dialogContext.mounted) {
+                            Navigator.pop(dialogContext);
+                          }
+                          if (mounted) {
+                            AnxToast.show(l10n.selfHostedProgressSyncLoggedIn);
+                          }
+                        } catch (error) {
+                          if (mounted) {
+                            AnxToast.show(
+                                l10n.selfHostedProgressSyncFailed(error));
+                          }
+                        } finally {
+                          if (dialogContext.mounted) {
+                            setDialogState(() => busy = false);
+                          }
+                        }
+                      },
+                child: Text(l10n.selfHostedProgressSyncLogin),
+              ),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setDialogState(() => busy = true);
+                      try {
+                        await SelfHostedProgressSyncTransport(
+                          endpoint: endpoint.text,
+                          accessToken: Prefs().selfHostedProgressSyncToken,
+                          deviceId: '',
+                        ).ping();
+                        Prefs().selfHostedProgressSyncEndpoint = endpoint.text;
+                        if (mounted) {
+                          AnxToast.show(l10n.commonSuccess);
+                        }
+                      } catch (error) {
+                        if (mounted) {
+                          AnxToast.show(
+                              l10n.selfHostedProgressSyncFailed(error));
+                        }
+                      } finally {
+                        if (dialogContext.mounted) {
+                          setDialogState(() => busy = false);
+                        }
+                      }
+                    },
+              child: Text(l10n.settingsSyncWebdavTestConnection),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+    endpoint.dispose();
+    username.dispose();
+    password.dispose();
   }
 
   Future<void> _showCloudBaseDialog() async {

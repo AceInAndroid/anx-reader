@@ -1,0 +1,35 @@
+services:
+  anx-progress-sync:
+    build: .
+    image: anx-reader/progress-sync:latest
+    restart: unless-stopped
+    environment:
+      SYNC_USERNAME: ${SYNC_USERNAME:-reader}
+      SYNC_PASSWORD_HASH: ${SYNC_PASSWORD_HASH:?Set SYNC_PASSWORD_HASH in .env}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      CHANGE_RETENTION_DAYS: ${CHANGE_RETENTION_DAYS:-90}
+      MAX_CHANGES: ${MAX_CHANGES:-100000}
+      PORT: 8080
+    volumes:
+      - ./data:/data
+    expose:
+      - "8080"
+    networks:
+      - sync-internal
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - anx-progress-sync
+    networks:
+      - sync-internal
+      - tunnel-egress
+
+networks:
+  sync-internal:
+    internal: true
+  tunnel-egress:

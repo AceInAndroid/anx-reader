@@ -59,6 +59,7 @@ namespaced string ID（`story.*`、`stage.*`、`relation.*`）；旧短 ID 在�
 | Agent 动作与撤销 | 已实现 | 明确指令/建议确认卡/动作记录 | `agent_action_service.dart`、`reading_agent_tools.dart` | 30 天/最多 200 条 | 不直接写业务表 |
 | 阅读进度多设备同步 | 已实现 | 同步按钮/自动同步/最远进度提示 | `lib/service/sync/reading_agent_sync_service.dart`、`lib/service/sync/sync_request_gate.dart` | per-device package | 不自动覆盖本地位置/不自动跳转 |
 | CloudBase Sync | 已实现 | 设置 > CloudBase | `lib/service/sync/cloudbase_reading_sync_coordinator.dart`、`cloudbase_reading_sync_transport.dart` | 账号 session + 增量包 | 不把管理员 Key 放进 App |
+| 自托管进度同步 | 已实现 | 设置 > 自托管进度同步 | `lib/service/sync/self_hosted_progress_sync_coordinator.dart`、`self_hosted_progress_sync_transport.dart` | 独立 HTTPS JSON API，仅位置字段；`self_hosted/progress_sync/` 可 Docker 部署 | 不上传书籍/数据库/笔记/书签/AI；复用现有 merge、最远进度提示和 single-flight |
 | WebDAV 同步 | 已实现 | 设置/同步按钮 | `service/sync/` | 整库兼容 + Agent 包 | 入口必须走 single-flight gate |
 | E-INK/OLED 配置 | 已实现 | 设置 > 外观 | `device_display_profile.dart`、`shared_preference_provider.dart` | 设备本地，不备份 | 不把 E-INK 当普通主题 |
 | Token 用量 | 已实现 | 设置 > AI | `ai_token_usage_service.dart` | 本机诊断计数 | 不把估算值当服务端精确值 |
@@ -217,6 +218,8 @@ TOC 作品节点建立稳定的 href 派生 `workId`；Artifact 与回填 checkp
 - 全局最远进度只用于提示“继续当前位置/跳转到最远进度”，默认继续当前位置，不自动跳转。
 - Agent 增量包按书和设备隔离；稳定 ID 用 LWW，终态优先，Artifact 采用更保守的展示边界，目标每本最多一个 active。
 - CloudBase 是可选 Reading Agent transport；登录注册后多设备共用账号。同步不触发 AI、不扩大剧透边界。
+- 自托管进度同步是独立的可选 transport，面向 NAS + Cloudflare Tunnel 部署；只传书籍稳定标识、设备位置、百分比、章节和更新时间，凭 Bearer session 认证。服务端使用 SQLite WAL，客户端不上传整库或其他同步表。
+- 自托管服务的 endpoint、session token、过期时间和增量 cursor 保持安装本地，不进入偏好备份；CloudBase 与 WebDAV 配置和行为不变。
 - WebDAV/CloudBase 所有手动和自动入口走 single-flight gate；重复点击复用在途请求，避免重复任务和 ANR。
 - `ReadingActivityCoordinator` 是阅读状态与同步之间的唯一节流边界：阅读中的自动请求只合并为一个 pending intent；退出/后台先保存阅读状态再 flush。离线或非 Wi-Fi 只保留 intent，不做循环重试。
 - 自动 WebDAV 冲突只设置“需要手动处理”状态，不弹方向选择框；用户从“本书”手动同步时才允许选择。工具栏不再保留独立同步按钮。

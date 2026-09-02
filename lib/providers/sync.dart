@@ -14,6 +14,7 @@ import 'package:anx_reader/service/sync/sync_client_factory.dart';
 import 'package:anx_reader/service/sync/sync_client_base.dart';
 import 'package:anx_reader/service/sync/reading_agent_sync_service.dart';
 import 'package:anx_reader/service/sync/cloudbase_reading_sync_coordinator.dart';
+import 'package:anx_reader/service/sync/self_hosted_progress_sync_coordinator.dart';
 import 'package:anx_reader/service/sync/sync_request_gate.dart';
 import 'package:anx_reader/service/sync/reading_activity_coordinator.dart';
 import 'package:anx_reader/service/ai/reading_device_identity.dart';
@@ -394,6 +395,19 @@ class Sync extends _$Sync {
     return result;
   }
 
+  /// Runs the self-hosted progress transport through the same single-flight
+  /// gate used by lifecycle and whole-sync entry points.
+  Future<void> syncSelfHostedProgress() => _syncGate.run(() async {
+        if (!Prefs().selfHostedProgressSyncEnabled) return;
+        if (Prefs().onlySyncWhenWifi &&
+            !(await Connectivity().checkConnectivity()).contains(
+              ConnectivityResult.wifi,
+            )) {
+          return;
+        }
+        await const SelfHostedProgressSyncCoordinator().synchronize();
+      });
+
   static SyncDirection _mergeDirections(
     SyncDirection? pending,
     SyncDirection requested,
@@ -467,6 +481,26 @@ class Sync extends _$Sync {
         AnxLog.warning('CloudBase Reading Sync failed: $error\n$stackTrace');
         if (trigger == SyncTrigger.manual) {
           AnxToast.show('CloudBase 阅读同步失败：$error');
+        }
+      }
+    }
+
+    if (Prefs().selfHostedProgressSyncEnabled) {
+      try {
+        final wifiAllowed = !Prefs().onlySyncWhenWifi ||
+            (await Connectivity().checkConnectivity()).contains(
+              ConnectivityResult.wifi,
+            );
+        if (wifiAllowed) {
+          await const SelfHostedProgressSyncCoordinator().synchronize();
+        }
+      } catch (error, stackTrace) {
+        readingExperienceDiagnostics.recordSyncFailure();
+        AnxLog.warning(
+          'Self-hosted progress sync failed: $error\n$stackTrace',
+        );
+        if (trigger == SyncTrigger.manual) {
+          AnxToast.show('自托管进度同步失败：$error');
         }
       }
     }
